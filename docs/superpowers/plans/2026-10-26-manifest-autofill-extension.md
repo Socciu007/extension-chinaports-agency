@@ -6,7 +6,9 @@
 
 **Architecture:** A Vue 3 popup sends a `manifest-autofill:fill` message to a content script running inside the China Ports SPA. The content script fetches the manifest JSON from `dadaex.cn`, converts it into a declarative list of field plans via a pure mapping module, then drives the page's Element Plus form (native value setter for text, click-to-pick for dropdowns) and reports a per-field result back to the popup. All logic that can be pure lives in `src/core/*` and is unit-tested with Vitest + jsdom.
 
-**Tech Stack:** TypeScript 5.5 · Vite 5.2 · `@crxjs/vite-plugin` 2.0.0-beta.23 · Vue 3.4 · Vitest 2 + jsdom 24
+**Tech Stack:** TypeScript 5.9 (type-check bằng `vue-tsc` 2.2) · Vite 5.4 · `@crxjs/vite-plugin` 2.0.0-beta.23 · Vue 3.5 · Vitest 2 + jsdom 25
+
+> Số phiên bản trên là bản đang resolve trong `package-lock.json` (2026-10-26). `package.json` khai báo range `^` nên các bản patch/minor mới có thể vào bất cứ lúc nào — luôn đọc `package-lock.json` khi cần biết phiên bản chính xác.
 
 **Spec:** `docs/superpowers/specs/2026-10-26-manifest-autofill-extension-design.md`
 
@@ -61,6 +63,7 @@ GET https://www.dadaex.cn/api/vn/insight/manifest?blNo={blNo}
 - `firmCode` là mã đăng ký DN (USCI/TIN), **không phải mã AEO** → trường `*_AEO` để trống.
 - Field API không có (EMAIL, FAX, 中转港, 提单签发地, 危险品页号/EMS/MFAG) → để trống, báo ⚠️ kèm lý do.
 - Không bao giờ tự gọi `send/` hay `upload/`. Nút **确定** cuối cùng ở form đầu do người dùng bấm (tuỳ chọn tự submit mặc định TẮT).
+- **Ngôn ngữ giao diện của extension: tiếng Anh.** Chuỗi hiển thị cho người dùng viết bằng tiếng Anh; thuật ngữ tiếng Trung của site (提单号, 预配舱单, 确定, 舱单, 承运人代码, 交货条款, 上传船代) giữ nguyên vì người dùng phải nhận diện được nhãn trên trang. Comment trong code và văn bản của plan vẫn dùng tiếng Việt.
 
 ---
 
@@ -85,11 +88,11 @@ GET https://www.dadaex.cn/api/vn/insight/manifest?blNo={blNo}
 | `src/core/fill.ts` | điều phối: mở dialog → điền form → thêm dòng bảng → báo cáo |
 | `src/core/protocol.ts` | kiểu message popup ↔ content script |
 | `src/core/options.ts` | đọc/ghi `chrome.storage.sync` |
-| `src/env.d.ts` | khai báo module `*.vue` cho `tsc --noEmit` |
 | `src/background/index.ts` | service worker (mở trang manifest khi cài mới) |
 | `src/content/index.ts` | bootstrap content script + message handler |
 | `src/popup/*` | giao diện popup (Vue 3) |
 | `src/options/*` | giao diện tuỳ chọn (Vue 3) |
+| `scripts/check-manifest.mjs` | kiểm tra mọi path cục bộ trong `dist/manifest.json` đều tồn tại |
 | `scripts/fetch-fixture.mjs` | tải fixture JSON thật từ API để test |
 | `scripts/dump-manifest-dom.js` | script dán vào DevTools để chốt DOM thật của site |
 | `tests/fixtures/manifest-ONEYSHAGT1569600.json` | fixture do script tạo ra |
@@ -122,7 +125,9 @@ GET https://www.dadaex.cn/api/vn/insight/manifest?blNo={blNo}
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "check-manifest": "node scripts/check-manifest.mjs",
+    "verify": "npm run typecheck && npm test && npm run build && npm run check-manifest"
   },
   "dependencies": {
     "vue": "^3.4.38"
@@ -135,10 +140,13 @@ GET https://www.dadaex.cn/api/vn/insight/manifest?blNo={blNo}
     "jsdom": "^25.0.1",
     "typescript": "^5.5.4",
     "vite": "^5.2.0",
-    "vitest": "^2.1.1"
+    "vitest": "^2.1.1",
+    "vue-tsc": "^2.1.10"
   }
 }
 ```
+
+> `typecheck` dùng **`vue-tsc`**, không dùng `tsc`: `tsc` không parse được SFC (`.vue`) nên glob `"src/**/*.vue"` trong `tsconfig.json` là vô nghĩa — `tsc --showConfig` không liệt kê file `.vue` nào. `vue-tsc` thực sự đưa SFC vào program và type-check cả `<script setup lang="ts">`. Vì vậy **không** cần file shim `declare module '*.vue'` (shim sẽ che mất type thật của SFC).
 
 - [ ] **Step 2: Tạo `tsconfig.json`**
 
@@ -149,7 +157,7 @@ GET https://www.dadaex.cn/api/vn/insight/manifest?blNo={blNo}
     "module": "ESNext",
     "moduleResolution": "bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["chrome", "node", "vitest/globals"],
+    "types": ["chrome", "node"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noEmit": true,
@@ -201,7 +209,11 @@ node_modules/
 dist/
 *.local
 .DS_Store
+*.crx
+*.pem
 ```
+
+> `*.pem` quan trọng hơn `*.crx`: file PEM là **private key** dùng để ký extension — tuyệt đối không được commit lên git.
 
 - [ ] **Step 6: Tạo `tests/smoke.test.ts`**
 
@@ -257,13 +269,18 @@ import pkg from './package.json'
 export default defineManifest({
   manifest_version: 3,
   name: 'Manifest Autofill — 预配舱单',
-  version: pkg.version,
+  description:
+    'Autofill 预配舱单 (manifest) data on China Ports from the dadaex API.',
+  // Chrome chỉ chấp nhận version là 1-4 số nguyên ngăn cách bằng dấu chấm.
+  // `npm version prerelease` sinh ra "0.1.0-beta.0" khiến extension fail to load.
+  version: pkg.version.split('-')[0] ?? '0.0.0',
+  version_name: pkg.version,
   icons: {
-    48: 'public/logo.png',
+    48: 'logo.png',
   },
   action: {
     default_icon: {
-      48: 'public/logo.png',
+      48: 'logo.png',
     },
     default_popup: 'src/popup/index.html',
   },
@@ -282,11 +299,20 @@ export default defineManifest({
     'https://www.chinaports-agency.com:8870/*',
     'https://www.dadaex.cn/*',
   ],
-  permissions: ['storage', 'tabs', 'scripting', 'activeTab'],
+  permissions: ['storage', 'activeTab'],
 })
 ```
 
-> Lưu ý: `defineManifest` của crxjs **không** nhận `permissions: ['cookies']` kèm host rỗng — đã bỏ. Cookie `token` được browser gửi tự động vì content script chạy cùng origin với site.
+> **Lưu ý về `permissions`:**
+>
+> - **`cookies` — không cần, và không được thêm lại khi chưa có nhu cầu cụ thể.** Lý do thật (bản plan cũ ghi sai là crxjs "không nhận" `permissions: ['cookies']`; thực ra `defineManifest` nhận thoải mái vì `chrome.runtime.ManifestPermissions` có `'cookies'`): extension đọc cookie `token` bằng `document.cookie` qua helper `readCookieToken` (xem mục `src/core/site-api.ts`), **không** dùng `chrome.cookies.get`; còn `fetch(url, { credentials: 'include' })` trong content script thì browser tự động gửi cookie `token` cùng origin. Permission `cookies` cấp quyền đọc **mọi** cookie của site → không đáng để xin.
+> - **`tabs` — không cần.** Popup chỉ đọc `tab?.id` từ `chrome.tabs.query({ active: true, currentWindow: true })`; `chrome.tabs.create` không cần permission; `chrome.tabs.sendMessage` được cho phép bởi `host_permissions` đã khai báo. `tabs` là quyền rộng ("đọc lịch sử duyệt web") và extension không cần.
+> - **`scripting` — không cần.** Không task nào trong plan dùng `chrome.scripting`.
+> - Giữ `storage` (đọc/ghi `chrome.storage.sync`) và `activeTab`.
+>
+> **Lưu ý về output của crxjs:** crxjs **tự động** chèn `web_accessible_resources` (với `use_dynamic_url: true`) cho chunk của content script, và đặt `background.type: "module"`. Nếu plan từng phải dùng phương án dự phòng (manifest tĩnh do tay viết trong `public/manifest.json` — xem fallback ở cuối Task 2) thì hai trường này **phải được khai báo tay**, nếu không extension sẽ không load.
+>
+> **Lưu ý về icon:** khai báo `'logo.png'` (đúng convention public dir của Vite) chứ không phải `'public/logo.png'`. Với `'public/logo.png'`, crxjs giữ nguyên đường dẫn và copy thêm một bản vào `dist/public/logo.png`, khiến icon bị emit 2 lần. `npm run check-manifest` sẽ bắt được trường hợp manifest trỏ tới file không tồn tại.
 
 - [ ] **Step 2: Tạo `public/logo.png`**
 
@@ -306,7 +332,11 @@ const MANIFEST_URL =
 
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === 'install') {
-    void chrome.tabs.create({ url: MANIFEST_URL })
+    chrome.tabs
+      .create({ url: MANIFEST_URL })
+      .catch(() => {
+        // Người dùng có thể đã đóng cửa sổ — bỏ qua lỗi.
+      })
   }
 })
 ```
@@ -322,7 +352,7 @@ console.debug('[manifest-autofill] content script loaded')
 
 ```html
 <!doctype html>
-<html lang="vi">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -368,11 +398,11 @@ createApp(App).mount('#app')
 
 ```html
 <!doctype html>
-<html lang="vi">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Manifest Autofill — Tuỳ chọn</title>
+    <title>Manifest Autofill — Options</title>
   </head>
   <body>
     <div id="app"></div>
@@ -398,7 +428,7 @@ createApp(App).mount('#app')
 </script>
 
 <template>
-  <div class="options">Manifest Autofill — Tuỳ chọn</div>
+  <div class="options">Manifest Autofill — Options</div>
 </template>
 
 <style scoped>
@@ -419,20 +449,117 @@ Expected: build thành công, `dist/` có `manifest.json`, `dist/assets/…`.
 Run: `node -e "const m=require('./dist/manifest.json');console.log(m.manifest_version,m.content_scripts.length,m.host_permissions)"`
 Expected: in ra `3 1 [ 'https://www.chinaports-agency.com:8870/*', 'https://www.dadaex.cn/*' ]`.
 
-- [ ] **Step 13: Tạo `src/env.d.ts`** (khai báo module `*.vue` cho `tsc --noEmit`)
+- [ ] **Step 13: Tạo `scripts/check-manifest.mjs`** (sanity check: mọi path cục bộ trong manifest phải tồn tại trong `dist/`)
 
-```ts
-declare module '*.vue' {
-  import type { DefineComponent } from 'vue'
-  const component: DefineComponent<Record<string, unknown>, Record<string, unknown>, unknown>
-  export default component
+Chrome từ chối nạp extension nếu manifest trỏ tới file không tồn tại (ví dụ `Could not load icon 'public/logo.png' specified in 'action'.`), mà `vite build` **không** bắt được lỗi này. Script dưới đây đọc `dist/manifest.json`, gom mọi path cục bộ mà manifest tham chiếu (`icons.*`, `action.default_icon.*`, `action.default_popup`, `options_page`, `background.service_worker`, `content_scripts[].js[]`) và kiểm tra từng file có tồn tại trong `dist/` hay không.
+
+```js
+#!/usr/bin/env node
+// Kiểm tra rằng mọi đường dẫn cục bộ mà `dist/manifest.json` tham chiếu tới đều tồn tại.
+//
+// Chrome từ chối nạp extension nếu manifest trỏ tới file không tồn tại
+// (ví dụ "Could not load icon 'public/logo.png' specified in 'action'."),
+// nhưng `vite build` không bắt được lỗi này — nên cần script này.
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const distDir = join(root, 'dist')
+const manifestPath = join(distDir, 'manifest.json')
+
+if (!existsSync(manifestPath)) {
+  console.error('✗ Không tìm thấy dist/manifest.json — hãy chạy `npm run build` trước.')
+  process.exit(1)
+}
+
+let manifest
+try {
+  manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+} catch (error) {
+  console.error(`✗ Không đọc được dist/manifest.json: ${error.message}`)
+  process.exit(1)
+}
+
+/** Gom mọi đường dẫn cục bộ mà manifest tham chiếu tới. */
+function collectPaths(manifest) {
+  const paths = []
+  const icons = manifest.icons ?? {}
+  for (const size of Object.keys(icons)) {
+    paths.push({ label: `icons.${size}`, value: icons[size] })
+  }
+  const defaultIcon = manifest.action?.default_icon ?? {}
+  for (const size of Object.keys(defaultIcon)) {
+    paths.push({ label: `action.default_icon.${size}`, value: defaultIcon[size] })
+  }
+  if (manifest.action?.default_popup) {
+    paths.push({ label: 'action.default_popup', value: manifest.action.default_popup })
+  }
+  if (manifest.options_page) {
+    paths.push({ label: 'options_page', value: manifest.options_page })
+  }
+  if (manifest.options_ui?.page) {
+    paths.push({ label: 'options_ui.page', value: manifest.options_ui.page })
+  }
+  if (manifest.background?.service_worker) {
+    paths.push({
+      label: 'background.service_worker',
+      value: manifest.background.service_worker,
+    })
+  }
+  const contentScripts = manifest.content_scripts ?? []
+  for (const [i, script] of contentScripts.entries()) {
+    for (const [j, js] of (script.js ?? []).entries()) {
+      paths.push({ label: `content_scripts[${i}].js[${j}]`, value: js })
+    }
+    for (const [j, css] of (script.css ?? []).entries()) {
+      paths.push({ label: `content_scripts[${i}].css[${j}]`, value: css })
+    }
+  }
+  return paths
+}
+
+const referenced = collectPaths(manifest)
+const missing = []
+
+for (const { label, value } of referenced) {
+  if (typeof value !== 'string' || value.length === 0) {
+    missing.push(`${label} — giá trị không hợp lệ: ${JSON.stringify(value)}`)
+    continue
+  }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value)) {
+    // URL ngoài (http:, https:, data:) — không phải file cục bộ.
+    continue
+  }
+  const target = join(distDir, value)
+  if (!existsSync(target)) {
+    missing.push(`${label} -> ${value} (thiếu file: ${target})`)
+  }
+}
+
+if (missing.length > 0) {
+  console.error(`✗ Manifest trỏ tới ${missing.length} file không tồn tại trong dist/:`)
+  for (const entry of missing) {
+    console.error(`  - ${entry}`)
+  }
+  process.exit(1)
+}
+
+console.log(`✓ Manifest hợp lệ — ${referenced.length} đường dẫn cục bộ đều tồn tại trong dist/:`)
+for (const { label, value } of referenced) {
+  console.log(`  - ${label} -> ${value}`)
 }
 ```
+
+Run: `npm run check-manifest`
+Expected: in ra `✓ Manifest hợp lệ — 6 đường dẫn cục bộ đều tồn tại trong dist/:` kèm danh sách 6 path, exit code 0.
+
+> **Không** biến bước này thành test của Vitest: `npm test` chạy **trước** `npm run build` trong chuỗi `npm run verify`, nên một test phụ thuộc `dist/` sẽ phụ thuộc thứ tự và chạy lỗi khi `dist/` chưa có.
 
 - [ ] **Step 14: Commit**
 
 ```bash
-git add manifest.config.ts public/logo.png src/background/index.ts src/content/index.ts src/env.d.ts src/popup src/options
+git add manifest.config.ts public/logo.png src/background/index.ts src/content/index.ts src/popup src/options scripts/check-manifest.mjs
 git commit -m "feat: add extension manifest, background worker and entry stubs"
 ```
 
@@ -3902,10 +4029,10 @@ async function takeBlNoFromPage(): Promise<void> {
     if (res?.blNo) {
       blNo.value = res.blNo
     } else {
-      error.value = 'Trang hiện tại không có 提单号 đang nhập.'
+      error.value = 'No bill of lading number found on the current page.'
     }
   } catch {
-    error.value = 'Hãy mở tab trang 预配舱单申报平台 rồi thử lại.'
+    error.value = 'Open the manifest declaration page and try again.'
   }
 }
 
@@ -3914,7 +4041,7 @@ async function runFill(): Promise<void> {
   result.value = null
   const value = blNo.value.trim()
   if (!value) {
-    error.value = 'Nhập 提单号 trước đã.'
+    error.value = 'Enter a bill of lading number first.'
     return
   }
 
@@ -3928,10 +4055,10 @@ async function runFill(): Promise<void> {
       autoSubmit: autoSubmit.value,
     })) as FillResult
     result.value = res
-    if (!res?.ok) error.value = res?.message ?? 'Không điền được dữ liệu.'
+    if (!res?.ok) error.value = res?.message ?? 'Could not fill the manifest data.'
   } catch {
     error.value =
-      'Không gửi được lệnh tới trang. Hãy mở tab 预配舱单申报平台 rồi thử lại.'
+      'Could not reach the page. Open the manifest declaration page and try again.'
   } finally {
     busy.value = false
   }
@@ -3957,30 +4084,30 @@ onMounted(async () => {
       <input
         v-model="blNo"
         type="text"
-        placeholder="提单号 (bill of lading number)"
+        placeholder="Bill of lading number (提单号)"
         @keyup.enter="runFill"
       />
-      <button type="button" title="Lấy 提单号 đang nhập trên trang" @click="takeBlNoFromPage">
-        Lấy từ trang
+      <button type="button" title="Read the bill of lading number entered on the page" @click="takeBlNoFromPage">
+        Read from page
       </button>
     </div>
 
     <div class="row">
       <button type="button" class="primary" :disabled="busy" @click="runFill">
-        {{ busy ? 'Đang điền…' : 'Điền dữ liệu' }}
+        {{ busy ? 'Filling…' : 'Fill data' }}
       </button>
-      <button type="button" @click="openPage">Mở trang</button>
+      <button type="button" @click="openPage">Open page</button>
       <label>
         <input v-model="autoSubmit" type="checkbox" @change="onToggleAutoSubmit" />
-        Tự bấm 确定
+        Auto-click 确定
       </label>
     </div>
 
     <p v-if="error" class="error">{{ error }}</p>
 
     <div v-if="result" class="summary">
-      ✅ {{ counts.ok }} · ⚠️ {{ counts.skip }} · ❌ {{ counts.error }} · hàng:
-      {{ result.cargoRows }} · container: {{ result.containerRows }}
+      ✅ {{ counts.ok }} · ⚠️ {{ counts.skip }} · ❌ {{ counts.error }} · cargo:
+      {{ result.cargoRows }} · containers: {{ result.containerRows }}
     </div>
 
     <table v-if="items.length">
@@ -3988,7 +4115,7 @@ onMounted(async () => {
         <tr>
           <th></th>
           <th>Field</th>
-          <th>Ghi chú</th>
+          <th>Note</th>
         </tr>
       </thead>
       <tbody>
@@ -4126,41 +4253,41 @@ onMounted(load)
 
 <template>
   <div class="options">
-    <h1>Manifest Autofill — Tuỳ chọn</h1>
+    <h1>Manifest Autofill — Options</h1>
 
-    <label for="api-base">API lấy dữ liệu manifest</label>
+    <label for="api-base">Manifest data API</label>
     <input id="api-base" v-model="apiBase" type="text" />
     <p class="hint">
-      Endpoint của dadaex. blNo được nối bằng query string <code>?blNo=</code> và hậu tố
-      piece dạng <code>P1</code> bị bỏ tự động.
+      The dadaex endpoint. The bill of lading number is appended as the <code>?blNo=</code> query
+      string; a trailing piece suffix such as <code>P1</code> is stripped automatically.
     </p>
 
-    <label for="site-api-base">API dict của chính site</label>
+    <label for="site-api-base">Site dictionary API</label>
     <input id="site-api-base" v-model="siteApiBase" type="text" />
     <p class="hint">
-      Dùng để lấy danh sách 承运人代码, 交货条款, cảng, 箱型, 尺寸. Để trống = dùng giá trị mặc
-      định.
+      Used to fetch the 承运人代码, 交货条款, port, container type and size lists. Leave blank to
+      use the defaults.
     </p>
 
-    <label for="port-name">Hiển thị tên cảng</label>
+    <label for="port-name">Port name to display</label>
     <select id="port-name" v-model="portNameField">
-      <option value="name">Tiếng Trung (上海)</option>
-      <option value="nameEn">Tiếng Anh (Shanghai)</option>
+      <option value="name">Chinese (上海)</option>
+      <option value="nameEn">English (Shanghai)</option>
     </select>
-    <p class="hint">Chọn theo tên hiển thị trong dropdown cảng của trang.</p>
+    <p class="hint">Match the labels shown in the port dropdown on the page.</p>
 
     <label>
       <input v-model="autoSubmit" type="checkbox" />
-      Tự bấm 确定 ở form đầu sau khi điền xong
+      Automatically click 确定 on the header form after filling
     </label>
     <p class="hint">
-      Mặc định tắt. Khi bật, extension sẽ lưu bản ghi舱单 giống hệt thao tác tay của người dùng.
-      Extension không bao giờ tự phát tán (上传船代 / send).
+      Off by default. When enabled, the extension saves the 舱单 record exactly as a manual entry
+      would. The extension never disseminates on its own (上传船代 / send).
     </p>
 
     <p>
-      <button type="button" class="primary" @click="save">Lưu</button>
-      <span v-if="saved" class="status">Đã lưu.</span>
+      <button type="button" class="primary" @click="save">Save</button>
+      <span v-if="saved" class="status">Saved.</span>
     </p>
   </div>
 </template>
@@ -4261,13 +4388,21 @@ Expected:
 
 | # | Bước | Kết quả mong đợi |
 |---|---|---|
-| 1 | Bấm icon extension → **Lấy từ trang** | Ô nhập lấy được 提单号 đang hiển thị |
-| 2 | Nhập `ONEYSHAGT1569600` → **Điền dữ liệu** | Báo cáo hiện ra, không có lỗi đỏ |
+| 1 | Bấm icon extension → **Read from page** | Ô nhập lấy được 提单号 đang hiển thị |
+| 2 | Nhập `ONEYSHAGT1569600` → **Fill data** | Báo cáo hiện ra, không có lỗi đỏ |
 | 3 | Đối chiếu form đầu | 提单号, 船名, 航次, 承运人代码, 交货条款, 付款方式, 3 cảng, 3 nhóm liên hệ đều đúng |
 | 4 | Đối chiếu bảng hàng | Đủ số dòng `cdgoods`, 24 field trong dialog hàng đúng giá trị |
 | 5 | Đối chiếu bảng container | Đủ số dòng `cdCon`, 9 cột đúng giá trị |
 | 6 | Bấm **确定** ở form đầu | Bản ghi xuất hiện trong danh sách |
-| 7 | Bật **Tự bấm 确定** rồi chạy lại | Extension tự bấm 确定, bản ghi vẫn tạo đúng |
+| 7 | Bật **Auto-click 确定** rồi chạy lại | Extension tự bấm 确定, bản ghi vẫn tạo đúng |
+| 8 | Kiểm tra cookie `token` của site có phải `HttpOnly` không | Ghi lại kết quả — xem ghi chú bên dưới |
+
+> **Bước 8 — kiểm tra `HttpOnly` của cookie `token`.** Chưa xác định được nếu chưa đăng nhập thật (request ẩn danh tới site không trả về `Set-Cookie` nào cả), nên phải kiểm tra thủ công sau khi đăng nhập:
+>
+> - DevTools → tab **Application** → **Cookies** → `https://www.chinaports-agency.com:8870` → cột **HttpOnly** của cookie `token`.
+> - Hoặc chạy trong Console trang đã đăng nhập: `document.cookie` — nếu **không** thấy `token` trong kết quả thì cookie đó là `HttpOnly`.
+>
+> **Vì sao quan trọng:** `readCookieToken` đọc `document.cookie`, nên nếu `token` là `HttpOnly` thì `document.cookie` không thấy nó và fallback gắn header `Authorization: JWT <token>` **không khả dụng**. Cơ chế chính (`fetch(url, { credentials: 'include' })` — browser tự gửi cookie `token` cùng origin) vẫn hoạt động dù cookie có `HttpOnly` hay không, nên đây chỉ là kiểm tra **tính khả dụng của fallback**, không phải blocker. Nếu kết quả là `HttpOnly`, bỏ qua nhánh header `Authorization` và dựa vào `credentials: 'include'` (xem lại `src/core/site-api.ts` → `fetchSiteJson`).
 
 - [ ] **Step 6: Xử lý field không điền được**
 
