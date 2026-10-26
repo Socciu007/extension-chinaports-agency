@@ -3,6 +3,10 @@ const MANIFEST_URL =
 
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === 'install') {
-    void chrome.tabs.create({ url: MANIFEST_URL })
+    chrome.tabs
+      .create({ url: MANIFEST_URL })
+      .catch(() => {
+        // Người dùng có thể đã đóng cửa sổ — bỏ qua lỗi.
+      })
   }
 })

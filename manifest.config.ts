@@ -4,13 +4,18 @@ import pkg from './package.json'
 export default defineManifest({
   manifest_version: 3,
   name: 'Manifest Autofill — 预配舱单',
-  version: pkg.version,
+  description:
+    'Autofill 预配舱单 (manifest) data on China Ports from the dadaex API.',
+  // Chrome chỉ chấp nhận version là 1-4 số nguyên ngăn cách bằng dấu chấm.
+  // `npm version prerelease` sinh ra "0.1.0-beta.0" khiến extension fail to load.
+  version: pkg.version.split('-')[0] ?? '0.0.0',
+  version_name: pkg.version,
   icons: {
-    48: 'public/logo.png',
+    48: 'logo.png',
   },
   action: {
     default_icon: {
-      48: 'public/logo.png',
+      48: 'logo.png',
     },
     default_popup: 'src/popup/index.html',
   },
@@ -29,5 +34,5 @@ export default defineManifest({
     'https://www.chinaports-agency.com:8870/*',
     'https://www.dadaex.cn/*',
   ],
-  permissions: ['storage', 'tabs', 'scripting', 'activeTab'],
+  permissions: ['storage', 'activeTab'],
 })

@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "check-manifest": "node scripts/check-manifest.mjs",
+    "verify": "npm run typecheck && npm test && npm run build && npm run check-manifest"
   },
   "dependencies": {
     "vue": "^3.4.38"
@@ -22,6 +24,7 @@
     "jsdom": "^25.0.1",
     "typescript": "^5.5.4",
     "vite": "^5.2.0",
-    "vitest": "^2.1.1"
+    "vitest": "^2.1.1",
+    "vue-tsc": "^2.1.10"
   }
 }

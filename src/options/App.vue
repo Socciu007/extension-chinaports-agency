@@ -3,7 +3,7 @@
 </script>
 
 <template>
-  <div class="options">Manifest Autofill — Tuỳ chọn</div>
+  <div class="options">Manifest Autofill — Options</div>
 </template>
 
 <style scoped>
