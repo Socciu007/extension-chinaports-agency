@@ -134,8 +134,8 @@ Cấu hình mặc định nằm trong `src/core/default-mapping.ts` (ship kèm e
 | `BILL_NBR` | 提单号 | `data.blNo` |
 | `E_SHIP_NAM` | 船名 | `data.shipName` |
 | `OUT_VOYAGE_NO` | 航次 | `data.voyage` |
-| `TRUST_COD` | 承运人代码 | `sea_order.sea_order_bind.supplyId` → tra `getTrustCode()` |
-| `PAY_WAY_ID` | 付款方式 | `data.payType` → tra dict của site |
+| `TRUST_COD` | 承运人代码 | `sea_order.sea_order_bind.supplyId` → tra `getTrustCode()` (xem rule bên dưới) |
+| `PAY_WAY_ID` | 付款方式 | `data.payType` → `"0"` khi `false`, `"1"` khi `true` (site không có endpoint dict riêng cho 付款方式 trong bundle) |
 | `DR_TYPE_STR` | 交货条款 | `data.transportTerms` → tra `getDrType()` |
 | `START_PORT_NAM` / `_COD` | 收货地（装货港） | `loadPortData.name` / `loadCode` |
 | `DISCHRG_PORT_NAM` / `_COD` | 卸货港 | `uploadPortData.name` / `uploadCode` |
@@ -146,6 +146,17 @@ Cấu hình mặc định nằm trong `src/core/default-mapping.ts` (ship kèm e
 | `SHIPPER_TE_STR` | 电话 | `cabContacts[type=0].phone` |
 | `E_CONSIGNEE_NAM` + `CONSIGNEE_*` | 收货人… | `cabContacts[type=1]` |
 | `E_NOTIFY_NAM` + `NOTIFY_*` | 通知人… | `cabContacts[type=2]` |
+
+**Rule khớp giá trị cho các field dạng select:**
+
+| Field | Cách khớp | Khi không khớp |
+|---|---|---|
+| `TRUST_COD` | `supplyId` khớp `id` của option trong `getTrustCode()`; nếu không có `id` thử khớp `code`/`value` bằng chính `supplyId` | ⚠️ báo "không tìm thấy 承运人 cho supplyId=X", để trống |
+| `DR_TYPE_STR` | `transportTerms` khớp `value`/`code` của option trong `getDrType()`; không có thì dùng luôn giá trị thô | ⚠️ báo, để trống |
+| `PAY_WAY_ID` | `payType` boolean → `"0"` / `"1"` | — |
+| 5 cảng | `*_NAM` = `portData.name` (tên tiếng Trung, vd `上海`), `*_COD` = `loadCode`/`uploadCode`/`aimPortCode` | ⚠️ nếu option không tồn tại trong `getPort()` |
+
+Tên cảng: mặc định lấy `name` (tiếng Trung). Nếu cần tiếng Anh thì đổi sang `nameEn` — cấu hình được trong Options (không cần build lại).
 
 **Cố ý để trống** (API không có, hoặc ngữ nghĩa không khớp):
 
@@ -226,17 +237,36 @@ el.dispatchEvent(new Event('change', { bubbles: true }))
 el.dispatchEvent(new FocusEvent('blur', { bubbles: true }))   // kích hoạt validator onBlur của site
 ```
 
-### 5.3 Đặt giá trị — `el-select`
+### 5.3 Đặt giá trị — control dạng chọn (runtime-adaptive)
 
-`el-select` không nhận giá trị gán trực tiếp. Chiến lược:
+Đã kiểm chứng từ bundle của site: các field chọn **không đồng nhất** —
+`TRUST_COD`/`PAY_WAY_ID`/`DR_TYPE_STR` là `el-select` thuần, còn 5 field cảng + 提单签发地
+dùng **component tuần biến** của dự án (site đăng ký chúng qua một bảng `ref` nội bộ:
+`signPlaceStrRef`, `startPortNamRef`, …). Vì vậy extension **không hardcode theo loại control**,
+mà nhận diện lúc chạy.
 
+**Adapter `setFieldValue(prop, value)` — chọn chiến lược theo DOM thực tế:**
+
+| Phát hiện trong DOM | Chiến lược |
+|---|---|
+| `input` / `textarea` (kể cả nằm trong component tuần biến) | native setter + `input`/`change`/`blur` (§5.2) |
+| Có `.el-select` bên trong | Mở dropdown → chờ option → click option khớp (xem bên dưới) |
+| Có `input[readonly]` + popper tự dựng | Click để mở popper → gõ vào ô lọc → chờ → click phần tử khớp trong popper |
+| Có `.el-cascader` | Click → chọn lần lượt theo từng cấp |
+
+**Cách chọn option (dùng chung cho mọi loại dropdown):**
 1. Tra option list từ API dict của site (`getTrustCode`, `getDrType`, `getPort`, `getCntrCode`, `getPackageCode`) — dùng chung session, không cần token riêng.
-2. Click để mở dropdown popper (Element Plus render popper ra `body`).
-3. Chờ option khớp text/label; click option đó.
-4. Nếu không tìm thấy option → báo ⚠️, bỏ qua field (không click bừa).
-5. Nếu select là `filterable` → nhập text vào ô filter để lọc, chờ rồi mới click.
+2. Click control để mở dropdown (Element Plus render popper ra `body`, không nằm trong form).
+3. Tìm phần tử option theo nhiều selector phổ biến: `.el-select-dropdown__item`, `.el-cascader-node`, `[role="option"]`, `.el-popper li`.
+4. Click option khớp **text** (khớp chính xác trước, khớp chứa sau).
+5. Nếu control có ô filter (`input` bên trong popper hoặc `filterable`), gõ giá trị cần tìm để lọc rồi mới click.
+6. Không tìm thấy option → ⚠️ báo kèm giá trị cần tìm, bỏ qua field (không click bừa).
 
 Các cảng có phụ thuộc dây chuyền (`signPlace → startPort → dischrgPort → transPort → destPort`) → điền đúng thứ tự, chờ render sau mỗi bước.
+
+**Xác nhận bằng DOM thật:** trước khi viết adapter cho field cảng, cần chạy 1 lần DOM dump trên dialog
+**新增舱单信息** (xem §8) để chốt cấu trúc popper của component tuần biến. Đây là bước xác minh
+duy nhất còn lại; nếu DOM khác dự kiến thì adapter được sửa cho vừa, không ảnh hưởng kiến trúc.
 
 ### 5.4 Thứ tự thao tác
 
@@ -302,6 +332,7 @@ Không dừng toàn bộ quy trình vì một field lỗi — trừ khi lỗi �
 - `dom.ts`: đặt giá trị vào input/textarea/select trong jsdom, assert Vue-style binding nhận đúng giá trị.
 
 **Manual (tải extension unpacked)**
+0. *(một lần, trước khi viết adapter cảng)* Mở dialog **新增舱单信息** trên trang thật, chạy DOM dump (§5.3) để chốt cấu trúc popper của component cảng và của dialog hàng.
 1. Mở trang → đăng nhập → vào 预配舱单申报平台.
 2. Popup → nhập `ONEYSHAGT1569600` → Điền dữ liệu.
 3. Đối chiếu từng field với bảng mapping ở §4.
