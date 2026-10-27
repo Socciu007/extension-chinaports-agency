@@ -50,3 +50,75 @@ export function buildHeaderForm(): void {
       <div class="el-select-dropdown__item">上海</div>
     </div>`
 }
+
+export const CARGO_PROPS = [
+  'CARGO_KIND_COD',
+  'CARGO_HS_COD',
+  'PACKAGE_STR',
+  'PACKAGE_COD',
+  'PIECE_NUM',
+  'GWEIGHT_TON',
+  'GVOL_NUM',
+  'NWEIGHT_TON',
+  'MARK_STR',
+  'E_CARGO_NAM',
+  'DANG_CLASS_NAM',
+  'DANG_UN_NO',
+  'DANG_LABLE_STR',
+  'DANG_FLASH_POINT',
+  'DANG_PAGE_NO',
+  'DANG_EMS_NO',
+  'DANG_MFAG_NO',
+  'DANG_CONTACTSTR',
+  'DANGER_CONTACT_NAM',
+  'DANGER_TE_STR',
+  'DANGER_EM_STR',
+  'DANGER_FX_STR',
+  'TEMP_ID',
+  'SET_TEMP_NUM',
+]
+
+export const CONTAINER_COLUMNS = [
+  '箱号',
+  '尺寸',
+  '箱型',
+  '箱状态',
+  '铅封号',
+  '货物件数',
+  '箱内货重（公斤）',
+  '箱内体积',
+  '货主箱标志',
+]
+
+/** Dialog hàng (24 field) + section 货物信息 bên trong dialog đầu. */
+export function buildCargoDialog(): void {
+  const fields = CARGO_PROPS.map(
+    (prop) =>
+      `<div class="el-form-item"><label class="el-form-item__label" for="el-id-c-${prop}">${prop}</label>
+        <input id="el-id-c-${prop}" /></div>`,
+  ).join('')
+
+  document.body.insertAdjacentHTML(
+    'beforeend',
+    `<div class="el-dialog" style="display: block;">
+      <div class="el-dialog__body">
+        <div class="el-form">${fields}</div>
+      </div>
+      <div class="el-dialog__footer">
+        <button class="el-button">取消</button>
+        <button class="el-button el-button--primary">确定</button>
+      </div>
+    </div>`,
+  )
+}
+
+/** Section 货物信息 trong dialog đầu, nút 新增 sẽ mở dialog hàng. */
+export function buildCargoSection(): void {
+  document.body.insertAdjacentHTML(
+    'beforeend',
+    `<div class="CargoInformation">
+      <div class="fs-crud-title">货物信息</div>
+      <button class="el-button">新增</button>
+    </div>`,
+  )
+}
