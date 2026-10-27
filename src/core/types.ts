@@ -36,6 +36,8 @@ export interface ManifestCargo {
   dangerPoint?: string | number | null
   packType?: string | null
   packDesc?: string | null
+  /** 唛头 (pinyin của "mào tóu") — đây mới là field 唛头 của site, `sign` là field khác. */
+  shantou?: string | null
   sign?: string | null
   quarantineCode?: string | null
   quarantineName?: string | null

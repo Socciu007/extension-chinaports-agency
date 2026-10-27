@@ -38,7 +38,7 @@ describe('fillCargoRows', () => {
     ).toBe('SILENT DIESEL GENERATOR')
     expect(
       (document.getElementById('el-id-c-CARGO_KIND_COD') as HTMLInputElement).value,
-    ).toBe('S')
+    ).toBe('普货')
   })
 
   it('ghi nhận lỗi khi không tìm thấy nút 新增', async () => {
