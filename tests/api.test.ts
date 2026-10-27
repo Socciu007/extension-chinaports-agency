@@ -4,6 +4,7 @@ import {
   normalizeBlNo,
   parseEnvelope,
   fetchManifest,
+  describeApiError,
   DEFAULT_API_BASE,
 } from '../src/core/api'
 import fixture from './fixtures/manifest-ONEYSHAGT1569600.json'
@@ -28,6 +29,10 @@ describe('normalizeBlNo', () => {
   it('không bỏ chữ P đứng riêng', () => {
     expect(normalizeBlNo('ABCXP')).toBe('ABCXP')
   })
+
+  it('không bỏ hậu tố P<digits> khi mã gốc thật sự kết thúc bằng nó', () => {
+    expect(normalizeBlNo('ABCP12')).toBe('ABCP12')
+  })
 })
 
 describe('parseEnvelope', () => {
@@ -38,29 +43,48 @@ describe('parseEnvelope', () => {
 
   it('ném not_found khi status=0', () => {
     expect(() => parseEnvelope({ status: 0, message: 'data_not_found', data: null })).toThrowError(
-      ManifestApiError,
+      expect.objectContaining({ kind: 'not_found' }),
+    )
+  })
+
+  it('giữ nguyên message của envelope lỗi', () => {
+    expect(() => parseEnvelope({ status: 0, message: 'data_not_found' })).toThrowError(
+      expect.objectContaining({ kind: 'not_found', message: 'data_not_found' }),
     )
   })
 
   it('ném not_found khi status=1 nhưng data=null', () => {
-    let err: unknown
-    try {
-      parseEnvelope({ status: 1, messgae: 'success', data: null })
-    } catch (e) {
-      err = e
-    }
-    expect(err).toBeInstanceOf(ManifestApiError)
-    expect((err as ManifestApiError).kind).toBe('not_found')
+    expect(() => parseEnvelope({ status: 1, messgae: 'success', data: null })).toThrowError(
+      expect.objectContaining({ kind: 'not_found' }),
+    )
   })
 
   it('ném bad_response khi payload không phải object', () => {
-    let err: unknown
-    try {
-      parseEnvelope('oops')
-    } catch (e) {
-      err = e
-    }
-    expect((err as ManifestApiError).kind).toBe('bad_response')
+    expect(() => parseEnvelope('oops')).toThrowError(
+      expect.objectContaining({ kind: 'bad_response' }),
+    )
+  })
+
+  it('ném bad_response khi payload là array', () => {
+    expect(() => parseEnvelope([])).toThrowError(expect.objectContaining({ kind: 'bad_response' }))
+  })
+
+  it('ném bad_response khi body không có status dạng số', () => {
+    expect(() =>
+      parseEnvelope({ errors: 'boom', message: 'server error' }),
+    ).toThrowError(expect.objectContaining({ kind: 'bad_response' }))
+  })
+
+  it('ném bad_response khi status không phải số', () => {
+    expect(() => parseEnvelope({ status: '1', data: {} })).toThrowError(
+      expect.objectContaining({ kind: 'bad_response' }),
+    )
+  })
+
+  it('ném bad_response khi data là array thay vì object manifest', () => {
+    expect(() => parseEnvelope({ status: 1, data: [] })).toThrowError(
+      expect.objectContaining({ kind: 'bad_response' }),
+    )
   })
 })
 
@@ -87,12 +111,119 @@ describe('fetchManifest', () => {
       throw new Error('offline')
     }) as unknown as typeof fetch
 
-    let err: unknown
-    try {
-      await fetchManifest('X', { fetchImpl: fakeFetch })
-    } catch (e) {
-      err = e
-    }
-    expect((err as ManifestApiError).kind).toBe('network')
+    await expect(fetchManifest('X', { fetchImpl: fakeFetch })).rejects.toMatchObject({
+      kind: 'network',
+    })
+  })
+
+  it('báo lỗi http khi response không ok', async () => {
+    const fakeFetch = (async () => {
+      return {
+        ok: false,
+        status: 500,
+        json: async () => ({ errors: 'boom', message: 'server error' }),
+      } as unknown as Response
+    }) as unknown as typeof fetch
+
+    await expect(fetchManifest('X', { fetchImpl: fakeFetch })).rejects.toMatchObject({
+      kind: 'http',
+    })
+  })
+
+  it('báo bad_response khi body không parse được thành JSON', async () => {
+    const fakeFetch = (async () => {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError('Unexpected token <')
+        },
+      } as unknown as Response
+    }) as unknown as typeof fetch
+
+    await expect(fetchManifest('X', { fetchImpl: fakeFetch })).rejects.toMatchObject({
+      kind: 'bad_response',
+    })
+  })
+
+  it('dùng baseUrl tuỳ chỉnh', async () => {
+    const calls: string[] = []
+    const fakeFetch = (async (url: string) => {
+      calls.push(url)
+      return {
+        ok: true,
+        status: 200,
+        json: async () => fixture,
+      } as unknown as Response
+    }) as unknown as typeof fetch
+
+    await fetchManifest('ONEYSHAGT1569600', {
+      baseUrl: 'https://example.test/manifest',
+      fetchImpl: fakeFetch,
+    })
+    expect(calls[0]).toMatch(/^https:\/\/example\.test\/manifest\?blNo=/)
+  })
+
+  it('percent-encode blNo trước khi ghép query', async () => {
+    const calls: string[] = []
+    const fakeFetch = (async (url: string) => {
+      calls.push(url)
+      return {
+        ok: true,
+        status: 200,
+        json: async () => fixture,
+      } as unknown as Response
+    }) as unknown as typeof fetch
+
+    await fetchManifest('AB&CD+EF', { fetchImpl: fakeFetch })
+    expect(calls[0]).toContain('blNo=AB%26CD%2BEF')
+  })
+
+  it('tự normalize blNo (bỏ hậu tố piece) trước khi gọi API', async () => {
+    const calls: string[] = []
+    const fakeFetch = (async (url: string) => {
+      calls.push(url)
+      return {
+        ok: true,
+        status: 200,
+        json: async () => fixture,
+      } as unknown as Response
+    }) as unknown as typeof fetch
+
+    await fetchManifest('ONEYSHAGT1569600P12', { fetchImpl: fakeFetch })
+    expect(calls[0]).toContain('blNo=ONEYSHAGT1569600')
+    expect(calls[0]).not.toContain('P12')
+  })
+})
+
+describe('describeApiError', () => {
+  it('trả thông báo tiếng Anh cho kind not_found', () => {
+    expect(describeApiError(new ManifestApiError('not_found', 'data_not_found'))).toBe(
+      'No manifest was found for this bill of lading number.',
+    )
+  })
+
+  it('trả thông báo tiếng Anh cho kind network', () => {
+    expect(describeApiError(new ManifestApiError('network', 'offline'))).toBe(
+      'Could not reach the manifest service. Check your network connection.',
+    )
+  })
+
+  it('trả thông báo tiếng Anh cho kind http', () => {
+    expect(describeApiError(new ManifestApiError('http', 'HTTP 500'))).toBe(
+      'The manifest service returned an error. Please try again in a moment.',
+    )
+  })
+
+  it('trả thông báo tiếng Anh cho kind bad_response', () => {
+    expect(describeApiError(new ManifestApiError('bad_response', 'not JSON'))).toBe(
+      'The manifest service returned an unexpected response.',
+    )
+  })
+
+  it('trả thông báo chung khi lỗi không phải ManifestApiError', () => {
+    expect(describeApiError(new Error('boom'))).toBe(
+      'Something went wrong while fetching the manifest data.',
+    )
   })
 })

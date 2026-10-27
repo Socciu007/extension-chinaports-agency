@@ -73,6 +73,7 @@ export interface ManifestData {
   loadPortData?: PortInfo | null
   uploadPortData?: PortInfo | null
   aimPortData?: PortInfo | null
+  /** Tên field cố tình giữ dạng snake_case để khớp payload của API — đừng đổi, sẽ hỏng mapping. */
   sea_order?: {
     ebNo?: string | null
     sea_order_bind?: { id?: number; supplyId?: number } | null
