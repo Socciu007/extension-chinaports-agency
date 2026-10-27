@@ -1,10 +1,19 @@
 import { nextFrame, sleep, waitFor } from './wait'
 import { readFieldValue, setFieldValue } from './dom'
 import { mapCargo, mapContainer, mapHeader, type FieldPlan, type MappingContext } from './mapping'
+import { isVisible } from './select'
 import { findColumnIndex, getCell, readTableHandles, setCellValue } from './table'
 import type { ManifestCargo, ManifestContainer, ManifestData } from './types'
 
-export type FillStatus = 'ok' | 'skip' | 'error'
+/**
+ * Trạng thái của một field trong báo cáo:
+ * - `ok`    ✅ đã ghi giá trị thành công;
+ * - `warn`  ⚠️ muốn ghi nhưng chưa được (field không có trên trang, option không
+ *            tồn tại, hoặc kiểm tra sau khi ghi thất bại) — người dùng phải xử lý;
+ * - `error` ❌ ghi giá trị hỏng, hoặc một bước cấu trúc hỏng (dialog không mở…);
+ * - `skip`  ⏭ không có dữ liệu nguồn nên cố ý để trống.
+ */
+export type FillStatus = 'ok' | 'warn' | 'error' | 'skip'
 
 export interface FillItem {
   scope: 'header' | 'cargo' | 'container'
@@ -30,11 +39,17 @@ export interface FillOptions {
   log?: (message: string) => void
 }
 
+/**
+ * Tìm nút có đúng text `text`.
+ *
+ * Chỉ khớp chính xác — khớp "chứa" sẽ bấm nhầm nút 批量新增舱单信息. Ưu tiên nút
+ * đang hiển thị: Element Plus giữ tab đã xem trong DOM (dù đã ẩn), bấm nút ẩn
+ * là thao tác vô nghĩa.
+ */
 export function findButtonByText(text: string, root: ParentNode = document): HTMLElement | null {
   const buttons = Array.from(root.querySelectorAll<HTMLElement>('button, .el-button'))
-  const exact = buttons.find((b) => (b.textContent ?? '').trim() === text)
-  if (exact) return exact
-  return buttons.find((b) => (b.textContent ?? '').trim().includes(text)) ?? null
+  const exact = buttons.filter((b) => (b.textContent ?? '').trim() === text)
+  return exact.find(isVisible) ?? exact[0] ?? null
 }
 
 /** Tìm phần tử chứa đúng tiêu đề section (phần tử sâu nhất). */
@@ -120,7 +135,9 @@ export async function fillPlans(
         scope,
         prop: plan.prop,
         label: plan.label,
-        status: 'error',
+        // Không tìm thấy field / không có option → cảnh báo, người dùng tự xử lý.
+        // Chỉ lỗi ghi giá trị (strategy 'text') mới là lỗi thật.
+        status: result.strategy === 'text' ? 'error' : 'warn',
         note: result.reason,
       })
       await nextFrame()
@@ -134,7 +151,7 @@ export async function fillPlans(
           scope,
           prop: plan.prop,
           label: plan.label,
-          status: 'ok',
+          status: 'warn',
           note: plan.verify.note,
         })
         await nextFrame()
@@ -166,7 +183,7 @@ export function findManifestDialog(root: ParentNode): HTMLElement | null {
   const byField = findDialogWithField(root, 'BILL_NBR')
   if (byField) return byField
   const dialogs = Array.from(root.querySelectorAll<HTMLElement>('.el-dialog'))
-  const visible = dialogs.filter((d) => d.getClientRects().length > 0 || d.offsetParent !== null)
+  const visible = dialogs.filter(isVisible)
   return visible[visible.length - 1] ?? dialogs[dialogs.length - 1] ?? null
 }
 
@@ -204,7 +221,11 @@ export async function fillManifest(options: FillOptions): Promise<FillReport> {
     }
   }
 
-  log('Filling in the 舱单 information…')
+  // Vue render bất đồng bộ: handler "新增" của site thường reset lại model của
+  // form — cho nó một frame để flush trước khi bắt đầu điền field đầu tiên.
+  await nextFrame()
+
+  log('Filling in the manifest information…')
   const header = await fillPlans(dialog, mapHeader(data, ctx), 'header')
 
   const cargo = await fillCargoRows(dialog, data.cdgoods ?? [], { log })
@@ -219,11 +240,14 @@ export async function fillManifest(options: FillOptions): Promise<FillReport> {
     }
   }
 
+  const items = [...header.items, ...cargo.items, ...container.items]
+
   return {
-    items: [...header.items, ...cargo.items, ...container.items],
+    items,
     cargoRows: cargo.rows,
     containerRows: container.rows,
-    ok: true,
+    // `ok` = mọi thứ định ghi đều đã ghi được; `warn`/`error` đều cần người dùng xử lý.
+    ok: items.every((i) => i.status === 'ok' || i.status === 'skip'),
   }
 }
 

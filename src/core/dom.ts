@@ -82,8 +82,13 @@ export async function setFieldValue(
   }
 
   if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-    setTextValue(el, value)
-    return { ok: true, strategy: 'text' }
+    try {
+      setTextValue(el, value)
+      return { ok: true, strategy: 'text' }
+    } catch (e) {
+      // Không ném lỗi ra ngoài: một field hỏng không được dừng cả lần điền.
+      return { ok: false, strategy: 'text', reason: (e as Error).message }
+    }
   }
 
   return { ok: false, strategy: 'none', reason: 'The field is not an input, textarea or select' }

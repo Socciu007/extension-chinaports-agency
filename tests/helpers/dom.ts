@@ -1,47 +1,172 @@
-export function buildHeaderForm(): void {
-  const items: Array<[string, string, string?]> = [
-    ['BILL_NBR', '提单号', 'input'],
-    ['E_SHIP_NAM', '船名', 'input'],
-    ['OUT_VOYAGE_NO', '航次', 'input'],
-    ['TRUST_COD', '承运人代码', 'select'],
-    ['PAY_WAY_ID', '付款方式', 'select'],
-    ['DR_TYPE_STR', '交货条款', 'select'],
-    ['START_PORT_NAM', '收货地（装货港）', 'input'],
-    ['START_PORT_COD', '收货地代码', 'input'],
-    ['DISCHRG_PORT_NAM', '卸货港', 'input'],
-    ['DEST_PORT_NAM', '交货地', 'input'],
-    ['E_SHIPPER_NAM', '发货人名称', 'input'],
-    ['SHIPPER_ADD_STR', '发货人地址', 'input'],
-    ['SHIPPER_COUNTRY_COD', '国家代码', 'input'],
-    ['SHIPPER_TE_STR', '电话', 'input'],
-    ['E_CONSIGNEE_NAM', '收货人名称', 'input'],
-    ['E_NOTIFY_NAM', '通知人名称', 'input'],
-  ]
+export interface HeaderFormOptions {
+  /**
+   * 'static' = dialog có sẵn trong DOM (mặc định — test gọi fillHeader trực tiếp);
+   * 'lazy'   = chỉ render sau khi bấm nút 新增舱单信息 (mô phỏng site thật);
+   * 'never'  = có nút nhưng dialog không bao giờ mở (nhánh lỗi).
+   */
+  dialogMode?: 'static' | 'lazy' | 'never'
+  /** Để trống 3 ô mã cảng để kiểm tra nhánh verify thất bại. */
+  emptyPortCodes?: boolean
+  /** Thêm nút trùng text 新增舱单信息 nằm trong tab đã ẩn (Element Plus giữ tab đã xem). */
+  hiddenDuplicateButton?: boolean
+}
 
-  const html = items
-    .map(([prop, label, kind]) => {
-      const control =
-        kind === 'select'
-          ? `<div class="el-select"><div class="el-select__wrapper"><input id="el-id-x-${prop}" readonly /></div></div>`
-          : `<input id="el-id-x-${prop}" />`
-      return `<div class="el-form-item EntryOfManifestInformation">
-        <label class="el-form-item__label" for="el-id-x-${prop}">${label}</label>
+interface HeaderField {
+  prop: string
+  label: string
+  kind: 'input' | 'select'
+  /** Giá trị có sẵn trong DOM (dùng cho ô do site tự cascade). */
+  prefilled?: string
+}
+
+/**
+ * 25 field của form đầu.
+ *
+ * Ba ô mã cảng (`*_PORT_COD`) được điền sẵn: extension KHÔNG BAO GIỜ ghi vào
+ * chúng — site tự cascade mã khi người dùng chọn *tên* cảng. Giá trị có sẵn
+ * trong fixture chỉ để mô phỏng "cascade đã xảy ra", nhờ đó nhánh verify
+ * (đọc lại mã cảng) có thể pass.
+ */
+const HEADER_FIELDS: HeaderField[] = [
+  { prop: 'BILL_NBR', label: '提单号', kind: 'input' },
+  { prop: 'E_SHIP_NAM', label: '船名', kind: 'input' },
+  { prop: 'OUT_VOYAGE_NO', label: '航次', kind: 'input' },
+  { prop: 'TRUST_COD', label: '承运人代码', kind: 'select' },
+  { prop: 'PAY_WAY_ID', label: '付款方式', kind: 'select' },
+  { prop: 'DR_TYPE_STR', label: '交货条款', kind: 'select' },
+  { prop: 'START_PORT_NAM', label: '收货地（装货港）', kind: 'input' },
+  { prop: 'START_PORT_COD', label: '收货地代码', kind: 'input', prefilled: 'CNSHA' },
+  { prop: 'DISCHRG_PORT_NAM', label: '卸货港', kind: 'input' },
+  { prop: 'DISCHRG_PORT_COD', label: '卸货港代码', kind: 'input', prefilled: 'CNSHA' },
+  { prop: 'DEST_PORT_NAM', label: '交货地', kind: 'input' },
+  { prop: 'DEST_PORT_COD', label: '交货地代码', kind: 'input', prefilled: 'CNSHA' },
+  { prop: 'E_SHIPPER_NAM', label: '发货人名称', kind: 'input' },
+  { prop: 'SHIPPER_ADD_STR', label: '发货人地址', kind: 'input' },
+  { prop: 'SHIPPER_COUNTRY_COD', label: '国家代码', kind: 'input' },
+  { prop: 'SHIPPER_TE_STR', label: '电话', kind: 'input' },
+  { prop: 'E_CONSIGNEE_NAM', label: '收货人名称', kind: 'input' },
+  { prop: 'CONSIGNEE_ADD_STR', label: '收货人地址', kind: 'input' },
+  { prop: 'CONSIGNEE_COUNTRY_COD', label: '国家代码', kind: 'input' },
+  { prop: 'CONSIGNEE_TE_STR', label: '电话', kind: 'input' },
+  { prop: 'E_NOTIFY_NAM', label: '通知人名称', kind: 'input' },
+  { prop: 'NOTIFY_ADD_STR', label: '通知人地址', kind: 'input' },
+  { prop: 'NOTIFY_COUNTRY_COD', label: '国家代码', kind: 'input' },
+  { prop: 'NOTIFY_TE_STR', label: '电话', kind: 'input' },
+]
+
+function headerFieldsHtml(emptyPortCodes: boolean): string {
+  return HEADER_FIELDS.map((field) => {
+    const control =
+      field.kind === 'select'
+        ? `<div class="el-select"><div class="el-select__wrapper"><input id="el-id-x-${field.prop}" readonly /></div></div>`
+        : `<input id="el-id-x-${field.prop}"${
+            field.prefilled && !emptyPortCodes ? ` value="${field.prefilled}"` : ''
+          } />`
+    return `<div class="el-form-item EntryOfManifestInformation">
+        <label class="el-form-item__label" for="el-id-x-${field.prop}">${field.label}</label>
         ${control}
       </div>`
-    })
-    .join('')
+  }).join('')
+}
 
-  document.body.innerHTML = `
-    <button class="el-button">新增舱单信息</button>
-    <div class="el-dialog" style="display: block;">
+/** Section 货物信息 trong dialog đầu — bấm 新增 sẽ mở dialog hàng. */
+function cargoSectionHtml(): string {
+  return `<div class="CargoInformation">
+      <div class="fs-crud-title">货物信息</div>
+      <button class="el-button" id="add-cargo">新增</button>
+    </div>`
+}
+
+/** Bảng container inline editable + section 箱信息. */
+function containerSectionHtml(): string {
+  const header = CONTAINER_COLUMNS.map((c) => `<th>${c}</th>`).join('')
+  return `<div class="ContainerInformation">
+      <div class="fs-crud-title">箱信息</div>
+      <button class="el-button" id="add-container">新增</button>
+      <div class="el-table">
+        <div class="el-table__header-wrapper">
+          <div class="el-table__header">
+            <table><thead><tr>${header}</tr></thead></table>
+          </div>
+        </div>
+        <div class="el-table__body-wrapper">
+          <div class="el-table__body">
+            <table><tbody></tbody></table>
+          </div>
+        </div>
+      </div>
+    </div>`
+}
+
+/** Dialog đầu (舱单) — gồm form đầu + section hàng + bảng container. */
+function headerDialogHtml(emptyPortCodes: boolean): string {
+  return `<div class="el-dialog" id="manifest-dialog" style="display: block;">
       <div class="el-dialog__body">
-        <div class="el-form">${html}</div>
+        <div class="el-form">${headerFieldsHtml(emptyPortCodes)}</div>
+        ${cargoSectionHtml()}
+        ${containerSectionHtml()}
       </div>
       <div class="el-dialog__footer">
         <button class="el-button">取消</button>
         <button class="el-button el-button--primary">确定</button>
       </div>
-    </div>
+    </div>`
+}
+
+/** Dialog hàng (24 field) — mở khi bấm 新增 trong section 货物信息. */
+function cargoDialogHtml(): string {
+  const fields = CARGO_PROPS.map(
+    (prop) =>
+      `<div class="el-form-item"><label class="el-form-item__label" for="el-id-c-${prop}">${prop}</label>
+        <input id="el-id-c-${prop}" /></div>`,
+  ).join('')
+
+  return `<div class="el-dialog" id="cargo-dialog" style="display: block;">
+      <div class="el-dialog__body">
+        <div class="el-form">${fields}</div>
+      </div>
+      <div class="el-dialog__footer">
+        <button class="el-button">取消</button>
+        <button class="el-button el-button--primary">确定</button>
+      </div>
+    </div>`
+}
+
+/** Gắn sự kiện giả lập cho dialog vừa render: mở dialog hàng + thêm dòng container. */
+function wireDialog(): void {
+  const cargoAdd = document.getElementById('add-cargo')
+  cargoAdd?.addEventListener('click', () => {
+    if (document.getElementById('cargo-dialog')) return
+    document.body.insertAdjacentHTML('beforeend', cargoDialogHtml())
+  })
+
+  const containerAdd = document.getElementById('add-container')
+  containerAdd?.addEventListener('click', () => {
+    const tbody = document.querySelector('.el-table__body tbody')
+    if (!tbody) return
+    const tr = document.createElement('tr')
+    tr.innerHTML = CONTAINER_COLUMNS.map(() => '<td><input /></td>').join('')
+    tbody.appendChild(tr)
+  })
+}
+
+/**
+ * Dialog đầu + form đầu + section hàng + bảng container.
+ *
+ * Mặc định dialog có sẵn trong DOM (test gọi `fillHeader` trực tiếp cần vậy).
+ * Với `dialogMode: 'lazy'` thì dialog chỉ được render sau khi bấm nút
+ * 新增舱单信息 — đúng như site thật, nên test phải chờ dialog mở ra.
+ */
+export function buildHeaderForm(options: HeaderFormOptions = {}): void {
+  const { dialogMode = 'static', emptyPortCodes = false, hiddenDuplicateButton = false } = options
+
+  const hiddenDuplicate = hiddenDuplicateButton
+    ? '<div data-hidden="1"><button class="el-button" id="add-manifest-hidden">新增舱单信息</button></div>'
+    : ''
+
+  document.body.innerHTML = `
+    ${hiddenDuplicate}
+    <button class="el-button" id="add-manifest">新增舱单信息</button>
     <div class="el-select-dropdown">
       <div class="el-select-dropdown__item">MAEU</div>
       <div class="el-select-dropdown__item">FOB</div>
@@ -49,6 +174,22 @@ export function buildHeaderForm(): void {
       <div class="el-select-dropdown__item">1</div>
       <div class="el-select-dropdown__item">上海</div>
     </div>`
+
+  if (dialogMode === 'static') {
+    document.body.insertAdjacentHTML('beforeend', headerDialogHtml(emptyPortCodes))
+    wireDialog()
+    return
+  }
+
+  if (dialogMode === 'lazy') {
+    const addButton = document.getElementById('add-manifest')
+    addButton?.addEventListener('click', () => {
+      if (document.getElementById('manifest-dialog')) return
+      document.body.insertAdjacentHTML('beforeend', headerDialogHtml(emptyPortCodes))
+      wireDialog()
+    })
+  }
+  // 'never': nút có sẵn nhưng không bao giờ mở dialog.
 }
 
 export const CARGO_PROPS = [
