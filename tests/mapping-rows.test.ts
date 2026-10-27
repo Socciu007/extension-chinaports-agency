@@ -18,7 +18,6 @@ const ctx: MappingContext = {
   findPort: () => undefined,
   findCntrType: (raw) => (String(raw) === '2' ? '20GP' : undefined),
   findCntrSize: (raw) => (String(raw) === '0' ? "20'" : undefined),
-  portNameField: 'name',
 }
 
 const planFor = <T extends { prop: string }>(plans: T[], prop: string) =>

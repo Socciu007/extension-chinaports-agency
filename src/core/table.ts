@@ -38,13 +38,16 @@ export async function setCellValue(
   value: string,
   timeout = 5000,
 ): Promise<{ ok: boolean; reason?: string }> {
-  const input = cell.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea')
-  if (!input) return { ok: false, reason: 'The table cell has no input' }
-
+  // Element Plus render input của select không filterable thành
+  // <span class="el-select__input"> → trong ô không có <input> nào, nên phải
+  // kiểm tra `.el-select` TRƯỚC khi tìm input.
   if (cell.querySelector('.el-select')) {
     const result = await pickFromSelect(cell, value, timeout)
     return { ok: result.ok, reason: result.reason }
   }
+
+  const input = cell.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea')
+  if (!input) return { ok: false, reason: 'The table cell has no input' }
 
   if (input.readOnly) {
     const result = await pickFromPopper(cell, value, timeout)

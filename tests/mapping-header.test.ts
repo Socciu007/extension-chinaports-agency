@@ -8,15 +8,11 @@ const data = fixture.data as unknown as ManifestData
 const ctx: MappingContext = {
   findTrustCode: (id) => (id === 2 ? 'MAEU' : undefined),
   findDrType: (code) => (code === '1' ? 'FOB' : undefined),
+  // Site chỉ gợi ý tên cảng tiếng Trung → `findPort` trả về tên Trung.
   findPort: (code) =>
-    code === 'CNSHA'
-      ? { label: '上海', value: 'CNSHA' }
-      : code === 'IDBLW'
-        ? { label: '勿拉湾', value: 'IDBLW' }
-        : undefined,
+    code === 'CNSHA' ? '上海' : code === 'IDBLW' ? '勿拉湾' : undefined,
   findCntrType: (raw) => (raw === 2 ? '20GP' : undefined),
   findCntrSize: (raw) => (raw === 0 ? "20'" : undefined),
-  portNameField: 'name',
 }
 
 const planFor = <T extends { prop: string }>(plans: T[], prop: string) =>
@@ -69,13 +65,92 @@ describe('mapHeader', () => {
     expect(planFor(plans, 'DR_TYPE_STR')).toMatchObject({ status: 'fill', value: 'FOB' })
   })
 
-  it('map 付款方式 từ boolean payType', () => {
-    expect(planFor(plans, 'PAY_WAY_ID')).toMatchObject({ status: 'fill', value: '0' })
+  it('map 付款方式 ra NhãN của site (không phải mã 0/1)', () => {
+    // Fixture có payType = false → 到付 (mã site lưu là "C").
+    expect(planFor(plans, 'PAY_WAY_ID')).toMatchObject({ status: 'fill', value: '到付' })
+  })
+
+  it('payType = true → 预付', () => {
+    const p = mapHeader({ ...data, payType: true }, ctx).find((x) => x.prop === 'PAY_WAY_ID')
+    expect(p).toMatchObject({ status: 'fill', value: '预付' })
+  })
+
+  it('payType = false → 到付', () => {
+    const p = mapHeader({ ...data, payType: false }, ctx).find((x) => x.prop === 'PAY_WAY_ID')
+    expect(p).toMatchObject({ status: 'fill', value: '到付' })
+  })
+
+  it('note của 付款方式 nói rõ mã site sẽ lưu', () => {
+    const p = mapHeader({ ...data, payType: true }, ctx).find((x) => x.prop === 'PAY_WAY_ID')
+    // Note phải nêu cả mã site lưu ("P") lẫn nhãn hiển thị (预付).
+    expect(p?.note).toContain('"P"')
+    expect(p?.note).toContain('预付')
+  })
+
+  it('payType = 1 → 预付', () => {
+    const p = mapHeader({ ...data, payType: 1 }, ctx).find((x) => x.prop === 'PAY_WAY_ID')
+    expect(p).toMatchObject({ status: 'fill', value: '预付' })
+  })
+
+  it('payType = 0 → 到付', () => {
+    const p = mapHeader({ ...data, payType: 0 }, ctx).find((x) => x.prop === 'PAY_WAY_ID')
+    expect(p).toMatchObject({ status: 'fill', value: '到付' })
+  })
+
+  it('payType = 2 (giá trị lạ) thì bỏ trống, không đoán', () => {
+    const p = mapHeader({ ...data, payType: 2 }, ctx).find((x) => x.prop === 'PAY_WAY_ID')
+    expect(p?.status).toBe('skip')
+    expect(p?.value).toBeUndefined()
+    expect(p?.note).toContain('2')
+  })
+
+  it('không có payType thì bỏ trống 付款方式', () => {
+    const p = mapHeader({ ...data, payType: null }, ctx).find((x) => x.prop === 'PAY_WAY_ID')
+    expect(p?.status).toBe('skip')
+    expect(p?.value).toBeUndefined()
   })
 
   it('map 装货港 sang START_PORT_NAM và verify START_PORT_COD', () => {
     expect(planFor(plans, 'START_PORT_NAM')).toMatchObject({ status: 'fill', value: '上海' })
     expect(planFor(plans, 'START_PORT_NAM')?.verify?.prop).toBe('START_PORT_COD')
+  })
+
+  it('ô cảng mang matchValue dạng 名称/代码', () => {
+    expect(planFor(plans, 'START_PORT_NAM')).toMatchObject({
+      value: '上海',
+      matchValue: '上海/CNSHA',
+    })
+    expect(planFor(plans, 'DISCHRG_PORT_NAM')).toMatchObject({
+      value: '勿拉湾',
+      matchValue: '勿拉湾/IDBLW',
+    })
+    expect(planFor(plans, 'DEST_PORT_NAM')).toMatchObject({
+      value: '勿拉湾',
+      matchValue: '勿拉湾/IDBLW',
+    })
+  })
+
+  it('tên cảng lấy từ API trước, dictionary chỉ là fallback', () => {
+    const p = mapHeader(data, { ...ctx, findPort: () => 'TENDICH' }).find(
+      (x) => x.prop === 'START_PORT_NAM',
+    )
+    expect(p?.value).toBe('上海')
+    expect(p?.matchValue).toBe('上海/CNSHA')
+  })
+
+  it('khi API không có tên cảng thì lấy từ dictionary getPort()', () => {
+    const p = mapHeader(
+      { ...data, loadPortData: null },
+      { ...ctx, findPort: (code) => (code === 'CNSHA' ? '上海' : undefined) },
+    ).find((x) => x.prop === 'START_PORT_NAM')
+    expect(p).toMatchObject({ status: 'fill', value: '上海', matchValue: '上海/CNSHA' })
+  })
+
+  it('không tìm thấy cảng thì bỏ trống', () => {
+    const p = mapHeader({ ...data, loadPortData: null }, { ...ctx, findPort: () => undefined }).find(
+      (x) => x.prop === 'START_PORT_NAM',
+    )
+    expect(p?.status).toBe('skip')
   })
 
   it('map 卸货港 sang DISCHRG_PORT_NAM', () => {
@@ -121,5 +196,15 @@ describe('mapHeader', () => {
   it('để trống EMAIL và FAX', () => {
     expect(planFor(plans, 'SHIPPER_EM_STR')?.status).toBe('skip')
     expect(planFor(plans, 'CONSIGNEE_FX_STR')?.status).toBe('skip')
+  })
+})
+
+describe('MappingContext', () => {
+  it('không còn cấu hình portNameField (site chỉ gợi ý tên Trung)', () => {
+    // Kiểm tra ở mức kiểu: `portNameField` phải KHÔNG còn là thuộc tính hợp lệ
+    // của `MappingContext` (nếu còn, `@ts-expect-error` báo "unused directive").
+    // @ts-expect-error — `portNameField` đã bị gỡ khỏi `MappingContext`.
+    const legacyCtx: MappingContext = { ...ctx, portNameField: 'START_PORT_NAM' }
+    expect(legacyCtx).toBeTruthy()
   })
 })

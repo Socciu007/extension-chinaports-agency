@@ -1,9 +1,9 @@
 import { nextFrame, sleep, waitFor } from './wait'
-import { pickFromPopper, pickFromSelect } from './select'
+import { pickFromAutocomplete, pickFromPopper, pickFromSelect } from './select'
 
 export interface SetResult {
   ok: boolean
-  strategy: 'text' | 'select' | 'none'
+  strategy: 'text' | 'select' | 'autocomplete' | 'none'
   reason?: string
 }
 
@@ -53,19 +53,33 @@ export function setTextValue(el: HTMLInputElement | HTMLTextAreaElement, value: 
 export function readFieldValue(root: ParentNode, prop: string): string {
   const el = findField(root, prop)
   if (!el) return ''
+
+  // el-select: label đang chọn nằm ở `.el-select__selected-item`, KHÔNG nằm trong
+  // `input.value` (select filterable còn đẩy cả text đang gõ vào đó) → đọc label
+  // trước. Chưa chọn gì thì trả '' chứ không phải placeholder ("请选择"): trả
+  // placeholder sẽ làm một verify pass giả.
+  const select = el.closest<HTMLElement>('.el-select')
+  if (select) {
+    const items = Array.from(select.querySelectorAll<HTMLElement>('.el-select__selected-item'))
+    // `is-transparent` = placeholder đang trong suốt (site đang hiện label khác).
+    const real = items.filter((node) => !node.classList.contains('is-transparent'))
+    return (real[real.length - 1]?.textContent ?? '').trim()
+  }
+
   if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return el.value
+
   return (el.textContent ?? '').trim()
 }
 
 /**
  * Adapter chung để điền một field bất kỳ: tự nhận diện input text,
- * el-select hoặc popper của site rồi gọi đúng strategy tương ứng.
+ * el-select, el-autocomplete hoặc popper của site rồi gọi đúng strategy tương ứng.
  */
 export async function setFieldValue(
   root: ParentNode,
   prop: string,
   value: string,
-  options: { timeout?: number } = {},
+  options: { timeout?: number; matchValue?: string } = {},
 ): Promise<SetResult> {
   const el = findField(root, prop)
   if (!el) {
@@ -74,7 +88,19 @@ export async function setFieldValue(
 
   const select = el.closest<HTMLElement>('.el-select')
   if (select) {
-    return pickFromSelect(select, value, options.timeout)
+    return pickFromSelect(select, value, options.timeout, options.matchValue)
+  }
+
+  // 5 ô cảng của site là `el-autocomplete` và input bên trong KHÔNG readonly.
+  // Không có nhánh này thì chúng rơi vào nhánh text: chỉ gõ chữ, không bao giờ
+  // click gợi ý → site không cascade mã cảng và field sai âm thầm.
+  const autocomplete = el.closest<HTMLElement>('.el-autocomplete')
+  if (autocomplete) {
+    const input =
+      el instanceof HTMLInputElement ? el : autocomplete.querySelector<HTMLInputElement>('input')
+    if (input) {
+      return pickFromAutocomplete(input, value, options.timeout, options.matchValue)
+    }
   }
 
   if (el instanceof HTMLInputElement && el.readOnly) {

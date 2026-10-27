@@ -15,7 +15,9 @@ export interface FieldPlan {
   status: PlanStatus
   /** giá trị cần điền (chỉ có khi status = 'fill') */
   value?: string
-  /** lý do bỏ qua */
+  /** text của option cần click; mặc định bằng `value` */
+  matchValue?: string
+  /** ghi chú để đối chiếu; với plan 'skip' là lý do bỏ qua */
   note?: string
   /** sau khi điền prop này thì đọc lại verifyProp, rỗng thì báo cảnh báo */
   verify?: { prop: string; note: string }
@@ -26,10 +28,34 @@ export interface FieldPlan {
 export interface MappingContext {
   findTrustCode(supplyId?: number): string | undefined
   findDrType(code?: string): string | undefined
-  findPort(code?: string): { label: string; value: string } | undefined
+  /** Tên cảng tiếng Trung — widget của site chỉ gợi ý tên Trung (filter `E_PORT_NAM`). */
+  findPort(code?: string): string | undefined
   findCntrType(raw?: number | string | null): string | undefined
   findCntrSize(raw?: number | string | null): string | undefined
-  portNameField: 'name' | 'nameEn'
+}
+
+/**
+ * 付款方式 của site: 预付='P', 到付='C', 免费='F'. Adapter click theo TEXT hiển thị.
+ */
+const PAY_WAY_OPTIONS: Record<'P' | 'C', { label: string; code: string }> = {
+  P: { label: '预付', code: 'P' },
+  C: { label: '到付', code: 'C' },
+}
+
+/**
+ * Map `payType` của API sang option của site.
+ *
+ * - `true` / `1` → 预付 (site lưu mã "P");
+ * - `false` / `0` → 到付 (site lưu mã "C");
+ * - còn lại (`null`/`undefined`, hoặc giá trị lạ như `2`, `-1`) → `undefined`:
+ *   KHÔNG đoán, bỏ trống 付款方式. Lý do cụ thể do caller ghi vào note.
+ */
+function payWayOf(
+  payType: boolean | number | null | undefined,
+): { label: string; code: string } | undefined {
+  if (payType === true || payType === 1) return PAY_WAY_OPTIONS.P
+  if (payType === false || payType === 0) return PAY_WAY_OPTIONS.C
+  return undefined
 }
 
 export type ContactRole = 0 | 1 | 2
@@ -98,12 +124,18 @@ export function mapHeader(data: ManifestData, ctx: MappingContext): FieldPlan[] 
   })
 
   const payType = data.payType
+  const payWay = payWayOf(payType)
   plans.push({
     prop: 'PAY_WAY_ID',
     label: '付款方式',
-    status: payType === null || payType === undefined ? 'skip' : 'fill',
-    value: payType === null || payType === undefined ? undefined : payType ? '1' : '0',
-    note: payType === null || payType === undefined ? 'The API provides no payType' : undefined,
+    status: payWay ? 'fill' : 'skip',
+    // Adapter click theo TEXT hiển thị → phải là nhãn, không phải mã.
+    value: payWay?.label,
+    note: payWay
+      ? `The site stores the code "${payWay.code}" for "${payWay.label}"`
+      : payType === null || payType === undefined
+        ? 'The API provides no payType'
+        : `The API returned an unrecognised payType "${payType}", so 付款方式 was left blank`,
   })
 
   const portGroups = [
@@ -111,25 +143,30 @@ export function mapHeader(data: ManifestData, ctx: MappingContext): FieldPlan[] 
       nameProp: 'START_PORT_NAM',
       codeProp: 'START_PORT_COD',
       code: data.loadCode,
+      apiName: data.loadPortData?.name,
       label: '收货地（装货港）',
     },
     {
       nameProp: 'DISCHRG_PORT_NAM',
       codeProp: 'DISCHRG_PORT_COD',
       code: data.uploadCode,
+      apiName: data.uploadPortData?.name,
       label: '卸货港',
     },
     {
       nameProp: 'DEST_PORT_NAM',
       codeProp: 'DEST_PORT_COD',
       code: data.aimPortCode,
+      apiName: data.aimPortData?.name,
       label: '交货地',
     },
   ]
 
   for (const group of portGroups) {
-    const found = ctx.findPort(group.code ?? undefined)
-    if (!found) {
+    // Widget của site chỉ gợi ý tên cảng tiếng Trung → ưu tiên tên từ API,
+    // dictionary getPort() chỉ là fallback.
+    const name = text(group.apiName) || ctx.findPort(group.code ?? undefined) || ''
+    if (name === '') {
       plans.push({
         prop: group.nameProp,
         label: group.label,
@@ -138,11 +175,16 @@ export function mapHeader(data: ManifestData, ctx: MappingContext): FieldPlan[] 
       })
       continue
     }
+    const code = text(group.code)
     plans.push({
       prop: group.nameProp,
       label: group.label,
       status: 'fill',
-      value: found.label,
+      // Gõ tên cảng…
+      value: name,
+      // …nhưng suggestion của site có dạng "名称/代码".
+      matchValue: code ? `${name}/${code}` : undefined,
+      // Site tự cascade mã cảng khi suggestion được click.
       verify: { prop: group.codeProp, note: `Port code ${group.codeProp} was not set` },
     })
   }

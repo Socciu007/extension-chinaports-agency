@@ -5,8 +5,12 @@ export interface HeaderFormOptions {
    * 'never'  = có nút nhưng dialog không bao giờ mở (nhánh lỗi).
    */
   dialogMode?: 'static' | 'lazy' | 'never'
-  /** Để trống 3 ô mã cảng để kiểm tra nhánh verify thất bại. */
+  /** Để trống 3 ô mã cảng (`*_PORT_COD`) ngay từ đầu — mã chỉ được điền khi
+   *  site cascade sau khi suggestion được click. */
   emptyPortCodes?: boolean
+  /** Site cascade mã cảng vào ô `*_PORT_COD` khi người dùng click suggestion
+   *  (mặc định có). Tắt đi để mô phỏng trường hợp cascade không xảy ra. */
+  cascadePortCodes?: boolean
   /** Thêm nút trùng text 新增舱单信息 nằm trong tab đã ẩn (Element Plus giữ tab đã xem). */
   hiddenDuplicateButton?: boolean
 }
@@ -14,7 +18,7 @@ export interface HeaderFormOptions {
 interface HeaderField {
   prop: string
   label: string
-  kind: 'input' | 'select'
+  kind: 'input' | 'select' | 'autocomplete'
   /** Giá trị có sẵn trong DOM (dùng cho ô do site tự cascade). */
   prefilled?: string
 }
@@ -34,11 +38,11 @@ const HEADER_FIELDS: HeaderField[] = [
   { prop: 'TRUST_COD', label: '承运人代码', kind: 'select' },
   { prop: 'PAY_WAY_ID', label: '付款方式', kind: 'select' },
   { prop: 'DR_TYPE_STR', label: '交货条款', kind: 'select' },
-  { prop: 'START_PORT_NAM', label: '收货地（装货港）', kind: 'input' },
+  { prop: 'START_PORT_NAM', label: '收货地（装货港）', kind: 'autocomplete' },
   { prop: 'START_PORT_COD', label: '收货地代码', kind: 'input', prefilled: 'CNSHA' },
-  { prop: 'DISCHRG_PORT_NAM', label: '卸货港', kind: 'input' },
+  { prop: 'DISCHRG_PORT_NAM', label: '卸货港', kind: 'autocomplete' },
   { prop: 'DISCHRG_PORT_COD', label: '卸货港代码', kind: 'input', prefilled: 'CNSHA' },
-  { prop: 'DEST_PORT_NAM', label: '交货地', kind: 'input' },
+  { prop: 'DEST_PORT_NAM', label: '交货地', kind: 'autocomplete' },
   { prop: 'DEST_PORT_COD', label: '交货地代码', kind: 'input', prefilled: 'CNSHA' },
   { prop: 'E_SHIPPER_NAM', label: '发货人名称', kind: 'input' },
   { prop: 'SHIPPER_ADD_STR', label: '发货人地址', kind: 'input' },
@@ -54,14 +58,21 @@ const HEADER_FIELDS: HeaderField[] = [
   { prop: 'NOTIFY_TE_STR', label: '电话', kind: 'input' },
 ]
 
+/** Gợi ý của `el-autocomplete` — mỗi `li` có dạng `名称/代码`. */
+const PORT_SUGGESTIONS = ['上海/CNSHA', '勿拉湾/IDBLW']
+
 function headerFieldsHtml(emptyPortCodes: boolean): string {
   return HEADER_FIELDS.map((field) => {
-    const control =
-      field.kind === 'select'
-        ? `<div class="el-select"><div class="el-select__wrapper"><input id="el-id-x-${field.prop}" readonly /></div></div>`
-        : `<input id="el-id-x-${field.prop}"${
-            field.prefilled && !emptyPortCodes ? ` value="${field.prefilled}"` : ''
-          } />`
+    let control: string
+    if (field.kind === 'select') {
+      control = `<div class="el-select"><div class="el-select__wrapper"><input id="el-id-x-${field.prop}" readonly /></div></div>`
+    } else if (field.kind === 'autocomplete') {
+      control = `<div class="el-autocomplete"><input id="el-id-x-${field.prop}" /></div>`
+    } else {
+      control = `<input id="el-id-x-${field.prop}"${
+        field.prefilled && !emptyPortCodes ? ` value="${field.prefilled}"` : ''
+      } />`
+    }
     return `<div class="el-form-item EntryOfManifestInformation">
         <label class="el-form-item__label" for="el-id-x-${field.prop}">${field.label}</label>
         ${control}
@@ -151,6 +162,33 @@ function wireDialog(): void {
 }
 
 /**
+ * Mô phỏng cascade của site: khi người dùng click một suggestion `名称/代码`,
+ * site điền mã cảng vào ô `*_PORT_COD` tương ứng với ô tên vừa được gõ.
+ */
+function wirePortSuggestions(cascade: boolean): void {
+  const list = document.querySelector('.el-autocomplete-suggestion')
+  if (!list) return
+
+  let activeInput: HTMLInputElement | null = null
+  document.querySelectorAll<HTMLInputElement>('.el-autocomplete input').forEach((input) => {
+    input.addEventListener('input', () => {
+      activeInput = input
+    })
+  })
+
+  if (!cascade) return
+
+  list.addEventListener('click', (event) => {
+    const li = (event.target as HTMLElement).closest('li')
+    if (!li || !activeInput) return
+    const parts = (li.textContent ?? '').trim().split('/')
+    const code = parts[parts.length - 1] ?? ''
+    const codeInput = document.getElementById(activeInput.id.replace(/_NAM$/, '_COD'))
+    if (codeInput) (codeInput as HTMLInputElement).value = code
+  })
+}
+
+/**
  * Dialog đầu + form đầu + section hàng + bảng container.
  *
  * Mặc định dialog có sẵn trong DOM (test gọi `fillHeader` trực tiếp cần vậy).
@@ -158,7 +196,12 @@ function wireDialog(): void {
  * 新增舱单信息 — đúng như site thật, nên test phải chờ dialog mở ra.
  */
 export function buildHeaderForm(options: HeaderFormOptions = {}): void {
-  const { dialogMode = 'static', emptyPortCodes = false, hiddenDuplicateButton = false } = options
+  const {
+    dialogMode = 'static',
+    emptyPortCodes = false,
+    cascadePortCodes = true,
+    hiddenDuplicateButton = false,
+  } = options
 
   const hiddenDuplicate = hiddenDuplicateButton
     ? '<div data-hidden="1"><button class="el-button" id="add-manifest-hidden">新增舱单信息</button></div>'
@@ -170,14 +213,19 @@ export function buildHeaderForm(options: HeaderFormOptions = {}): void {
     <div class="el-select-dropdown">
       <div class="el-select-dropdown__item">MAEU</div>
       <div class="el-select-dropdown__item">FOB</div>
-      <div class="el-select-dropdown__item">0</div>
-      <div class="el-select-dropdown__item">1</div>
-      <div class="el-select-dropdown__item">上海</div>
+      <div class="el-select-dropdown__item">预付</div>
+      <div class="el-select-dropdown__item">到付</div>
+    </div>
+    <div class="el-popper" id="port-suggestions">
+      <ul class="el-autocomplete-suggestion">
+        ${PORT_SUGGESTIONS.map((s) => `<li>${s}</li>`).join('\n        ')}
+      </ul>
     </div>`
 
   if (dialogMode === 'static') {
     document.body.insertAdjacentHTML('beforeend', headerDialogHtml(emptyPortCodes))
     wireDialog()
+    wirePortSuggestions(cascadePortCodes)
     return
   }
 
@@ -187,6 +235,7 @@ export function buildHeaderForm(options: HeaderFormOptions = {}): void {
       if (document.getElementById('manifest-dialog')) return
       document.body.insertAdjacentHTML('beforeend', headerDialogHtml(emptyPortCodes))
       wireDialog()
+      wirePortSuggestions(cascadePortCodes)
     })
   }
   // 'never': nút có sẵn nhưng không bao giờ mở dialog.

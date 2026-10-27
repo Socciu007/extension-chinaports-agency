@@ -129,7 +129,9 @@ export async function fillPlans(
       continue
     }
 
-    const result = await setFieldValue(root, plan.prop, plan.value ?? '')
+    const result = await setFieldValue(root, plan.prop, plan.value ?? '', {
+      matchValue: plan.matchValue,
+    })
     if (!result.ok) {
       items.push({
         scope,

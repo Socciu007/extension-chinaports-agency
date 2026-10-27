@@ -64,6 +64,47 @@ describe('readFieldValue', () => {
   it('trả chuỗi rỗng khi không có field', () => {
     expect(readFieldValue(document, 'KHONG_CO')).toBe('')
   })
+  it('đọc label của el-select qua .el-select__selected-item', () => {
+    document.body.innerHTML = `
+      <div class="el-select">
+        <div class="el-select__wrapper">
+          <input id="el-id-a-PAY_WAY_ID" readonly />
+          <span class="el-select__selected-item">预付</span>
+        </div>
+      </div>`
+    expect(readFieldValue(document, 'PAY_WAY_ID')).toBe('预付')
+  })
+  it('đọc label của select chứ không phải text gõ trong input', () => {
+    // el-select filterable đẩy text đang gõ vào `input.value`; label đã chọn
+    // mới là giá trị thật của field.
+    document.body.innerHTML = `
+      <div class="el-select">
+        <div class="el-select__wrapper">
+          <input id="el-id-a-PAY_WAY_ID" value="COS" />
+          <span class="el-select__selected-item">COSCO</span>
+        </div>
+      </div>`
+    expect(readFieldValue(document, 'PAY_WAY_ID')).toBe('COSCO')
+  })
+  it('chưa chọn gì thì trả chuỗi rỗng, không trả placeholder của select', () => {
+    // Placeholder "请选择" không phải giá trị → trả về nó sẽ làm verify pass
+    // một cách giả.
+    document.body.innerHTML = `
+      <div class="el-select">
+        <div class="el-select__wrapper">
+          <input id="el-id-a-PAY_WAY_ID" readonly />
+          <span class="el-select__selected-item is-transparent">请选择</span>
+        </div>
+      </div>`
+    expect(readFieldValue(document, 'PAY_WAY_ID')).toBe('')
+  })
+  it('ô cảng (el-autocomplete) vẫn đọc được input.value', () => {
+    document.body.innerHTML = `
+      <div class="el-autocomplete">
+        <input id="el-id-a-START_PORT_NAM" value="上海" />
+      </div>`
+    expect(readFieldValue(document, 'START_PORT_NAM')).toBe('上海')
+  })
 })
 
 describe('setFieldValue với text input', () => {
@@ -101,5 +142,51 @@ describe('setFieldValue với popper', () => {
 
     expect(result.ok).toBe(true)
     expect(clicks).toEqual(['target'])
+  })
+})
+
+describe('setFieldValue với el-autocomplete', () => {
+  it('dùng adapter autocomplete chứ không gõ thẳng vào input', async () => {
+    document.body.innerHTML = `
+      <div class="el-autocomplete">
+        <input id="el-id-a-START_PORT_NAM" />
+      </div>`
+
+    const input = document.getElementById('el-id-a-START_PORT_NAM') as HTMLInputElement
+    const events: string[] = []
+    input.addEventListener('input', () => events.push('input'))
+    input.addEventListener('change', () => events.push('change'))
+    input.addEventListener('blur', () => events.push('blur'))
+
+    input.addEventListener('input', () => {
+      setTimeout(() => {
+        document.body.insertAdjacentHTML(
+          'beforeend',
+          `
+          <div class="el-popper">
+            <ul class="el-autocomplete-suggestion">
+              <li>上海/CNSHA</li>
+            </ul>
+          </div>`,
+        )
+      }, 0)
+    })
+
+    const clicks: string[] = []
+    document.addEventListener('click', (event) => {
+      const li = (event.target as HTMLElement).closest('li')
+      if (li) clicks.push((li.textContent ?? '').trim())
+    })
+
+    const result = await setFieldValue(document, 'START_PORT_NAM', '上海', {
+      matchValue: '上海/CNSHA',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.strategy).toBe('autocomplete')
+    // Nhánh text (setTextValue) sẽ bắn change + blur → không được dùng.
+    expect(events).not.toContain('change')
+    expect(events).not.toContain('blur')
+    expect(clicks).toEqual(['上海/CNSHA'])
   })
 })

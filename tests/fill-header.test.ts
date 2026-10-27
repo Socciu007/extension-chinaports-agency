@@ -11,15 +11,9 @@ const data = fixture.data as unknown as ManifestData
 const ctx: MappingContext = {
   findTrustCode: () => 'MAEU',
   findDrType: () => 'FOB',
-  findPort: (code) =>
-    code === 'CNSHA'
-      ? { label: '上海', value: 'CNSHA' }
-      : code === 'IDBLW'
-        ? { label: '勿拉湾', value: 'IDBLW' }
-        : undefined,
+  findPort: (code) => (code === 'CNSHA' ? '上海' : code === 'IDBLW' ? '勿拉湾' : undefined),
   findCntrType: () => undefined,
   findCntrSize: () => undefined,
-  portNameField: 'name',
 }
 
 /** Probe giả lập: phần tử nằm trong container `data-hidden` thì bị coi là ẩn. */
@@ -52,6 +46,31 @@ describe('fillHeader', () => {
     expect(trust?.status).toBe('ok')
   })
 
+  it('điền ô cảng bằng cách click suggestion của el-autocomplete', async () => {
+    // Ô mã cảng để trống ngay từ đầu → mã chỉ xuất hiện được NẾU site cascade
+    // sau khi suggestion được click (đúng như site thật).
+    buildHeaderForm({ emptyPortCodes: true })
+
+    // Ô mã cảng rỗng ngay từ đầu → mã chỉ có thể xuất hiện nhờ cascade.
+    expect((document.getElementById('el-id-x-START_PORT_COD') as HTMLInputElement).value).toBe('')
+
+    const suggestion = document.querySelector('#port-suggestions li') as HTMLElement
+    const clicked: string[] = []
+    suggestion.addEventListener('click', () => {
+      clicked.push((suggestion.textContent ?? '').trim())
+    })
+
+    const report = await fillHeader(document, mapHeader(data, ctx))
+
+    expect(reportItem(report, 'START_PORT_NAM')?.status).toBe('ok')
+    // Phải click đúng suggestion "名称/代码", không phải chỉ gõ tên vào ô.
+    expect(clicked).toEqual(['上海/CNSHA'])
+    // Site cascade mã cảng vào ô *_PORT_COD khi suggestion được click.
+    expect((document.getElementById('el-id-x-START_PORT_COD') as HTMLInputElement).value).toBe(
+      'CNSHA',
+    )
+  })
+
   it('báo skip cho field không có dữ liệu', async () => {
     buildHeaderForm()
     const report = await fillHeader(document, mapHeader(data, ctx))
@@ -79,7 +98,8 @@ describe('fillHeader', () => {
   })
 
   it('báo cảnh báo khi verify thất bại (mã cảng chưa được cascade)', async () => {
-    buildHeaderForm({ emptyPortCodes: true })
+    // Ô mã trống và site KHÔNG cascade → nhánh verify phải báo cảnh báo.
+    buildHeaderForm({ emptyPortCodes: true, cascadePortCodes: false })
 
     const report = await fillHeader(document, mapHeader(data, ctx))
     const item = report.items.find((i) => i.prop === 'START_PORT_NAM')
