@@ -122,3 +122,38 @@ export function buildCargoSection(): void {
     </div>`,
   )
 }
+
+/** Bảng container inline editable + section 箱信息. */
+export function buildContainerSection(): void {
+  const header = CONTAINER_COLUMNS.map((c) => `<th>${c}</th>`).join('')
+  document.body.insertAdjacentHTML(
+    'beforeend',
+    `<div class="ContainerInformation">
+      <div class="fs-crud-title">箱信息</div>
+      <button class="el-button" id="add-container">新增</button>
+      <div class="el-table">
+        <div class="el-table__header-wrapper">
+          <div class="el-table__header">
+            <table><thead><tr>${header}</tr></thead></table>
+          </div>
+        </div>
+        <div class="el-table__body-wrapper">
+          <div class="el-table__body">
+            <table><tbody></tbody></table>
+          </div>
+        </div>
+      </div>
+    </div>`,
+  )
+}
+
+/** Gắn sự kiện giả lập fast-crud: bấm 新增 → thêm một dòng trống vào tbody. */
+export function simulateAddRow(buttonSelector = '#add-container'): void {
+  const button = document.querySelector(buttonSelector) as HTMLElement
+  button.addEventListener('click', () => {
+    const tbody = document.querySelector('.el-table__body tbody')!
+    const tr = document.createElement('tr')
+    tr.innerHTML = CONTAINER_COLUMNS.map(() => '<td><input /></td>').join('')
+    tbody.appendChild(tr)
+  })
+}

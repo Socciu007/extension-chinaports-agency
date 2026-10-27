@@ -1,7 +1,8 @@
 import { nextFrame, sleep, waitFor } from './wait'
 import { readFieldValue, setFieldValue } from './dom'
-import { mapCargo, mapHeader, type FieldPlan, type MappingContext } from './mapping'
-import type { ManifestCargo, ManifestData } from './types'
+import { mapCargo, mapContainer, mapHeader, type FieldPlan, type MappingContext } from './mapping'
+import { findColumnIndex, getCell, readTableHandles, setCellValue } from './table'
+import type { ManifestCargo, ManifestContainer, ManifestData } from './types'
 
 export type FillStatus = 'ok' | 'skip' | 'error'
 
@@ -152,6 +153,23 @@ export async function fillHeader(root: ParentNode, plans: FieldPlan[]) {
   return fillPlans(root, plans, 'header')
 }
 
+/**
+ * Tìm dialog đầu (form 舱单).
+ *
+ * Element Plus giữ lại dialog đã đóng trong DOM (chỉ ẩn đi), nên `.el-dialog`
+ * ĐẦU TIÊN trong document có thể là dialog ẩn của một màn khác — lấy nó thì
+ * mọi field đều "không tìm thấy" và lần điền im lặng thất bại. Ưu tiên dialog
+ * có chứa field 提单号, fallback về dialog đang hiện, cuối cùng là dialog
+ * cuối cùng trong DOM.
+ */
+export function findManifestDialog(root: ParentNode): HTMLElement | null {
+  const byField = findDialogWithField(root, 'BILL_NBR')
+  if (byField) return byField
+  const dialogs = Array.from(root.querySelectorAll<HTMLElement>('.el-dialog'))
+  const visible = dialogs.filter((d) => d.getClientRects().length > 0 || d.offsetParent !== null)
+  return visible[visible.length - 1] ?? dialogs[dialogs.length - 1] ?? null
+}
+
 export async function fillManifest(options: FillOptions): Promise<FillReport> {
   const { root, data, ctx } = options
   const log = options.log ?? (() => {})
@@ -170,10 +188,11 @@ export async function fillManifest(options: FillOptions): Promise<FillReport> {
 
   addButton.click()
 
-  const dialog = await waitFor(
-    () => root.querySelector<HTMLElement>('.el-dialog'),
-    { timeout: 5000, interval: 100, label: 'dialog 新增舱单信息' },
-  ).catch(() => null)
+  const dialog = await waitFor(() => findManifestDialog(root), {
+    timeout: 5000,
+    interval: 100,
+    label: 'dialog 新增舱单信息',
+  }).catch(() => null)
 
   if (!dialog) {
     return {
@@ -186,12 +205,24 @@ export async function fillManifest(options: FillOptions): Promise<FillReport> {
   }
 
   log('Filling in the 舱单 information…')
-  const header = await fillHeader(dialog, mapHeader(data, ctx))
+  const header = await fillPlans(dialog, mapHeader(data, ctx), 'header')
+
+  const cargo = await fillCargoRows(dialog, data.cdgoods ?? [], { log })
+  const container = await fillContainerRows(dialog, data.cdCon ?? [], ctx, { log })
+
+  if (options.autoSubmit) {
+    const confirm = findButtonByText('确定', dialog)
+    if (confirm) {
+      log('Clicking 确定 in the header form…')
+      confirm.click()
+      await sleep(800)
+    }
+  }
 
   return {
-    items: header.items,
-    cargoRows: 0,
-    containerRows: 0,
+    items: [...header.items, ...cargo.items, ...container.items],
+    cargoRows: cargo.rows,
+    containerRows: container.rows,
     ok: true,
   }
 }
@@ -251,6 +282,7 @@ export async function fillCargoRows(
     if (confirm) {
       confirm.click()
       await sleep(CARGO_DIALOG_DELAY_MS)
+      rows += 1
     } else {
       items.push({
         scope: 'cargo',
@@ -259,6 +291,143 @@ export async function fillCargoRows(
         status: 'error',
         note: 'Could not find the "确定" button in the cargo dialog',
       })
+    }
+  }
+
+  return { items, rows }
+}
+
+const CONTAINER_SECTION_TITLES = ['箱信息', '集装箱信息', '集装箱']
+
+/** Tìm bảng container trong scope (ưu tiên bảng nằm trong section container). */
+function findContainerTable(scope: ParentNode): HTMLElement | null {
+  const tables = Array.from(scope.querySelectorAll<HTMLElement>('.el-table, table'))
+  for (const title of CONTAINER_SECTION_TITLES) {
+    const titleEl = findTitleElement(scope, title)
+    if (!titleEl) continue
+    let node: HTMLElement | null = titleEl
+    for (let depth = 0; depth < 12 && node; depth++) {
+      const table = node.querySelector<HTMLElement>('.el-table, table')
+      if (table) return table
+      node = node.parentElement
+    }
+  }
+  return tables[0] ?? null
+}
+
+export async function fillContainerRows(
+  scope: ParentNode,
+  containers: ManifestContainer[],
+  ctx: MappingContext,
+  options: { log?: (message: string) => void } = {},
+): Promise<{ items: FillItem[]; rows: number }> {
+  const log = options.log ?? (() => {})
+  const items: FillItem[] = []
+  let rows = 0
+
+  const table = findContainerTable(scope)
+  if (!table) {
+    items.push({
+      scope: 'container',
+      prop: 'TABLE',
+      label: 'Container table',
+      status: 'error',
+      note: 'Could not find the container table (.el-table)',
+    })
+    return { items, rows }
+  }
+
+  const addButton =
+    CONTAINER_SECTION_TITLES.map((title) => findAddButtonBySectionTitle(scope, title)).find(
+      (button) => button !== null,
+    ) ?? null
+
+  const handles = readTableHandles(table)
+
+  for (const [index, container] of containers.entries()) {
+    const label = `Container ${index + 1}/${containers.length}`
+    const plans = mapContainer(container, ctx)
+
+    if (!addButton) {
+      items.push({
+        scope: 'container',
+        prop: `ROW_${index + 1}`,
+        label,
+        status: 'error',
+        note: 'Could not find the add-row button of the container table',
+      })
+      continue
+    }
+
+    const before = readTableHandles(table).bodyRows.length
+    addButton.click()
+
+    const grown = await waitFor(
+      () => readTableHandles(table).bodyRows.length > before,
+      { timeout: 5000, interval: 100, label: `container row ${index + 1}` },
+    ).catch(() => false)
+
+    if (!grown) {
+      items.push({
+        scope: 'container',
+        prop: `ROW_${index + 1}`,
+        label,
+        status: 'error',
+        note: 'The container table did not accept a new row within 5 seconds',
+      })
+      continue
+    }
+
+    const rowsNow = readTableHandles(table).bodyRows
+    const row = rowsNow[rowsNow.length - 1]!
+    log(`Filling in ${label}…`)
+
+    for (const plan of plans) {
+      if (plan.status === 'skip') {
+        items.push({
+          scope: 'container',
+          prop: plan.prop,
+          label: plan.label,
+          status: 'skip',
+          note: plan.note,
+        })
+        continue
+      }
+
+      const columnLabel = plan.columnLabel ?? plan.label
+      const columnIndex = findColumnIndex(handles.headerCells, columnLabel)
+      if (columnIndex < 0) {
+        items.push({
+          scope: 'container',
+          prop: plan.prop,
+          label: plan.label,
+          status: 'error',
+          note: `Could not find the column "${columnLabel}" in the table`,
+        })
+        continue
+      }
+
+      const cell = getCell(row, columnIndex)
+      if (!cell) {
+        items.push({
+          scope: 'container',
+          prop: plan.prop,
+          label: plan.label,
+          status: 'error',
+          note: `Could not find the cell of the column "${columnLabel}"`,
+        })
+        continue
+      }
+
+      const result = await setCellValue(cell, plan.value ?? '')
+      items.push({
+        scope: 'container',
+        prop: plan.prop,
+        label: plan.label,
+        status: result.ok ? 'ok' : 'error',
+        note: result.reason,
+      })
+      await nextFrame()
     }
 
     rows += 1
