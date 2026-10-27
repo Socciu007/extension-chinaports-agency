@@ -14,7 +14,7 @@ export function nextFrame(): Promise<void> {
 
 export class WaitTimeoutError extends Error {
   constructor(label: string) {
-    super(`Timeout sau khi chờ "${label}"`)
+    super(`Timed out waiting for "${label}"`)
     this.name = 'WaitTimeoutError'
   }
 }

@@ -64,7 +64,7 @@ export function mapHeader(data: ManifestData, ctx: MappingContext): FieldPlan[] 
   const push = (prop: string, label: string, value: unknown, note?: string) => {
     const v = text(value)
     if (v === '') {
-      plans.push({ prop, label, status: 'skip', note: note ?? 'API không có dữ liệu cho field này' })
+      plans.push({ prop, label, status: 'skip', note: note ?? 'The API provides no data for this field' })
     } else {
       plans.push({ prop, label, status: 'fill', value: v })
     }
@@ -83,7 +83,7 @@ export function mapHeader(data: ManifestData, ctx: MappingContext): FieldPlan[] 
     value: trustCode ?? undefined,
     note: trustCode
       ? undefined
-      : `Không tìm thấy 承运人 cho supplyId=${supplyId ?? 'null'} trong getTrustCode()`,
+      : `No carrier found for supplyId=${supplyId ?? 'null'} in getTrustCode()`,
   })
 
   const drType = ctx.findDrType(data.transportTerms ?? undefined)
@@ -94,7 +94,7 @@ export function mapHeader(data: ManifestData, ctx: MappingContext): FieldPlan[] 
     value: drType ?? undefined,
     note: drType
       ? undefined
-      : `Không tìm thấy 交货条款 cho mã "${data.transportTerms ?? ''}" trong getDrType()`,
+      : `No 交货条款 found for code "${data.transportTerms ?? ''}" in getDrType()`,
   })
 
   const payType = data.payType
@@ -103,7 +103,7 @@ export function mapHeader(data: ManifestData, ctx: MappingContext): FieldPlan[] 
     label: '付款方式',
     status: payType === null || payType === undefined ? 'skip' : 'fill',
     value: payType === null || payType === undefined ? undefined : payType ? '1' : '0',
-    note: payType === null || payType === undefined ? 'API không có payType' : undefined,
+    note: payType === null || payType === undefined ? 'The API provides no payType' : undefined,
   })
 
   const portGroups = [
@@ -134,7 +134,7 @@ export function mapHeader(data: ManifestData, ctx: MappingContext): FieldPlan[] 
         prop: group.nameProp,
         label: group.label,
         status: 'skip',
-        note: `Không tìm thấy cảng cho mã "${group.code ?? ''}" trong getPort()`,
+        note: `No port found for code "${group.code ?? ''}" in getPort()`,
       })
       continue
     }
@@ -143,7 +143,7 @@ export function mapHeader(data: ManifestData, ctx: MappingContext): FieldPlan[] 
       label: group.label,
       status: 'fill',
       value: found.label,
-      verify: { prop: group.codeProp, note: `Mã cảng ${group.codeProp} chưa được set` },
+      verify: { prop: group.codeProp, note: `Port code ${group.codeProp} was not set` },
     })
   }
 
@@ -151,13 +151,13 @@ export function mapHeader(data: ManifestData, ctx: MappingContext): FieldPlan[] 
     prop: 'TRANS_PORT_NAM',
     label: '中转港',
     status: 'skip',
-    note: 'API không có dữ liệu 中转港',
+    note: 'The API provides no data for 中转港',
   })
   plans.push({
     prop: 'SIGN_PLACE_STR',
     label: '提单签发地/代码',
     status: 'skip',
-    note: 'API không có dữ liệu 提单签发地',
+    note: 'The API provides no data for 提单签发地',
   })
 
   const contacts = data.cabContacts ?? []
@@ -167,13 +167,13 @@ export function mapHeader(data: ManifestData, ctx: MappingContext): FieldPlan[] 
     push(`${group.prefix}_ADD_STR`, `${group.label}地址`, contact?.address)
     push(`${group.prefix}_COUNTRY_COD`, `${group.label}国家代码`, contact?.country)
     push(`${group.prefix}_TE_STR`, `${group.label}电话`, contact?.phone)
-    push(`${group.prefix}_EM_STR`, `${group.label}EMAIL`, undefined, 'API không có email')
-    push(`${group.prefix}_FX_STR`, `${group.label}传真`, undefined, 'API không có fax')
+    push(`${group.prefix}_EM_STR`, `${group.label}EMAIL`, undefined, 'The API provides no email address')
+    push(`${group.prefix}_FX_STR`, `${group.label}传真`, undefined, 'The API provides no fax number')
     push(
       `${group.prefix}_AEO`,
       `${group.label}AEO代码`,
       contact?.aeo,
-      'firmCode là mã đăng ký doanh nghiệp (USCI/TIN), không phải mã AEO nên để trống',
+      'firmCode is a business registration number (USCI/TIN), not an AEO code, so this field is left blank',
     )
   }
 
