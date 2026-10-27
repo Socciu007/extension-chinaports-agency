@@ -179,3 +179,113 @@ export function mapHeader(data: ManifestData, ctx: MappingContext): FieldPlan[] 
 
   return plans
 }
+
+/**
+ * Loại hàng: S = thường, D = hàng nguy hiểm, R = hàng kiểm dịch (refrigerated/quarantine),
+ * G = vừa nguy hiểm vừa kiểm dịch.
+ */
+export function deriveCargoKind(goods: ManifestCargo): 'S' | 'D' | 'R' | 'G' {
+  const danger = !isBlank(goods.dangerClass) || !isBlank(goods.unNub)
+  const cold = !isBlank(goods.quarantineName) || !isBlank(goods.quarantineCode)
+  if (danger && cold) return 'G'
+  if (danger) return 'D'
+  if (cold) return 'R'
+  return 'S'
+}
+
+/**
+ * Ánh xạ 1 dòng hàng (cdgoods) sang danh sách field plan cho bảng 货物明细.
+ */
+export function mapCargo(goods: ManifestCargo): FieldPlan[] {
+  const plans: FieldPlan[] = []
+
+  const push = (prop: string, label: string, value: unknown, note?: string) => {
+    const v = text(value)
+    if (v === '') {
+      plans.push({ prop, label, status: 'skip', note: note ?? 'The API provides no data for this field' })
+    } else {
+      plans.push({ prop, label, status: 'fill', value: v })
+    }
+  }
+
+  push('CARGO_KIND_COD', '货物标识', deriveCargoKind(goods))
+  push('CARGO_HS_COD', 'HS编码', goods.hscode)
+  push('PACKAGE_STR', '包装类型/代码', goods.unit ?? goods.packDesc)
+  push('PACKAGE_COD', '包装类型代码', goods.packType)
+  push('PIECE_NUM', '包装件数', goods.amount)
+  push('GWEIGHT_TON', '货物毛重（公斤）', goods.weight)
+  push('GVOL_NUM', '货物体积（m³）', goods.volume)
+  push('NWEIGHT_TON', '货物净重（公斤）', goods.grossWeight)
+  push('MARK_STR', '唛头', goods.sign)
+  push('E_CARGO_NAM', '货物描述', goods.name)
+  push('DANG_CLASS_NAM', '危险品类别', goods.dangerClass)
+  push('DANG_UN_NO', '危险品联合国编号', goods.unNub)
+  push('DANG_LABLE_STR', '危险品标签', goods.dangerCode)
+  push('DANG_FLASH_POINT', '危险货物闪点（摄氏）', goods.dangerPoint)
+  push('DANG_PAGE_NO', '危险品页号', undefined)
+  push('DANG_EMS_NO', '船运危险品应急措施号', undefined)
+  push('DANG_MFAG_NO', '医疗急救指南号', undefined)
+  push('DANG_CONTACTSTR', '应急联系', undefined)
+  push('DANGER_CONTACT_NAM', '危险品联系人姓名', goods.exigencyName)
+  push('DANGER_TE_STR', '危险品联系人电话', goods.exigencyPhone)
+  push('DANGER_EM_STR', '危险品联系人邮箱', goods.exigencyEmail)
+  push('DANGER_FX_STR', '危险品联系人传真', goods.exigencyFax)
+  push('TEMP_ID', '温度计量单位', undefined)
+  push('SET_TEMP_NUM', '设置温度', undefined)
+
+  return plans
+}
+
+/**
+ * Ánh xạ 1 dòng container (cdCon) sang danh sách field plan cho bảng 集装箱.
+ */
+export function mapContainer(
+  container: ManifestContainer,
+  ctx: MappingContext,
+): FieldPlan[] {
+  const plans: FieldPlan[] = []
+
+  const push = (prop: string, label: string, columnLabel: string, value: unknown, note?: string) => {
+    const v = text(value)
+    if (v === '') {
+      plans.push({
+        prop,
+        label,
+        status: 'skip',
+        note: note ?? 'The API provides no data for this field',
+        columnLabel,
+      })
+    } else {
+      plans.push({ prop, label, status: 'fill', value: v, columnLabel })
+    }
+  }
+
+  push('CNTR_NO', '箱号', '箱号', container.boxNub)
+  push(
+    'CNTR_SIZE_COD',
+    '尺寸',
+    '尺寸',
+    ctx.findCntrSize(container.vC ?? undefined),
+    `No 尺寸 found for code "${container.vC ?? ''}" in getCntrCode()`,
+  )
+  push(
+    'CNTR_TYPE_COD',
+    '箱型',
+    '箱型',
+    ctx.findCntrType(container.cType ?? undefined),
+    `No 箱型 found for code "${container.cType ?? ''}" in getCntrCode()`,
+  )
+  push('CNTR_EF_ID', '箱状态', '箱状态', undefined)
+  push('SEAL_NO', '铅封号', '铅封号', container.sealNUb)
+  push('PIECE_NUM', '货物件数', '货物件数', container.amount)
+  push('WEIGH_TON', '箱内货重（公斤）', '箱内货重（公斤）', container.weight)
+  push('VOLUME_NUM', '箱内体积', '箱内体积', container.volume)
+  push(
+    'SOC_ID',
+    '货主箱标志',
+    '货主箱标志',
+    container.self === null || container.self === undefined ? undefined : container.self ? '1' : '0',
+  )
+
+  return plans
+}
