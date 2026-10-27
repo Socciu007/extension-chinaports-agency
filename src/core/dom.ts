@@ -72,13 +72,13 @@ export async function setFieldValue(
     return { ok: false, strategy: 'none', reason: 'Could not find the field on the page' }
   }
 
-  const scope = (el.closest('.el-form-item') as HTMLElement | null) ?? el.parentElement ?? null
-  if (scope?.querySelector('.el-select')) {
-    return pickFromSelect(scope, value, options.timeout)
+  const select = el.closest<HTMLElement>('.el-select')
+  if (select) {
+    return pickFromSelect(select, value, options.timeout)
   }
 
   if (el instanceof HTMLInputElement && el.readOnly) {
-    return pickFromPopper(scope ?? el, value, options.timeout)
+    return pickFromPopper(el, value, options.timeout)
   }
 
   if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {

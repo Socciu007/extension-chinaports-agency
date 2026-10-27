@@ -81,3 +81,25 @@ describe('setFieldValue với text input', () => {
     expect(result.strategy).toBe('none')
   })
 })
+
+describe('setFieldValue với popper', () => {
+  it('adapter popper dùng đúng input cần điền, không phải input đầu tiên', async () => {
+    document.body.innerHTML = `
+      <div class="el-form-item">
+        <input id="other-input" />
+        <input id="el-id-a-START_PORT_NAM" readonly />
+      </div>
+      <div class="el-popper"><div role="option">上海</div></div>`
+
+    const other = document.getElementById('other-input') as HTMLInputElement
+    const target = document.getElementById('el-id-a-START_PORT_NAM') as HTMLInputElement
+    const clicks: string[] = []
+    other.addEventListener('click', () => clicks.push('other'))
+    target.addEventListener('click', () => clicks.push('target'))
+
+    const result = await setFieldValue(document, 'START_PORT_NAM', '上海')
+
+    expect(result.ok).toBe(true)
+    expect(clicks).toEqual(['target'])
+  })
+})
