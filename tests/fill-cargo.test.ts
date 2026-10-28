@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { fillCargoRows, fillManifest, findAddButtonBySectionTitle } from '../src/core/fill'
+import { fillCargoRows, fillManifest } from '../src/core/fill'
+import { findAddButtonBySectionTitle } from '../src/core/site'
 import type { MappingContext } from '../src/core/mapping'
 import fixture from './fixtures/manifest-ONEYSHAGT1569600.json'
 import type { ManifestData } from '../src/core/types'

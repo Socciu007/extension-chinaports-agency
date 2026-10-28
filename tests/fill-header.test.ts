@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { fillHeader, fillManifest, findButtonByText } from '../src/core/fill'
+import { fillHeader, fillManifest } from '../src/core/fill'
+import { findButtonByText } from '../src/core/site'
 import { mapHeader, type MappingContext } from '../src/core/mapping'
 import { setVisibilityProbe } from '../src/core/select'
 import fixture from './fixtures/manifest-ONEYSHAGT1569600.json'
