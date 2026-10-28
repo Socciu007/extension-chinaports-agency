@@ -95,7 +95,27 @@ export function pickArray(payload: unknown, keys: string[]): unknown[] {
   return asArray(payload)
 }
 
-export function normalizeDictOptions(payload: unknown): DictOption[] {
+/**
+ * Key ưu tiên cho một endpoint cụ thể.
+ *
+ * Vì dict của site dùng key riêng (`PORT_COD`/`E_PORT_NAM`), nếu để các key
+ * generic (`code`/`name`/`cnName`…) được tra TRƯỚC thì một bản ghi port sau
+ * này có thêm field `name` sẽ khiến `findPort` trả tên tiếng Anh, còn site
+ * chỉ gợi ý tên cảng tiếng Trung (`上海/CNSHA`) ⇒ không khớp suggestion.
+ */
+export interface DictKeyPreference {
+  /** key chứa mã — tra TRƯỚC `CODE_KEYS` */
+  codeKeys?: string[]
+  /** key chứa tên — tra TRƯỚC `NAME_KEYS` */
+  nameKeys?: string[]
+}
+
+export function normalizeDictOptions(
+  payload: unknown,
+  prefer?: DictKeyPreference,
+): DictOption[] {
+  const codeKeys = [...(prefer?.codeKeys ?? []), ...CODE_KEYS]
+  const nameKeys = [...(prefer?.nameKeys ?? []), ...NAME_KEYS]
   const result: DictOption[] = []
 
   for (const entry of asArray(unwrapEnvelope(payload))) {
@@ -109,10 +129,10 @@ export function normalizeDictOptions(payload: unknown): DictOption[] {
     if (typeof entry !== 'object' || entry === null) continue
     const raw = entry as Record<string, unknown>
 
-    const code = pickString(raw, CODE_KEYS) ?? pickString(raw, ['id'])
+    const code = pickString(raw, codeKeys) ?? pickString(raw, ['id'])
     if (code === undefined) continue
 
-    const name = pickString(raw, NAME_KEYS) ?? code
+    const name = pickString(raw, nameKeys) ?? code
     const id = pickString(raw, ['id'])
 
     result.push({ code, name, id, raw })
@@ -147,36 +167,100 @@ export interface SiteFetchOptions {
   cookieString?: string
 }
 
-/** Lỗi từ API của site — thường là session thiếu/hết hạn. */
+/**
+ * Phân loại lỗi của API site — cùng hình dạng với `ApiErrorKind` của
+ * `src/core/api.ts`:
+ *
+ * - `session`      — site trả `code: 4000`: session thiếu/hết hạn
+ * - `site`         — site trả mã khác 2000 (lỗi phía site)
+ * - `network`      — request không hoàn tất (offline, DNS, CORS)
+ * - `http`         — site đã trả lời nhưng status không phải 2xx
+ * - `bad_response` — body không phải JSON, hoặc không phải envelope của site
+ */
+export type SiteApiErrorKind = 'session' | 'site' | 'network' | 'http' | 'bad_response'
+
+/** Lỗi từ API của site — luôn mang `kind` để tầng UI map sang thông báo. */
 export class SiteApiError extends Error {
+  readonly kind: SiteApiErrorKind
+  /**
+   * Mã số của lỗi: mã envelope của site (`site`/`session`) hoặc HTTP status
+   * (`http`); `undefined` khi không có mã nào (`network`/`bad_response`).
+   */
   readonly code: number | undefined
 
-  constructor(message: string, code?: number) {
+  constructor(kind: SiteApiErrorKind, message: string, code?: number) {
     super(message)
     this.name = 'SiteApiError'
+    this.kind = kind
     this.code = code
   }
 }
+
+/**
+ * Chuỗi hiển thị cho người dùng, theo từng `kind` — tiếng Anh.
+ * Tầng UI phải map theo `kind`, KHÔNG hiển thị thẳng `error.message`
+ * vì message là chi tiết kỹ thuật, không phải thông báo cho người dùng.
+ */
+export function describeSiteError(error: unknown): string {
+  if (error instanceof SiteApiError) {
+    switch (error.kind) {
+      case 'session':
+        return 'Your session on the site has expired — log in to the site and try again.'
+      case 'site':
+        return 'The site rejected the request. Please try again in a moment.'
+      case 'network':
+        return 'Could not reach the site. Check your network connection.'
+      case 'http':
+        return 'The site returned an error. Please try again in a moment.'
+      case 'bad_response':
+        return 'The site returned an unexpected response.'
+    }
+  }
+  return 'Something went wrong while reading the site dictionaries.'
+}
+
+/**
+ * Mã thành công của API site là **2000** (FACT 6.4 — bundle site:
+ * `2e3==e.code ? … : …`). Mã `200` KHÔNG phải mã của site.
+ */
+const SITE_OK_CODE = 2000
+/** Mã của site khi session thiếu/hết hạn. */
+const SITE_SESSION_CODE = 4000
 
 /**
  * Site báo lỗi NGAY TRONG HTTP 200.
  * Đã kiểm chứng 2026-10-27 trên site thật:
  *   GET /api/booking/exportManifestDataMaintain/getTrustCode/
  *   → HTTP 200 {"code":4000,"data":null,"msg":"身份认证信息未提供。"}
- * Nếu không kiểm tra, extension sẽ tưởng dict rỗng và báo "không tìm thấy cảng"
- * cho mọi field — mất dấu vết nguyên nhân thật (session hết hạn).
+ *
+ * Vì vậy phải kiểm tra theo **mã thành công của site** (`2000`), không kiểm
+ * tra `data === null`: một envelope thành công với `data: null` chỉ nghĩa là
+ * dict rỗng, còn một lỗi phía site (`code: 5000`) có thể đi kèm `data` khác
+ * null — bỏ qua nó thì extension im lặng báo "không tìm thấy…" cho mọi field.
  */
 function assertSiteEnvelope(path: string, payload: unknown): void {
-  if (typeof payload !== 'object' || payload === null) return
-  const source = payload as { code?: unknown; data?: unknown }
-  if (typeof source.code !== 'number') return
-  if (source.data !== null && source.data !== undefined) return
-  throw new SiteApiError(
-    source.code === 4000
-      ? `The site rejected ${path} because the session is missing or expired. Log in to the site and try again.`
-      : `The site rejected ${path} (code ${source.code}).`,
-    source.code,
-  )
+  if (typeof payload !== 'object' || payload === null) {
+    throw new SiteApiError(
+      'bad_response',
+      `The site API ${path} returned a response that is not the site's {code, data, msg} envelope.`,
+    )
+  }
+  const source = payload as { code?: unknown }
+  if (typeof source.code !== 'number') {
+    throw new SiteApiError(
+      'bad_response',
+      `The site API ${path} returned a response with no numeric code — not the site's {code, data, msg} envelope.`,
+    )
+  }
+  if (source.code === SITE_OK_CODE) return
+  if (source.code === SITE_SESSION_CODE) {
+    throw new SiteApiError(
+      'session',
+      `The site rejected ${path} because the session is missing or expired. Log in to the site and try again.`,
+      source.code,
+    )
+  }
+  throw new SiteApiError('site', `The site rejected ${path} (code ${source.code}).`, source.code)
 }
 
 async function fetchSiteJson(
@@ -186,22 +270,46 @@ async function fetchSiteJson(
 ): Promise<unknown> {
   const base = options.baseUrl ?? DEFAULT_SITE_API_BASE
   const doFetch = options.fetchImpl ?? fetch
-  const token = readCookieToken(options.cookieString ?? document.cookie)
+  // Service worker của MV3 không có `document` ⇒ không có `document.cookie`.
+  const token = readCookieToken(
+    options.cookieString ?? (typeof document !== 'undefined' ? document.cookie : ''),
+  )
 
   const headers: Record<string, string> = { Accept: 'application/json' }
   if (token) headers.Authorization = `JWT ${token}`
 
   const query = params ? `?${new URLSearchParams(params).toString()}` : ''
-  const res = await doFetch(`${base}/${path}${query}`, {
-    method: 'GET',
-    headers,
-    credentials: 'include',
-  })
+  const url = `${base}/${path}${query}`
+
+  let res: Response
+  try {
+    res = await doFetch(url, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    })
+  } catch (e) {
+    throw new SiteApiError('network', `Could not reach the site API ${path}: ${(e as Error).message}`)
+  }
 
   if (!res.ok) {
-    throw new SiteApiError(`The site API ${path} returned HTTP ${res.status}`)
+    throw new SiteApiError(
+      'http',
+      `The site API ${path} returned HTTP ${res.status}`,
+      res.status,
+    )
   }
-  const payload = (await res.json()) as unknown
+
+  let payload: unknown
+  try {
+    payload = (await res.json()) as unknown
+  } catch {
+    throw new SiteApiError(
+      'bad_response',
+      `The site API ${path} response is not valid JSON`,
+    )
+  }
+
   assertSiteEnvelope(path, payload)
   return payload
 }
@@ -222,7 +330,12 @@ export async function loadSiteDicts(options: SiteFetchOptions = {}): Promise<Sit
   return {
     trustCodes: normalizeDictOptions(trustRaw),
     drTypes: normalizeDictOptions(drRaw),
-    ports: normalizeDictOptions(portRaw),
+    // Dict cảng: key thật của site là `PORT_COD`/`E_PORT_NAM` — ưu tiên chúng
+    // để tên cảng tiếng Trung luôn thắng key generic (`name`/`code`).
+    ports: normalizeDictOptions(portRaw, {
+      codeKeys: ['PORT_COD'],
+      nameKeys: ['E_PORT_NAM'],
+    }),
     cntrTypes: normalizeDictOptions(pickArray(cntrRaw, ['cntr_type', 'cntrType', 'type'])),
     cntrSizes: normalizeDictOptions(pickArray(cntrRaw, ['cntr_size', 'cntrSize', 'size'])),
   }
