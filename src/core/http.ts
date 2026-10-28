@@ -4,6 +4,9 @@
  * Không dùng `AbortSignal.timeout()`: môi trường test (jsdom) không chắc có
  * `AbortSignal.timeout`, và — quan trọng hơn — ta cần phân biệt "hết giờ" với
  * "mạng hỏng" để báo đúng nguyên nhân cho người dùng.
+ *
+ * Module này còn cung cấp `withDeadline()`: bọc một promise bất kỳ (vd
+ * `chrome.tabs.sendMessage`) vào hạn chờ để tầng UI không bao giờ kẹt vĩnh viễn.
  */
 
 /** Thời gian chờ tối đa cho một request. */
@@ -80,5 +83,41 @@ export async function fetchJsonWithTimeout(
     throw e
   } finally {
     clearTimeout(timer)
+  }
+}
+
+/** Hết thời gian chờ một promise bất kỳ (không phải request ra ngoài). */
+export class DeadlineError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'DeadlineError'
+  }
+}
+
+/**
+ * Chặn một promise không bao giờ settle.
+ *
+ * Dùng ở tầng UI: `chrome.tabs.sendMessage` có thể không bao giờ trả lời (tab
+ * đã đóng, content script chết) ⇒ nếu không có hạn, nút "Fill data" kẹt ở
+ * trạng thái "đang điền" vĩnh viễn và người dùng không làm được gì khác.
+ */
+export async function withDeadline<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new DeadlineError(`${label} timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        )
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
   }
 }

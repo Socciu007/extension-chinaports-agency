@@ -1,0 +1,123 @@
+:root {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  font: 13px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: #1f2328;
+  background: #fff;
+}
+
+.popup {
+  width: 360px;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+.row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.row + .row {
+  margin-top: 8px;
+}
+
+input[type='text'] {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  font: inherit;
+}
+
+button {
+  padding: 6px 10px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #f6f8fa;
+  font: inherit;
+  cursor: pointer;
+}
+
+button.primary {
+  background: #1f883d;
+  border-color: #1f883d;
+  color: #fff;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.error {
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  background: #ffebe9;
+  color: #82071e;
+  white-space: pre-wrap;
+}
+
+.blocking {
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  background: #fff8c5;
+  color: #633c01;
+}
+
+.blocking-title {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+
+.blocking ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.blocking-label {
+  font-weight: 600;
+}
+
+.blocking-prop {
+  margin-left: 6px;
+  opacity: 0.75;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+}
+
+.summary {
+  margin-top: 8px;
+  color: #57606a;
+}
+
+table {
+  width: 100%;
+  margin-top: 8px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+th,
+td {
+  padding: 4px 6px;
+  border-bottom: 1px solid #eaeef2;
+  text-align: left;
+  vertical-align: top;
+}
+
+tr.required td {
+  background: #fff8c5;
+}
+
+td.note {
+  color: #57606a;
+  max-width: 150px;
+  overflow-wrap: anywhere;
+}

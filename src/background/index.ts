@@ -1,5 +1,4 @@
-const MANIFEST_URL =
-  'https://www.chinaports-agency.com:8870/#/exportBusinessOperations/maintenanceOfManifestData'
+import { MANIFEST_URL } from '../core/site-url'
 
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === 'install') {

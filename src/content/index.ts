@@ -19,12 +19,11 @@ import {
   loadSiteDicts,
 } from '../core/site-api'
 import type { MappingContext } from '../core/mapping'
+import { MANIFEST_ROUTE } from '../core/site-url'
 import type { ManifestData } from '../core/types'
 
-const MANIFEST_HASH = '/exportBusinessOperations/maintenanceOfManifestData'
-
 function isManifestPage(): boolean {
-  return location.hash.includes(MANIFEST_HASH)
+  return location.hash.includes(MANIFEST_ROUTE)
 }
 
 /**
