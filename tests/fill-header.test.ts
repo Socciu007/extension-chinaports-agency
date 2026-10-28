@@ -163,7 +163,9 @@ describe('fillManifest', () => {
     ).toBe('CALLAO BRIDGE')
     // Site BẮT BUỘC có 包装类型/代码 nhưng API không có ⇒ không thể submit
     // ⇒ báo cáo không được claim là thành công.
-    expect(report.items.some((i) => i.prop === 'PACKAGE_STR' && i.required)).toBe(true)
+    expect(
+      report.items.some((i) => i.prop === 'PACKAGE_STR' && i.status === 'skip' && i.required),
+    ).toBe(true)
     expect(report.ok).toBe(false)
   })
 
@@ -191,7 +193,9 @@ describe('fillManifest', () => {
 
     expect(hiddenClicks).toBe(0)
     expect(document.getElementById('manifest-dialog')).not.toBeNull()
-    expect(report.items.some((i) => i.prop === 'PACKAGE_STR' && i.required)).toBe(true)
+    expect(
+      report.items.some((i) => i.prop === 'PACKAGE_STR' && i.status === 'skip' && i.required),
+    ).toBe(true)
     expect(report.ok).toBe(false)
   })
 
@@ -225,7 +229,9 @@ describe('fillManifest', () => {
     const report = await fillManifest({ data, ctx, root: document, autoSubmit: true })
 
     expect(report.items.some((i) => i.prop === 'SUBMIT')).toBe(false)
-    expect(report.items.some((i) => i.prop === 'PACKAGE_STR' && i.required)).toBe(true)
+    expect(
+      report.items.some((i) => i.prop === 'PACKAGE_STR' && i.status === 'skip' && i.required),
+    ).toBe(true)
     expect(report.ok).toBe(false)
   })
 
@@ -238,8 +244,40 @@ describe('fillManifest', () => {
     const empty: ManifestData = { ...data, cdgoods: [], cdCon: [] }
     const report = await fillManifest({ data: empty, ctx, root: document })
 
+    // Báo cáo phải có item — nếu rỗng thì `every` trên mảng rỗng trả true và
+    // test này pass vô nghĩa.
+    expect(report.items.length).toBeGreaterThan(0)
     expect(report.items.filter((i) => i.status === 'skip' && i.required)).toHaveLength(0)
     expect(report.ok).toBe(true)
+  })
+
+  it('field BẮT BUỘC của form đầu bị bỏ trống ⇒ không báo thành công', async () => {
+    buildHeaderForm()
+
+    // API không có payType ⇒ 付款方式 trống ⇒ site không cho submit.
+    const noPayType: ManifestData = { ...data, payType: null }
+    const report = await fillManifest({ data: noPayType, ctx, root: document })
+
+    const blocked = report.items.filter((i) => i.status === 'skip' && i.required)
+    expect(blocked.map((i) => i.prop)).toContain('PAY_WAY_ID')
+    expect(report.ok).toBe(false)
+  })
+
+  it('field BẮT BUỘC của người liên hệ bị bỏ trống ⇒ không báo thành công', async () => {
+    buildHeaderForm()
+
+    // 收货人 (type = true) không có địa chỉ ⇒ CONSIGNEE_ADD_STR trống.
+    const noAddress: ManifestData = {
+      ...data,
+      cabContacts: (data.cabContacts ?? []).map((c) =>
+        c.type === true ? { ...c, address: '' } : c,
+      ),
+    }
+    const report = await fillManifest({ data: noAddress, ctx, root: document })
+
+    const blocked = report.items.filter((i) => i.status === 'skip' && i.required)
+    expect(blocked.map((i) => i.prop)).toContain('CONSIGNEE_ADD_STR')
+    expect(report.ok).toBe(false)
   })
 
   it('site từ chối form (dialog vẫn mở) ⇒ báo cảnh báo, không báo thành công', async () => {

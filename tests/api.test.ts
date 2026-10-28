@@ -116,6 +116,36 @@ describe('fetchManifest', () => {
     })
   })
 
+  it('hết giờ ⇒ kind timeout, không phải lỗi mạng', async () => {
+    // Fetch treo mãi, chỉ chờ tín hiệu abort của timeout.
+    const fakeFetch = ((_url: string, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+      })) as unknown as typeof fetch
+
+    await expect(
+      fetchManifest('X', { fetchImpl: fakeFetch, timeoutMs: 20 }),
+    ).rejects.toMatchObject({ kind: 'timeout' })
+  })
+
+  it('hết giờ khi BODY treo ⇒ kind timeout', async () => {
+    // Header về rồi body treo. Nếu timeout chỉ phủ `fetch` mà không phủ lúc
+    // đọc body thì `json()` đợi mãi ⇒ popup treo vô hạn.
+    const fakeFetch = (async (_url: string, init?: RequestInit) =>
+      ({
+        ok: true,
+        status: 200,
+        json: async () =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+          }),
+      }) as unknown as Response) as unknown as typeof fetch
+
+    await expect(
+      fetchManifest('X', { fetchImpl: fakeFetch, timeoutMs: 20 }),
+    ).rejects.toMatchObject({ kind: 'timeout' })
+  })
+
   it('báo lỗi http khi response không ok', async () => {
     const fakeFetch = (async () => {
       return {
@@ -218,6 +248,12 @@ describe('describeApiError', () => {
   it('trả thông báo tiếng Anh cho kind bad_response', () => {
     expect(describeApiError(new ManifestApiError('bad_response', 'not JSON'))).toBe(
       'The manifest service returned an unexpected response.',
+    )
+  })
+
+  it('trả thông báo tiếng Anh cho kind timeout', () => {
+    expect(describeApiError(new ManifestApiError('timeout', 'timed out'))).toBe(
+      'The manifest service did not respond in time. Please try again.',
     )
   })
 

@@ -1,7 +1,6 @@
 import type { FillScope } from './fill'
 
 export const MSG_FILL = 'manifest-autofill:fill'
-export const MSG_PING = 'manifest-autofill:ping'
 export const MSG_GET_BL_NO = 'manifest-autofill:get-bl-no'
 
 /**

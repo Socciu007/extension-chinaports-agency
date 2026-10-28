@@ -3,9 +3,8 @@ import pkg from './package.json'
 
 export default defineManifest({
   manifest_version: 3,
-  name: 'Manifest Autofill — 预配舱单',
-  description:
-    'Autofill 预配舱单 (manifest) data on China Ports from the dadaex API.',
+  name: 'Manifest Autofill',
+  description: 'Autofill (manifest) data on China Ports from the dadaex API.',
   version: pkg.version.split('-')[0] ?? '0.0.0',
   version_name: pkg.version,
   icons: {

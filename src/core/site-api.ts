@@ -1,3 +1,4 @@
+import { fetchJsonWithTimeout, HttpTimeoutError, type JsonResponse } from './http'
 import type { MappingContext } from './mapping'
 
 export const DEFAULT_SITE_API_BASE = '/api/booking/exportManifestDataMaintain'
@@ -165,6 +166,8 @@ export interface SiteFetchOptions {
   baseUrl?: string
   fetchImpl?: typeof fetch
   cookieString?: string
+  /** Thời gian chờ tối đa (ms) cho mỗi request — hết giờ thì báo lỗi `timeout`. */
+  timeoutMs?: number
 }
 
 /**
@@ -176,8 +179,15 @@ export interface SiteFetchOptions {
  * - `network`      — request không hoàn tất (offline, DNS, CORS)
  * - `http`         — site đã trả lời nhưng status không phải 2xx
  * - `bad_response` — body không phải JSON, hoặc không phải envelope của site
+ * - `timeout`      — site không trả lời trong thời gian chờ
  */
-export type SiteApiErrorKind = 'session' | 'site' | 'network' | 'http' | 'bad_response'
+export type SiteApiErrorKind =
+  | 'session'
+  | 'site'
+  | 'network'
+  | 'http'
+  | 'bad_response'
+  | 'timeout'
 
 /** Lỗi từ API của site — luôn mang `kind` để tầng UI map sang thông báo. */
 export class SiteApiError extends Error {
@@ -214,6 +224,8 @@ export function describeSiteError(error: unknown): string {
         return 'The site returned an error. Please try again in a moment.'
       case 'bad_response':
         return 'The site returned an unexpected response.'
+      case 'timeout':
+        return 'The site did not respond in time. Please try again.'
     }
   }
   return 'Something went wrong while reading the site dictionaries.'
@@ -281,14 +293,21 @@ async function fetchSiteJson(
   const query = params ? `?${new URLSearchParams(params).toString()}` : ''
   const url = `${base}/${path}${query}`
 
-  let res: Response
+  let res: JsonResponse
   try {
-    res = await doFetch(url, {
-      method: 'GET',
-      headers,
-      credentials: 'include',
-    })
+    res = await fetchJsonWithTimeout(
+      url,
+      {
+        method: 'GET',
+        headers,
+        credentials: 'include',
+      },
+      { fetchImpl: doFetch, timeoutMs: options.timeoutMs },
+    )
   } catch (e) {
+    if (e instanceof HttpTimeoutError) {
+      throw new SiteApiError('timeout', e.message)
+    }
     throw new SiteApiError('network', `Could not reach the site API ${path}: ${(e as Error).message}`)
   }
 
@@ -300,16 +319,14 @@ async function fetchSiteJson(
     )
   }
 
-  let payload: unknown
-  try {
-    payload = (await res.json()) as unknown
-  } catch {
+  if (res.invalidJson) {
     throw new SiteApiError(
       'bad_response',
       `The site API ${path} response is not valid JSON`,
     )
   }
 
+  const payload = res.data
   assertSiteEnvelope(path, payload)
   return payload
 }

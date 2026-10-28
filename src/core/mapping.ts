@@ -86,15 +86,64 @@ const PARTY_GROUPS = [
   { role: 2 as const, nameProp: 'E_NOTIFY_NAM', prefix: 'NOTIFY', label: '通知人' },
 ]
 
+/**
+ * Field BẮT BUỘC của site ở form đầu (FACT 1 của plan live-site-alignment).
+ *
+ * `START_PORT_COD`/`DISCHRG_PORT_COD` không có plan riêng: site cascade chúng
+ * khi suggestion của `*_PORT_NAM` được click, và `fill.ts` verify lại ngay sau
+ * đó ⇒ không cascade được thì báo `warn`, mà `warn` thì `ok` đã là false.
+ *
+ * `SHIPPER_COUNTRY_COD` và toàn bộ field 通知人 KHÔNG nằm trong danh sách này:
+ * site không bắt buộc chúng.
+ */
+const REQUIRED_HEADER: readonly string[] = [
+  'BILL_NBR',
+  'E_SHIP_NAM',
+  'OUT_VOYAGE_NO',
+  'TRUST_COD',
+  'PAY_WAY_ID',
+  'DR_TYPE_STR',
+  'START_PORT_NAM',
+  'DISCHRG_PORT_NAM',
+  'E_SHIPPER_NAM',
+  'SHIPPER_ADD_STR',
+  'E_CONSIGNEE_NAM',
+  'CONSIGNEE_ADD_STR',
+  'CONSIGNEE_COUNTRY_COD',
+]
+
+/**
+ * Note của một field header bị bỏ trống.
+ *
+ * Field site **bắt buộc** phải nói rõ người dùng cần làm tay — nếu không,
+ * operator không biết vì sao manifest không submit được.
+ */
+function headerSkippedNote(prop: string, label: string, required: boolean): string {
+  if (required) {
+    return (
+      `The site requires ${label} (${prop}) but the API provides no data — ` +
+      'please fill it in by hand on the page.'
+    )
+  }
+  return 'The API provides no data for this field'
+}
+
 export function mapHeader(data: ManifestData, ctx: MappingContext): FieldPlan[] {
   const plans: FieldPlan[] = []
 
   const push = (prop: string, label: string, value: unknown, note?: string) => {
     const v = text(value)
+    const required = REQUIRED_HEADER.includes(prop)
     if (v === '') {
-      plans.push({ prop, label, status: 'skip', note: note ?? 'The API provides no data for this field' })
+      plans.push({
+        prop,
+        label,
+        status: 'skip',
+        note: note ?? headerSkippedNote(prop, label, required),
+        required,
+      })
     } else {
-      plans.push({ prop, label, status: 'fill', value: v })
+      plans.push({ prop, label, status: 'fill', value: v, required })
     }
   }
 
@@ -111,7 +160,9 @@ export function mapHeader(data: ManifestData, ctx: MappingContext): FieldPlan[] 
     value: trustCode ?? undefined,
     note: trustCode
       ? undefined
-      : `No carrier found for supplyId=${supplyId ?? 'null'} in getTrustCode()`,
+      : `The site requires 承运人代码 (TRUST_COD) but no carrier was found for ` +
+        `supplyId=${supplyId ?? 'null'} in getTrustCode() — please fill it in by hand on the page.`,
+    required: true,
   })
 
   const drType = ctx.findDrType(data.transportTerms ?? undefined)
@@ -122,7 +173,9 @@ export function mapHeader(data: ManifestData, ctx: MappingContext): FieldPlan[] 
     value: drType ?? undefined,
     note: drType
       ? undefined
-      : `No 交货条款 found for code "${data.transportTerms ?? ''}" in getDrType()`,
+      : `The site requires 交货条款 (DR_TYPE_STR) but no 交货条款 was found for code ` +
+        `"${data.transportTerms ?? ''}" in getDrType() — please fill it in by hand on the page.`,
+    required: true,
   })
 
   const payType = data.payType
@@ -136,8 +189,11 @@ export function mapHeader(data: ManifestData, ctx: MappingContext): FieldPlan[] 
     note: payWay
       ? `The site stores the code "${payWay.code}" for "${payWay.label}"`
       : payType === null || payType === undefined
-        ? 'The API provides no payType'
-        : `The API returned an unrecognised payType "${payType}", so 付款方式 was left blank`,
+        ? 'The site requires 付款方式 (PAY_WAY_ID) but the API provides no payType — ' +
+          'please fill it in by hand on the page.'
+        : `The site requires 付款方式 (PAY_WAY_ID) but the API returned an unrecognised ` +
+          `payType "${payType}" — please fill it in by hand on the page.`,
+    required: true,
   })
 
   const portGroups = [
@@ -168,12 +224,18 @@ export function mapHeader(data: ManifestData, ctx: MappingContext): FieldPlan[] 
     // Widget của site chỉ gợi ý tên cảng tiếng Trung → ưu tiên tên từ API,
     // dictionary getPort() chỉ là fallback.
     const name = text(group.apiName) || ctx.findPort(group.code ?? undefined) || ''
+    const required = REQUIRED_HEADER.includes(group.nameProp)
     if (name === '') {
       plans.push({
         prop: group.nameProp,
         label: group.label,
         status: 'skip',
-        note: `No port found for code "${group.code ?? ''}" in getPort()`,
+        note: required
+          ? `The site requires ${group.label} (${group.nameProp}) but neither the API nor ` +
+            `getPort() gives a name for code "${group.code ?? ''}" — ` +
+            'please fill it in by hand on the page.'
+          : `No port found for code "${group.code ?? ''}" in getPort()`,
+        required,
       })
       continue
     }
@@ -188,6 +250,7 @@ export function mapHeader(data: ManifestData, ctx: MappingContext): FieldPlan[] 
       matchValue: code ? `${name}/${code}` : undefined,
       // Site tự cascade mã cảng khi suggestion được click.
       verify: { prop: group.codeProp, note: `Port code ${group.codeProp} was not set` },
+      required,
     })
   }
 
@@ -196,12 +259,14 @@ export function mapHeader(data: ManifestData, ctx: MappingContext): FieldPlan[] 
     label: '中转港',
     status: 'skip',
     note: 'The API provides no data for 中转港',
+    required: false,
   })
   plans.push({
     prop: 'SIGN_PLACE_STR',
     label: '提单签发地/代码',
     status: 'skip',
     note: 'The API provides no data for 提单签发地',
+    required: false,
   })
 
   const contacts = data.cabContacts ?? []
@@ -271,11 +336,13 @@ const REQUIRED_DANGER: readonly string[] = [
 ]
 const REQUIRED_COLD: readonly string[] = ['TEMP_ID', 'SET_TEMP_NUM']
 
-/** Field BẮT BUỘC của site trong bảng container (FACT 5.3). */
+/** Field BẮT BUỘC của site trong bảng container (FACT 5.3 + FACT 6). */
 const REQUIRED_CONTAINER: readonly string[] = [
+  'CNTR_NO',
   'CNTR_SIZE_COD',
   'CNTR_TYPE_COD',
   'CNTR_EF_ID',
+  'SEAL_NO',
   'SOC_ID',
 ]
 

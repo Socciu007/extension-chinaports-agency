@@ -1,3 +1,4 @@
+import { fetchJsonWithTimeout, HttpTimeoutError, type JsonResponse } from './http'
 import type { ManifestCargo, ManifestContainer, ManifestContact, ManifestData } from './types'
 
 export const DEFAULT_API_BASE = 'https://www.dadaex.cn/api/vn/insight/manifest'
@@ -7,8 +8,9 @@ export const DEFAULT_API_BASE = 'https://www.dadaex.cn/api/vn/insight/manifest'
  * - `network`      — the request never completed (offline, DNS, CORS)
  * - `http`         — the service answered, but with a non-2xx status
  * - `bad_response` — the service answered 2xx but the body is not a valid envelope
+ * - `timeout`      — the service did not answer within the time limit
  */
-export type ApiErrorKind = 'not_found' | 'network' | 'http' | 'bad_response'
+export type ApiErrorKind = 'not_found' | 'network' | 'http' | 'bad_response' | 'timeout'
 
 export class ManifestApiError extends Error {
   readonly kind: ApiErrorKind
@@ -36,6 +38,8 @@ export function describeApiError(error: unknown): string {
         return 'The manifest service returned an error. Please try again in a moment.'
       case 'bad_response':
         return 'The manifest service returned an unexpected response.'
+      case 'timeout':
+        return 'The manifest service did not respond in time. Please try again.'
     }
   }
   return 'Something went wrong while fetching the manifest data.'
@@ -93,6 +97,8 @@ export function parseEnvelope(json: unknown): ManifestData {
 export interface FetchManifestOptions {
   baseUrl?: string
   fetchImpl?: typeof fetch
+  /** Thời gian chờ tối đa (ms) — hết giờ thì báo lỗi `timeout`. */
+  timeoutMs?: number
 }
 
 export async function fetchManifest(
@@ -103,21 +109,20 @@ export async function fetchManifest(
   const doFetch = options.fetchImpl ?? fetch
   const url = `${base}?blNo=${encodeURIComponent(normalizeBlNo(blNo))}`
 
-  let res: Response
+  let res: JsonResponse
   try {
-    res = await doFetch(url)
+    res = await fetchJsonWithTimeout(url, {}, { fetchImpl: doFetch, timeoutMs: options.timeoutMs })
   } catch (e) {
+    if (e instanceof HttpTimeoutError) {
+      throw new ManifestApiError('timeout', e.message)
+    }
     throw new ManifestApiError('network', `Could not reach the manifest API: ${(e as Error).message}`)
   }
   if (!res.ok) {
     throw new ManifestApiError('http', `The manifest API returned HTTP ${res.status}`)
   }
-
-  let json: unknown
-  try {
-    json = await res.json()
-  } catch {
+  if (res.invalidJson) {
     throw new ManifestApiError('bad_response', 'The manifest API response is not valid JSON')
   }
-  return parseEnvelope(json)
+  return parseEnvelope(res.data)
 }

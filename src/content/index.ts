@@ -9,7 +9,6 @@ import { readSettings } from '../core/options'
 import {
   MSG_FILL,
   MSG_GET_BL_NO,
-  MSG_PING,
   type FillRequest,
   type FillResult,
   type GetBlNoResult,
@@ -28,15 +27,37 @@ function isManifestPage(): boolean {
   return location.hash.includes(MANIFEST_HASH)
 }
 
+/**
+ * Element Plus giữ dialog đã đóng trong DOM (chỉ ẩn bằng `display:none`) ⇒
+ * `querySelector` có thể trả về ô 提单号 của một lần khai trước đó.
+ */
+function isVisibleInput(el: HTMLElement): boolean {
+  let node: HTMLElement | null = el.parentElement
+  while (node) {
+    if (node.style.display === 'none') return false
+    node = node.parentElement
+  }
+  return true
+}
+
 /** Đọc 提单号 đang hiển thị trên trang (dùng để lấy sẵn cho ô nhập ở popup). */
 function readBlNoFromPage(): string {
-  const input = document.querySelector<HTMLInputElement>('input[id$="-BILL_NBR"]')
+  const inputs = Array.from(
+    document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+      'input[id$="-BILL_NBR"], textarea[id$="-BILL_NBR"]',
+    ),
+  )
+  // Ưu tiên ô đang hiển thị; không có thì mới lấy ô đầu tiên.
+  const input = inputs.find(isVisibleInput) ?? inputs[0]
   return input?.value?.trim() ?? ''
 }
 
 function emptyResult(message: string): FillResult {
   return { ok: false, message, items: [], cargoRows: 0, containerRows: 0 }
 }
+
+/** Lần điền đang chạy — dùng để chặn hai lần điền chồng nhau. */
+let inFlight: Promise<FillResult> | null = null
 
 async function handleFill(request: FillRequest): Promise<FillResult> {
   if (!isManifestPage()) {
@@ -90,12 +111,6 @@ async function handleFill(request: FillRequest): Promise<FillResult> {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const type = (message as { type?: string } | undefined)?.type
 
-  if (type === MSG_PING) {
-    const result: GetBlNoResult = { ok: true, blNo: readBlNoFromPage() }
-    sendResponse(result)
-    return false
-  }
-
   if (type === MSG_GET_BL_NO) {
     const result: GetBlNoResult = { ok: true, blNo: readBlNoFromPage() }
     sendResponse(result)
@@ -103,13 +118,31 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (type === MSG_FILL) {
-    void handleFill(message as FillRequest)
-      .then(sendResponse)
+    // Chống chạy chồng: hai lần điền cùng lúc sẽ bấm 新增舱单信息 hai lần và
+    // ghi đè lên nhau ⇒ sinh dòng hàng TRÙNG trong manifest thật.
+    if (inFlight) {
+      sendResponse(emptyResult('A fill is already running — wait for it to finish.'))
+      return false
+    }
+
+    const run: Promise<FillResult> = handleFill(message as FillRequest)
       .catch((e: unknown) => {
         // Chi tiết kỹ thuật chỉ nằm ở console; người dùng chỉ thấy câu ngắn.
         console.error('[manifest-autofill] unexpected error', e)
-        sendResponse(emptyResult('Something went wrong while filling the manifest.'))
+        return emptyResult('Something went wrong while filling the manifest.')
       })
+      .finally(() => {
+        inFlight = null
+      })
+
+    inFlight = run
+    void run.then((result) => {
+      try {
+        sendResponse(result)
+      } catch {
+        // Tab đã điều hướng đi ⇒ port đã đóng ⇒ không còn ai nghe.
+      }
+    })
     return true
   }
 

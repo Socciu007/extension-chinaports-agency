@@ -199,6 +199,65 @@ describe('mapHeader', () => {
   })
 })
 
+describe('mapHeader — cờ required (FACT 1)', () => {
+  const plans = mapHeader(data, ctx)
+
+  it('field site BẮT BUỘC được đánh dấu required', () => {
+    for (const prop of [
+      'BILL_NBR',
+      'E_SHIP_NAM',
+      'OUT_VOYAGE_NO',
+      'TRUST_COD',
+      'PAY_WAY_ID',
+      'DR_TYPE_STR',
+      'START_PORT_NAM',
+      'DISCHRG_PORT_NAM',
+      'E_SHIPPER_NAM',
+      'SHIPPER_ADD_STR',
+      'E_CONSIGNEE_NAM',
+      'CONSIGNEE_ADD_STR',
+      'CONSIGNEE_COUNTRY_COD',
+    ]) {
+      expect(planFor(plans, prop)?.required, prop).toBe(true)
+    }
+  })
+
+  it('field site KHÔNG bắt buộc không mang cờ required', () => {
+    // 通知人, EMAIL/FAX/AEO, 交货地, 中转港, 提单签发地 — site không bắt buộc.
+    for (const prop of [
+      'E_NOTIFY_NAM',
+      'NOTIFY_ADD_STR',
+      'NOTIFY_COUNTRY_COD',
+      'SHIPPER_COUNTRY_COD',
+      'SHIPPER_AEO',
+      'SHIPPER_EM_STR',
+      'SHIPPER_FX_STR',
+      'DEST_PORT_NAM',
+      'TRANS_PORT_NAM',
+      'SIGN_PLACE_STR',
+    ]) {
+      expect(planFor(plans, prop)?.required, prop).toBe(false)
+    }
+  })
+
+  it('field BẮT BUỘC bị bỏ trống thì note nói rõ người dùng phải làm tay', () => {
+    const pay = mapHeader({ ...data, payType: null }, ctx).find((p) => p.prop === 'PAY_WAY_ID')
+    expect(pay?.status).toBe('skip')
+    expect(pay?.required).toBe(true)
+    expect(pay?.note).toContain('The site requires')
+    expect(pay?.note).toContain('by hand')
+  })
+
+  it('không tìm được cảng thì field BẮT BUỘC cũng phải nói rõ', () => {
+    const p = mapHeader({ ...data, loadPortData: null }, { ...ctx, findPort: () => undefined }).find(
+      (x) => x.prop === 'START_PORT_NAM',
+    )
+    expect(p?.status).toBe('skip')
+    expect(p?.required).toBe(true)
+    expect(p?.note).toContain('The site requires')
+  })
+})
+
 describe('MappingContext', () => {
   it('không còn cấu hình portNameField (site chỉ gợi ý tên Trung)', () => {
     // Kiểm tra ở mức kiểu: `portNameField` phải KHÔNG còn là thuộc tính hợp lệ

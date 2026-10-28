@@ -362,11 +362,36 @@ describe('envelope khoá theo mã thành công 2000', () => {
     expect(err.code).toBe(4000)
     expect(err.message).toMatch(/session/i)
   })
+
+  it('hết giờ → kind timeout, không phải lỗi mạng', async () => {
+    // Fetch treo mãi, chỉ chờ tín hiệu abort của timeout.
+    const fakeFetch = ((_url: string, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+      })) as unknown as typeof fetch
+
+    const err = await rejectionOf(
+      loadSiteDicts({
+        baseUrl: '/api/test',
+        fetchImpl: fakeFetch,
+        cookieString: 'token=abc',
+        timeoutMs: 20,
+      }),
+    )
+    expect(err.kind).toBe('timeout')
+  })
 })
 
 describe('describeSiteError', () => {
   it('trả câu tiếng Anh riêng biệt cho từng kind', () => {
-    const kinds: SiteApiErrorKind[] = ['session', 'site', 'network', 'http', 'bad_response']
+    const kinds: SiteApiErrorKind[] = [
+      'session',
+      'site',
+      'network',
+      'http',
+      'bad_response',
+      'timeout',
+    ]
     const sentences = kinds.map((kind) => describeSiteError(new SiteApiError(kind, 'raw detail')))
 
     for (const sentence of sentences) {

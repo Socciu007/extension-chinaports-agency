@@ -43,6 +43,44 @@ describe('readSettings', () => {
 
     expect(settings).toEqual(DEFAULT_SETTINGS)
   })
+
+  it('storage lỗi ⇒ trả về mặc định thay vì ném', async () => {
+    // Storage bị chặn bởi policy hoặc lỗi quota ⇒ không được làm hỏng cả
+    // lần điền dữ liệu.
+    vi.stubGlobal('chrome', {
+      storage: {
+        sync: {
+          get: async () => {
+            throw new Error('storage disabled')
+          },
+          set: async () => undefined,
+        },
+      },
+    })
+
+    const settings = await readSettings()
+
+    expect(settings).toEqual(DEFAULT_SETTINGS)
+  })
+
+  it('base rỗng trong storage ⇒ dùng mặc định', async () => {
+    // `apiBase: ''` sẽ tạo URL tương đối ⇒ phải coi như chưa cấu hình.
+    //
+    // Phải seed thẳng vào store: `writeSettings` đã chuẩn hoá giá trị rỗng
+    // thành mặc định TRƯỚC khi lưu ⇒ gọi `writeSettings` không bao giờ tạo ra
+    // trạng thái "storage chứa base rỗng" mà `readSettings` phải xử lý.
+    store.apiBase = ''
+    const settings = await readSettings()
+
+    expect(settings.apiBase).toBe(DEFAULT_SETTINGS.apiBase)
+  })
+
+  it('siteApiBase rỗng trong storage ⇒ dùng mặc định', async () => {
+    store.siteApiBase = '   '
+    const settings = await readSettings()
+
+    expect(settings.siteApiBase).toBe(DEFAULT_SETTINGS.siteApiBase)
+  })
 })
 
 describe('writeSettings', () => {

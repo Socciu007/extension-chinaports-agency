@@ -247,3 +247,68 @@ describe('mapContainer — 货主箱标志', () => {
     expect(plan?.note).toContain('The site requires')
   })
 })
+
+describe('cờ required của bảng hàng và bảng container', () => {
+  it('field BẮT BUỘC của dòng hàng được đánh dấu', () => {
+    const plans = mapCargo(cargo)
+    for (const prop of [
+      'CARGO_KIND_COD',
+      'PACKAGE_COD',
+      'PACKAGE_STR',
+      'PIECE_NUM',
+      'GWEIGHT_TON',
+      'GVOL_NUM',
+      'MARK_STR',
+      'E_CARGO_NAM',
+    ]) {
+      expect(planFor(plans, prop)?.required, prop).toBe(true)
+    }
+  })
+
+  it('field KHÔNG bắt buộc của dòng hàng không mang cờ required', () => {
+    const plans = mapCargo(cargo)
+    for (const prop of ['CARGO_HS_COD', 'DANG_EMS_NO', 'DANG_MFAG_NO', 'TEMP_ID']) {
+      expect(planFor(plans, prop)?.required, prop).toBe(false)
+    }
+  })
+
+  it('loại D: field nguy hiểm được đánh dấu bắt buộc', () => {
+    const dangerous = mapCargo({ ...cargo, dangerClass: '2.1' })
+    for (const prop of [
+      'DANG_CLASS_NAM',
+      'DANG_UN_NO',
+      'DANGER_CONTACT_NAM',
+      'DANGER_TE_STR',
+    ]) {
+      expect(planFor(dangerous, prop)?.required, prop).toBe(true)
+    }
+  })
+
+  it('loại R: field lạnh được đánh dấu bắt buộc', () => {
+    const cold = mapCargo({ ...cargo, quarantineName: '冷藏' })
+    for (const prop of ['TEMP_ID', 'SET_TEMP_NUM']) {
+      expect(planFor(cold, prop)?.required, prop).toBe(true)
+    }
+  })
+
+  it('bảng container: 箱号 và 铅封号 cũng là field BẮT BUỘC', () => {
+    const plans = mapContainer(con, ctx)
+    for (const prop of [
+      'CNTR_NO',
+      'CNTR_SIZE_COD',
+      'CNTR_TYPE_COD',
+      'CNTR_EF_ID',
+      'SEAL_NO',
+      'SOC_ID',
+    ]) {
+      expect(planFor(plans, prop)?.required, prop).toBe(true)
+    }
+  })
+
+  it('bảng container: field KHÔNG bắt buộc không mang cờ required', () => {
+    const plans = mapContainer(con, ctx)
+    for (const prop of ['PIECE_NUM', 'WEIGH_TON', 'VOLUME_NUM']) {
+      expect(planFor(plans, prop)?.required, prop).toBe(false)
+    }
+  })
+})

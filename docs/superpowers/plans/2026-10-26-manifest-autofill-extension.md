@@ -8943,10 +8943,13 @@ git commit -m "feat: load site dictionaries and build the mapping context"
 **Files:**
 - Create: `src/core/protocol.ts`
 - Create: `src/core/options.ts`
+- Create: `src/core/http.ts`
 - Modify: `src/content/index.ts`
 - Create: `tests/options.test.ts`
+- Create: `tests/content.test.ts`
 - Modify (do các sửa bắt buộc bên dưới): `src/core/mapping.ts`, `src/core/fill.ts`,
-  `src/core/protocol.ts`, `tests/fill-header.test.ts`
+  `src/core/protocol.ts`, `src/core/api.ts`, `src/core/site-api.ts`,
+  `tests/fill-header.test.ts`
 
 > **Sửa sau khi đối chiếu site thật + code review (2026-10-27) — PHẢI làm trong
 > task này, không được bỏ qua.**
@@ -8982,17 +8985,36 @@ git commit -m "feat: load site dictionaries and build the mapping context"
 >    nhánh (bỏ trống và có giá trị). `mapContainer`: thêm hằng số
 >
 >    ```ts
->    /** Field BẮT BUỘC của site trong bảng container (FACT 5.3). */
+>    /** Field BẮT BUỘC của site trong bảng container (FACT 5.3 + FACT 6). */
 >    const REQUIRED_CONTAINER: readonly string[] = [
+>      'CNTR_NO',
 >      'CNTR_SIZE_COD',
 >      'CNTR_TYPE_COD',
 >      'CNTR_EF_ID',
+>      'SEAL_NO',
 >      'SOC_ID',
 >    ]
 >    ```
 >
 >    rồi `required: REQUIRED_CONTAINER.includes(prop)` trong `push()` của
 >    `mapContainer`.
+>
+>    **`mapHeader` cũng phải đánh dấu `required`** — danh sách field bắt buộc
+>    của form đầu nằm ở FACT 1 của plan `live-site-alignment`:
+>
+>    ```ts
+>    const REQUIRED_HEADER: readonly string[] = [
+>      'BILL_NBR', 'E_SHIP_NAM', 'OUT_VOYAGE_NO', 'TRUST_COD', 'PAY_WAY_ID',
+>      'DR_TYPE_STR', 'START_PORT_NAM', 'DISCHRG_PORT_NAM',
+>      'E_SHIPPER_NAM', 'SHIPPER_ADD_STR',
+>      'E_CONSIGNEE_NAM', 'CONSIGNEE_ADD_STR', 'CONSIGNEE_COUNTRY_COD',
+>    ]
+>    ```
+>
+>    `START_PORT_COD`/`DISCHRG_PORT_COD` không có plan riêng (site cascade khi
+>    suggestion của `*_PORT_NAM` được click, rồi `fill.ts` verify) ⇒ không
+>    cần đánh dấu. `SHIPPER_COUNTRY_COD` và field 通知人 site **không** bắt
+>    buộc ⇒ không đánh dấu.
 >
 > 2. `src/core/fill.ts` — `FillItem` thêm `required?: boolean`; `fillPlans` copy
 >    `plan.required` vào item (cả nhánh `skip` và nhánh `ok`/`warn`); vòng lặp
@@ -9011,6 +9033,24 @@ git commit -m "feat: load site dictionaries and build the mapping context"
 >
 > 4. `src/content/index.ts` — `FillResult` lấy `report.items` thẳng ⇒ không
 >    cần sửa, nhưng phải **kiểm tra lại** sau khi `FillItem` đổi.
+>
+> 5. **`src/core/http.ts` (MỚI) + timeout cho mọi request.** Không có timeout
+>    thì popup treo vô hạn khi server nhận connection nhưng không trả lời.
+>    `fetchJsonWithTimeout()` bọc `fetch` bằng `AbortController`; hết giờ thì ném
+>    `HttpTimeoutError`. Hàm này **tự đọc body trong cửa sổ timeout** — nếu chỉ
+>    bọc `fetch` thì server gửi header rồi treo body vẫn làm `res.json()` đợi
+>    mãi ⇒ popup treo vô hạn dù đã bật timeout.
+>    `api.ts` và `site-api.ts` map thành kind `'timeout'`
+>    (thêm vào `ApiErrorKind` / `SiteApiErrorKind`) để UI báo *"did not respond
+>    in time"* thay vì *"check your network connection"*.
+>
+> 6. **Content script phải chặn hai lần điền chồng nhau.** Hai `MSG_FILL` chạy
+>    song song sẽ bấm 新增舱单信息 hai lần và ghi đè lên nhau ⇒ sinh dòng hàng
+>    TRÙNG trong manifest thật. Giữ promise đang chạy trong biến `inFlight` và
+>    trả về lỗi ngay nếu có lần thứ hai.
+>
+> 7. **`MSG_PING` là code chết** — popup chỉ dùng `MSG_GET_BL_NO` và
+>    `MSG_FILL`. Bỏ hẳn `MSG_PING` khỏi `protocol.ts` và content script.
 
 - [ ] **Step 1: Tạo `src/core/protocol.ts`**
 
@@ -9018,7 +9058,6 @@ git commit -m "feat: load site dictionaries and build the mapping context"
 import type { FillScope } from './fill'
 
 export const MSG_FILL = 'manifest-autofill:fill'
-export const MSG_PING = 'manifest-autofill:ping'
 export const MSG_GET_BL_NO = 'manifest-autofill:get-bl-no'
 
 /**
@@ -9091,16 +9130,39 @@ function hasChromeStorage(): boolean {
   return typeof chrome !== 'undefined' && !!chrome.storage?.sync
 }
 
+/**
+ * Base rỗng ⇒ coi như chưa cấu hình ⇒ dùng mặc định.
+ *
+ * Không có bước này thì `apiBase: ''` sẽ tạo URL tương đối (`?blNo=…`) và
+ * lỗi thành "HTTP error" khó hiểu.
+ */
+function withDefaults(stored: Partial<ExtensionSettings>): ExtensionSettings {
+  return {
+    ...DEFAULT_SETTINGS,
+    ...stored,
+    apiBase: stored.apiBase?.trim() || DEFAULT_SETTINGS.apiBase,
+    siteApiBase: stored.siteApiBase?.trim() || DEFAULT_SETTINGS.siteApiBase,
+  }
+}
+
 export async function readSettings(): Promise<ExtensionSettings> {
   if (!hasChromeStorage()) return { ...DEFAULT_SETTINGS }
-  const stored = (await chrome.storage.sync.get(DEFAULT_SETTINGS)) as Partial<ExtensionSettings>
-  return { ...DEFAULT_SETTINGS, ...stored }
+  try {
+    const stored = (await chrome.storage.sync.get(DEFAULT_SETTINGS)) as Partial<ExtensionSettings>
+    return withDefaults(stored)
+  } catch (e) {
+    // Storage bị chặn (policy) hoặc lỗi quota ⇒ dùng mặc định thay vì làm
+    // hỏng cả lần điền dữ liệu. Vẫn cảnh báo ra console: không có dấu vết thì
+    // không ai hiểu vì sao extension lại dùng base API mặc định.
+    console.warn('[manifest-autofill] could not read settings, using defaults', e)
+    return { ...DEFAULT_SETTINGS }
+  }
 }
 
 export async function writeSettings(
   patch: Partial<ExtensionSettings>,
 ): Promise<ExtensionSettings> {
-  const next = { ...(await readSettings()), ...patch }
+  const next = withDefaults({ ...(await readSettings()), ...patch })
   if (hasChromeStorage()) await chrome.storage.sync.set(next)
   return next
 }
@@ -9179,7 +9241,6 @@ import { readSettings } from '../core/options'
 import {
   MSG_FILL,
   MSG_GET_BL_NO,
-  MSG_PING,
   type FillRequest,
   type FillResult,
   type GetBlNoResult,
@@ -9198,15 +9259,37 @@ function isManifestPage(): boolean {
   return location.hash.includes(MANIFEST_HASH)
 }
 
+/**
+ * Element Plus giữ dialog đã đóng trong DOM (chỉ ẩn bằng `display:none`) ⇒
+ * `querySelector` có thể trả về ô 提单号 của một lần khai trước đó.
+ */
+function isVisibleInput(el: HTMLElement): boolean {
+  let node: HTMLElement | null = el.parentElement
+  while (node) {
+    if (node.style.display === 'none') return false
+    node = node.parentElement
+  }
+  return true
+}
+
 /** Đọc 提单号 đang hiển thị trên trang (dùng để lấy sẵn cho ô nhập ở popup). */
 function readBlNoFromPage(): string {
-  const input = document.querySelector<HTMLInputElement>('input[id$="-BILL_NBR"]')
+  const inputs = Array.from(
+    document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+      'input[id$="-BILL_NBR"], textarea[id$="-BILL_NBR"]',
+    ),
+  )
+  // Ưu tiên ô đang hiển thị; không có thì mới lấy ô đầu tiên.
+  const input = inputs.find(isVisibleInput) ?? inputs[0]
   return input?.value?.trim() ?? ''
 }
 
 function emptyResult(message: string): FillResult {
   return { ok: false, message, items: [], cargoRows: 0, containerRows: 0 }
 }
+
+/** Lần điền đang chạy — dùng để chặn hai lần điền chồng nhau. */
+let inFlight: Promise<FillResult> | null = null
 
 async function handleFill(request: FillRequest): Promise<FillResult> {
   if (!isManifestPage()) {
@@ -9260,12 +9343,6 @@ async function handleFill(request: FillRequest): Promise<FillResult> {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const type = (message as { type?: string } | undefined)?.type
 
-  if (type === MSG_PING) {
-    const result: GetBlNoResult = { ok: true, blNo: readBlNoFromPage() }
-    sendResponse(result)
-    return false
-  }
-
   if (type === MSG_GET_BL_NO) {
     const result: GetBlNoResult = { ok: true, blNo: readBlNoFromPage() }
     sendResponse(result)
@@ -9273,13 +9350,31 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (type === MSG_FILL) {
-    void handleFill(message as FillRequest)
-      .then(sendResponse)
+    // Chống chạy chồng: hai lần điền cùng lúc sẽ bấm 新增舱单信息 hai lần và
+    // ghi đè lên nhau ⇒ sinh dòng hàng TRÙNG trong manifest thật.
+    if (inFlight) {
+      sendResponse(emptyResult('A fill is already running — wait for it to finish.'))
+      return false
+    }
+
+    const run: Promise<FillResult> = handleFill(message as FillRequest)
       .catch((e: unknown) => {
         // Chi tiết kỹ thuật chỉ nằm ở console; người dùng chỉ thấy câu ngắn.
         console.error('[manifest-autofill] unexpected error', e)
-        sendResponse(emptyResult('Something went wrong while filling the manifest.'))
+        return emptyResult('Something went wrong while filling the manifest.')
       })
+      .finally(() => {
+        inFlight = null
+      })
+
+    inFlight = run
+    void run.then((result) => {
+      try {
+        sendResponse(result)
+      } catch {
+        // Tab đã điều hướng đi ⇒ port đã đóng ⇒ không còn ai nghe.
+      }
+    })
     return true
   }
 
@@ -9289,12 +9384,98 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 console.debug('[manifest-autofill] content script ready')
 ```
 
-- [ ] **Step 7: Typecheck**
+- [ ] **Step 7: Viết `src/core/http.ts` — timeout cho mọi request**
+
+```ts
+/** Thời gian chờ tối đa cho một request. */
+export const HTTP_TIMEOUT_MS = 15_000
+
+/** Request quá thời gian chờ — KHÁC với lỗi mạng. */
+export class HttpTimeoutError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'HttpTimeoutError'
+  }
+}
+
+export interface FetchWithTimeoutOptions {
+  fetchImpl?: typeof fetch
+  timeoutMs?: number
+}
+
+/** Kết quả của một request JSON. */
+export interface JsonResponse {
+  /** status HTTP nằm trong khoảng 2xx */
+  ok: boolean
+  status: number
+  /** body đã parse thành JSON; `undefined` khi response không ok */
+  data?: unknown
+  /** true nếu body không parse được thành JSON */
+  invalidJson?: boolean
+}
+
+/**
+ * `fetch` + timeout cứng, và **đọc body cũng nằm trong cửa sổ timeout**.
+ *
+ * `fetch()` chỉ resolve khi header về; nếu server gửi header rồi treo body,
+ * `res.json()` sẽ đợi mãi. Vì vậy hàm này tự đọc body trước khi tắt timer —
+ * nếu không, popup có thể treo vô hạn dù đã bật timeout.
+ *
+ * Lỗi mạng (DNS, offline, CORS) đi ra nguyên vẹn để tầng trên tự phân loại.
+ *
+ * LƯU Ý: `init.signal` của caller bị **thay bằng** signal của timeout ở đây.
+ * Muốn hủy request từ bên ngoài thì phải truyền `timeoutMs` nhỏ hơn, hoặc
+ * dùng `AbortSignal.any([init.signal, controller.signal])` nếu cần cả hai.
+ */
+export async function fetchJsonWithTimeout(
+  url: string,
+  init: RequestInit,
+  options: FetchWithTimeoutOptions = {},
+): Promise<JsonResponse> {
+  const doFetch = options.fetchImpl ?? fetch
+  const timeoutMs = options.timeoutMs ?? HTTP_TIMEOUT_MS
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  const timedOut = () =>
+    new HttpTimeoutError(`The request to ${url} timed out after ${timeoutMs}ms`)
+
+  try {
+    const res = await doFetch(url, { ...init, signal: controller.signal })
+    if (!res.ok) return { ok: false, status: res.status }
+
+    let data: unknown
+    try {
+      data = await res.json()
+    } catch (e) {
+      // Abort giữa chừng cũng làm `json()` ném — phải phân biệt với body
+      // không phải JSON, nếu không timeout sẽ bị báo nhầm thành lỗi dữ liệu.
+      if (controller.signal.aborted) throw timedOut()
+      return { ok: true, status: res.status, invalidJson: true }
+    }
+    return { ok: true, status: res.status, data }
+  } catch (e) {
+    if (controller.signal.aborted) {
+      throw timedOut()
+    }
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
+}
+```
+
+Rồi dùng nó trong `src/core/api.ts` (`fetchManifest`) và `src/core/site-api.ts`
+(`fetchSiteJson`), map `HttpTimeoutError` thành kind `'timeout'` — kind này
+phải được thêm vào `ApiErrorKind` / `SiteApiErrorKind` và có case riêng trong
+`describeApiError` / `describeSiteError`.
+
+- [ ] **Step 8: Typecheck**
 
 Run: `npm run typecheck`
 Expected: không lỗi.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add src/core/protocol.ts src/core/options.ts tests/options.test.ts
@@ -9318,6 +9499,51 @@ git commit src/core/protocol.ts src/core/options.ts src/content/index.ts tests/o
 >    mỗi cái **phải assert lý do** chứ không chỉ đảo boolean, 2 test phải
 >    **đổi tên**, và phải có **test đối chứng dương** chứng minh `ok` vẫn có
 >    thể là `true` (không có dòng hàng, không có container).
+>
+> **Ghi chú lần 2 (code review 2026-10-28) — đã sửa trong working tree:**
+> 1. `mapHeader` **chưa hề** đánh dấu `required` ⇒ field bắt buộc của form
+>    đầu (FACT 1) bị báo là `skip` vô hại và `ok` vẫn có thể là `true` ⇒
+>    đúng cái false success mà task này sinh ra để diệt. Đã thêm
+>    `REQUIRED_HEADER` + `headerSkippedNote`.
+> 2. `REQUIRED_CONTAINER` thiếu `CNTR_NO` và `SEAL_NO` (FACT 6 ghi rõ cả hai
+>    là bắt buộc) ⇒ đã thêm.
+> 3. Không có timeout cho `fetch` ⇒ popup treo vô hạn. Đã thêm
+>    `src/core/http.ts` + kind `'timeout'`.
+> 4. Hai `MSG_FILL` chạy chồng nhau sẽ sinh dòng hàng TRÙNG trong manifest
+>    thật ⇒ đã thêm chốt `inFlight` trong content script.
+> 5. `MSG_PING` là code chết (popup chỉ dùng `MSG_GET_BL_NO` + `MSG_FILL`) ⇒
+>    đã gỡ khỏi `protocol.ts` và content script.
+> 6. `readSettings()` không chắn không throw (storage bị policy chặn), và
+>    `apiBase`/`siteApiBase` rỗng trong storage sẽ tạo URL tương đối ⇒ đã
+>    thêm `withDefaults` + `try/catch`.
+> 7. `readBlNoFromPage()` đọc trúng ô 提单号 của dialog đã đóng ⇒ đã ưu tiên
+>    ô đang hiển thị.
+>
+> **Ghi chú lần 3 (code review 2026-10-28) — đã sửa trong working tree.**
+> Reviewer đã **APPROVED**; 4 trong 6 ghi chú không chặn được lấy thêm:
+> 1. `fetchJsonWithTimeout` **đọc body trong cửa sổ timeout** (chỉ bọc `fetch`
+>    thì server gửi header rồi treo body vẫn làm `res.json()` đợi mãi) ⇒
+>    `src/core/http.ts` trả `{ ok, status, data?, invalidJson? }`, phân biệt
+>    abort (`HttpTimeoutError`) với body không phải JSON (`invalidJson`).
+> 2. Chốt `inFlight` trong content script **chưa có test** ⇒ thêm
+>    `tests/content.test.ts`: stub `chrome.runtime.onMessage.addListener`,
+>    stub `fetch` treo, gọi listener hai lần ⇒ lần hai phải bị từ chối và
+>    `fetch` chỉ được gọi MỘT lần. `inFlight` là state ở mức module ⇒ test cần
+>    `vi.resetModules()` + dynamic `import()`.
+> 3. Test *"base rỗng trong storage ⇒ dùng mặc định"* gọi `writeSettings` nên
+>    **không bao giờ tạo ra** trạng thái "storage chứa base rỗng" (`writeSettings`
+>    chuẩn hoá trước khi lưu) ⇒ phải seed thẳng `store.apiBase = ''`.
+> 4. `readSettings()` nuốt lỗi storage **không có dấu vết** ⇒ thêm
+>    `console.warn` để câu hỏi "sao lại dùng base mặc định?" có câu trả lời.
+> 5. `http.ts` ghi rõ `init.signal` của caller bị **thay bằng** signal của
+>    timeout (tránh bẫy cho người viết tiếp).
+>
+> **Hai ghi chú KHÔNG lấy (có lý do):**
+> - Body của response không 2xx không được đọc ⇒ mất `msg` của site. Đây là
+>   hành vi **có sẵn từ trước** (code cũ ném trước khi đọc body), không phải
+>   hồi quy; `site-api.ts` đã xử lý lỗi theo `code` của envelope.
+> - `autoSubmit` chưa được kiểm tra kiểu khi đọc ⇒ Task 16 (options page) sẽ
+>   ép kiểu lúc ghi.
 
 ---
 
