@@ -8705,36 +8705,97 @@ export interface SiteFetchOptions {
   cookieString?: string
 }
 
-/** Lỗi từ API của site — thường là session thiếu/hết hạn. */
+/**
+ * - `session`      — site trả code 4000: session thiếu/hết hạn
+ * - `site`         — site trả code khác 2000: site từ chối
+ * - `network`      — request không hoàn tất (offline, DNS, CORS)
+ * - `http`         — site đã trả lời nhưng status không phải 2xx
+ * - `bad_response` — body không phải JSON, hoặc không phải envelope của site
+ */
+export type SiteApiErrorKind = 'session' | 'site' | 'network' | 'http' | 'bad_response'
+
+/** Lỗi từ API của site — luôn mang `kind` để tầng UI map sang thông báo. */
 export class SiteApiError extends Error {
+  readonly kind: SiteApiErrorKind
+  /**
+   * Mã số của lỗi: mã envelope của site (`site`/`session`) hoặc HTTP status
+   * (`http`); `undefined` khi không có mã nào (`network`/`bad_response`).
+   */
   readonly code: number | undefined
 
-  constructor(message: string, code?: number) {
+  constructor(kind: SiteApiErrorKind, message: string, code?: number) {
     super(message)
     this.name = 'SiteApiError'
+    this.kind = kind
     this.code = code
   }
 }
+
+/**
+ * Chuỗi hiển thị cho người dùng, theo từng `kind` — tiếng Anh.
+ * Tầng UI phải map theo `kind`, KHÔNG hiển thị thẳng `error.message`
+ * vì message là chi tiết kỹ thuật, không phải thông báo cho người dùng.
+ */
+export function describeSiteError(error: unknown): string {
+  if (error instanceof SiteApiError) {
+    switch (error.kind) {
+      case 'session':
+        return 'Your session on the site has expired — log in to the site and try again.'
+      case 'site':
+        return 'The site rejected the request. Please try again in a moment.'
+      case 'network':
+        return 'Could not reach the site. Check your network connection.'
+      case 'http':
+        return 'The site returned an error. Please try again in a moment.'
+      case 'bad_response':
+        return 'The site returned an unexpected response.'
+    }
+  }
+  return 'Something went wrong while reading the site dictionaries.'
+}
+
+/**
+ * Mã thành công của API site là **2000** (FACT 6.4 — bundle site:
+ * `2e3==e.code ? … : …`). Mã `200` KHÔNG phải mã của site.
+ */
+const SITE_OK_CODE = 2000
+/** Mã của site khi session thiếu/hết hạn. */
+const SITE_SESSION_CODE = 4000
 
 /**
  * Site báo lỗi NGAY TRONG HTTP 200.
  * Đã kiểm chứng 2026-10-27 trên site thật:
  *   GET /api/booking/exportManifestDataMaintain/getTrustCode/
  *   → HTTP 200 {"code":4000,"data":null,"msg":"身份认证信息未提供。"}
- * Nếu không kiểm tra, extension sẽ tưởng dict rỗng và báo "không tìm thấy cảng"
- * cho mọi field — mất dấu vết nguyên nhân thật (session hết hạn).
+ *
+ * Vì vậy phải kiểm tra theo **mã thành công của site** (`2000`), không kiểm
+ * tra `data === null`: một envelope thành công với `data: null` chỉ nghĩa là
+ * dict rỗng, còn một lỗi phía site (`code: 5000`) có thể đi kèm `data` khác
+ * null — bỏ qua nó thì extension im lặng báo "không tìm thấy…" cho mọi field.
  */
 function assertSiteEnvelope(path: string, payload: unknown): void {
-  if (typeof payload !== 'object' || payload === null) return
-  const source = payload as { code?: unknown; data?: unknown }
-  if (typeof source.code !== 'number') return
-  if (source.data !== null && source.data !== undefined) return
-  throw new SiteApiError(
-    source.code === 4000
-      ? `The site rejected ${path} because the session is missing or expired. Log in to the site and try again.`
-      : `The site rejected ${path} (code ${source.code}).`,
-    source.code,
-  )
+  if (typeof payload !== 'object' || payload === null) {
+    throw new SiteApiError(
+      'bad_response',
+      `The site API ${path} returned a response that is not the site's {code, data, msg} envelope.`,
+    )
+  }
+  const source = payload as { code?: unknown }
+  if (typeof source.code !== 'number') {
+    throw new SiteApiError(
+      'bad_response',
+      `The site API ${path} returned a response with no numeric code — not the site's {code, data, msg} envelope.`,
+    )
+  }
+  if (source.code === SITE_OK_CODE) return
+  if (source.code === SITE_SESSION_CODE) {
+    throw new SiteApiError(
+      'session',
+      `The site rejected ${path} because the session is missing or expired. Log in to the site and try again.`,
+      source.code,
+    )
+  }
+  throw new SiteApiError('site', `The site rejected ${path} (code ${source.code}).`, source.code)
 }
 
 async function fetchSiteJson(
@@ -8744,22 +8805,46 @@ async function fetchSiteJson(
 ): Promise<unknown> {
   const base = options.baseUrl ?? DEFAULT_SITE_API_BASE
   const doFetch = options.fetchImpl ?? fetch
-  const token = readCookieToken(options.cookieString ?? document.cookie)
+  // Service worker của MV3 không có `document` ⇒ không có `document.cookie`.
+  const token = readCookieToken(
+    options.cookieString ?? (typeof document !== 'undefined' ? document.cookie : ''),
+  )
 
   const headers: Record<string, string> = { Accept: 'application/json' }
   if (token) headers.Authorization = `JWT ${token}`
 
   const query = params ? `?${new URLSearchParams(params).toString()}` : ''
-  const res = await doFetch(`${base}/${path}${query}`, {
-    method: 'GET',
-    headers,
-    credentials: 'include',
-  })
+  const url = `${base}/${path}${query}`
+
+  let res: Response
+  try {
+    res = await doFetch(url, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    })
+  } catch (e) {
+    throw new SiteApiError('network', `Could not reach the site API ${path}: ${(e as Error).message}`)
+  }
 
   if (!res.ok) {
-    throw new SiteApiError(`The site API ${path} returned HTTP ${res.status}`)
+    throw new SiteApiError(
+      'http',
+      `The site API ${path} returned HTTP ${res.status}`,
+      res.status,
+    )
   }
-  const payload = (await res.json()) as unknown
+
+  let payload: unknown
+  try {
+    payload = (await res.json()) as unknown
+  } catch {
+    throw new SiteApiError(
+      'bad_response',
+      `The site API ${path} response is not valid JSON`,
+    )
+  }
+
   assertSiteEnvelope(path, payload)
   return payload
 }
@@ -8860,6 +8945,8 @@ git commit -m "feat: load site dictionaries and build the mapping context"
 - Create: `src/core/options.ts`
 - Modify: `src/content/index.ts`
 - Create: `tests/options.test.ts`
+- Modify (do các sửa bắt buộc bên dưới): `src/core/mapping.ts`, `src/core/fill.ts`,
+  `src/core/protocol.ts`, `tests/fill-header.test.ts`
 
 > **Sửa sau khi đối chiếu site thật + code review (2026-10-27) — PHẢI làm trong
 > task này, không được bỏ qua.**
@@ -8950,6 +9037,11 @@ export interface ReportItem {
   note?: string
   /** số thứ tự của dòng (chỉ có với scope cargo/container) — phân biệt các dòng trùng prop */
   row?: number
+  /**
+   * site BẮT BUỘC có field này — bỏ trống thì manifest không submit được.
+   * Popup dùng cờ này để chỉ ra field đang chặn việc submit.
+   */
+  required?: boolean
 }
 
 export interface FillRequest {
@@ -8977,6 +9069,7 @@ export interface GetBlNoResult {
 
 ```ts
 import { DEFAULT_API_BASE } from './api'
+import { DEFAULT_SITE_API_BASE } from './site-api'
 
 export interface ExtensionSettings {
   /** endpoint lấy dữ liệu manifest từ dadaex */
@@ -8989,7 +9082,8 @@ export interface ExtensionSettings {
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   apiBase: DEFAULT_API_BASE,
-  siteApiBase: '/api/booking/exportManifestDataMaintain',
+  // Lấy từ `site-api` chứ không hardcode lần thứ hai ⇒ không thể lệch nhau.
+  siteApiBase: DEFAULT_SITE_API_BASE,
   autoSubmit: false,
 }
 
@@ -9074,7 +9168,12 @@ Expected: `tests/options.test.ts` PASS.
 Ghi đè toàn bộ file:
 
 ```ts
-import { fetchManifest, ManifestApiError, normalizeBlNo } from '../core/api'
+import {
+  describeApiError,
+  fetchManifest,
+  ManifestApiError,
+  normalizeBlNo,
+} from '../core/api'
 import { fillManifest } from '../core/fill'
 import { readSettings } from '../core/options'
 import {
@@ -9085,7 +9184,11 @@ import {
   type FillResult,
   type GetBlNoResult,
 } from '../core/protocol'
-import { createMappingContext, loadSiteDicts } from '../core/site-api'
+import {
+  createMappingContext,
+  describeSiteError,
+  loadSiteDicts,
+} from '../core/site-api'
 import type { MappingContext } from '../core/mapping'
 import type { ManifestData } from '../core/types'
 
@@ -9123,11 +9226,10 @@ async function handleFill(request: FillRequest): Promise<FillResult> {
     data = await fetchManifest(blNo, { baseUrl: apiBase })
   } catch (e) {
     if (e instanceof ManifestApiError && e.kind === 'not_found') {
-      return emptyResult(
-        `No manifest found for blNo ${blNo} (tried both the form with and without the P suffix).`,
-      )
+      return emptyResult(`No manifest was found for bill of lading number ${blNo}.`)
     }
-    return emptyResult(`API call failed: ${(e as Error).message}`)
+    // Lỗi phải map theo `kind` — không bao giờ lộ `error.message` cho người dùng.
+    return emptyResult(`Could not fetch the manifest data: ${describeApiError(e)}`)
   }
 
   let ctx: MappingContext
@@ -9135,7 +9237,7 @@ async function handleFill(request: FillRequest): Promise<FillResult> {
     const dicts = await loadSiteDicts({ baseUrl: settings.siteApiBase })
     ctx = createMappingContext(dicts)
   } catch (e) {
-    return emptyResult(`Could not read the site dictionaries: ${(e as Error).message}`)
+    return emptyResult(`Could not read the site dictionaries: ${describeSiteError(e)}`)
   }
 
   const report = await fillManifest({
@@ -9173,7 +9275,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (type === MSG_FILL) {
     void handleFill(message as FillRequest)
       .then(sendResponse)
-      .catch((e: unknown) => sendResponse(emptyResult(`Unexpected error: ${String(e)}`)))
+      .catch((e: unknown) => {
+        // Chi tiết kỹ thuật chỉ nằm ở console; người dùng chỉ thấy câu ngắn.
+        console.error('[manifest-autofill] unexpected error', e)
+        sendResponse(emptyResult('Something went wrong while filling the manifest.'))
+      })
     return true
   }
 
@@ -9191,9 +9297,27 @@ Expected: không lỗi.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/core/protocol.ts src/core/options.ts src/content/index.ts tests/options.test.ts
-git commit -m "feat: wire the content script to the manifest API and site dictionaries"
+git add src/core/protocol.ts src/core/options.ts tests/options.test.ts
+git commit src/core/protocol.ts src/core/options.ts src/content/index.ts tests/options.test.ts src/core/mapping.ts src/core/fill.ts tests/fill-header.test.ts -m "feat: wire the content script to the manifest API and site dictionaries"
 ```
+
+> **Ghi chú (đã thực hiện 2026-10-28):** commit này gồm **7 file** — 4 file ở
+> trên cùng 3 file mà các sửa bắt buộc của task đụng tới
+> (`src/core/mapping.ts`, `src/core/fill.ts`, `tests/fill-header.test.ts`).
+> Pathspec của bước cũ (chỉ 4 file) là thiếu.
+>
+> Thêm vào đó, task này còn **3 sửa bắt buộc** phát sinh khi code review:
+> 1. `options.ts` phải lấy `siteApiBase` từ `DEFAULT_SITE_API_BASE` của
+>    `site-api.ts`, không hardcode lần thứ hai.
+> 2. Content script phải map lỗi theo `kind` bằng `describeApiError(e)` /
+>    `describeSiteError(e)` — **KHÔNG** hiển thị thẳng `error.message`
+>    (rule đã ghi trong `src/core/api.ts`).
+> 3. `tests/fill-header.test.ts`: 4 assertion `expect(report.ok).toBe(true)`
+>    của `describe('fillManifest')` **đổi thành `false`** (vì `PACKAGE_STR`,
+>    `PACKAGE_COD`, 尺寸, 箱型, 箱状态 là field bắt buộc mà API không có),
+>    mỗi cái **phải assert lý do** chứ không chỉ đảo boolean, 2 test phải
+>    **đổi tên**, và phải có **test đối chứng dương** chứng minh `ok` vẫn có
+>    thể là `true` (không có dòng hàng, không có container).
 
 ---
 
