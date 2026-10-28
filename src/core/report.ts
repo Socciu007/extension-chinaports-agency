@@ -19,6 +19,15 @@ export interface BlockingField {
  *
  * Đây là những field chặn việc submit manifest. `skip` với `required` false
  * (EMAIL, FAX, 中转港…) KHÔNG chặn ⇒ không có trong danh sách này.
+ *
+ * NGUYÊN NHÂN khác nhau theo `status`, nên đừng quy tất cả về một lý do:
+ * - `skip`  — API không có dữ liệu cho field này (xem `headerSkippedNote`).
+ * - `warn`  — ta ĐÃ ghi giá trị nhưng site không cascade/verify được (mã cảng
+ *             chưa được sinh) — lỗi nằm ở phía site, không phải thiếu dữ liệu.
+ * - `error` — site từ chối giá trị (không tìm thấy field, không có option).
+ *
+ * Vì vậy lý do cụ thể nằm ở `note` của từng item; tầng UI phải hiện note đó
+ * thay vì tự bịa một lý do chung.
  */
 export function blockingFields(items: ReportItem[]): BlockingField[] {
   return items
@@ -49,8 +58,8 @@ export function describeIncompleteFill(items: ReportItem[], message?: string): s
   if (blocking.length > 0) {
     const names = blocking.map((field) => field.label).join(', ')
     return (
-      `The site requires ${blocking.length} field(s) with no data from the API: ` +
-      `${names}. Please fill them in by hand on the page.`
+      `The site requires ${blocking.length} field(s) that could not be filled in: ` +
+      `${names}. See the note under each field for the reason, then complete them on the page.`
     )
   }
 

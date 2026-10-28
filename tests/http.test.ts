@@ -36,6 +36,15 @@ describe('withDeadline', () => {
     )
   })
 
+  it('promise resolve SAU khi hạn đã hết ⇒ vẫn phải ném DeadlineError', async () => {
+    let release: (() => void) | undefined
+    const late = new Promise<string>((resolve) => {
+      release = () => resolve('late')
+    })
+    await expect(withDeadline(late, 20, 'Test')).rejects.toBeInstanceOf(DeadlineError)
+    release?.()
+  })
+
   it('không để lại timer đang chạy khi promise settle trước hạn', async () => {
     vi.useFakeTimers()
     try {

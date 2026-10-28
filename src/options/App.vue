@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Task 15 sẽ thay nội dung file này.
+// Task 16 sẽ thay nội dung file này.
 </script>
 
 <template>

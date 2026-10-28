@@ -32,21 +32,88 @@ function withDefaults(stored: Partial<ExtensionSettings>): ExtensionSettings {
     ...stored,
     apiBase: stored.apiBase?.trim() || DEFAULT_SETTINGS.apiBase,
     siteApiBase: stored.siteApiBase?.trim() || DEFAULT_SETTINGS.siteApiBase,
+    // `autoSubmit` phải là boolean THẬT: storage có thể bị sửa tay, và UI
+    // rollback về giá trị đã lưu ⇒ giá trị đó phải đúng kiểu.
+    autoSubmit: stored.autoSubmit === true,
   }
 }
 
-export async function readSettings(): Promise<ExtensionSettings> {
-  if (!hasChromeStorage()) return { ...DEFAULT_SETTINGS }
+/**
+ * Kết quả đọc setting — KHÔNG ném lỗi, và nói rõ đọc CÓ thành công hay không.
+ *
+ * Phân biệt "chưa lưu gì" với "đọc hỏng" là điều kiện tiên quyết: `false` là
+ * một giá trị HỢP LỆ của `autoSubmit`, nên nếu lần đọc hỏng bị đóng băng thành
+ * `false` thì opt-in đã lưu sẽ bị ghi đè trong im lặng.
+ */
+export type ReadSettingsResult =
+  | { ok: true; settings: ExtensionSettings }
+  | { ok: false; error: string }
+
+/**
+ * Đọc setting và BÁO CÁO thất bại thay vì nuốt.
+ *
+ * Đây là biến thể "nói thật" của `readSettings`: tầng UI cần biết mình đã
+ * thực sự đọc được gì để không đưa ra một giá trị bịa ra.
+ */
+export async function readSettingsResult(): Promise<ReadSettingsResult> {
+  if (!hasChromeStorage()) return { ok: true, settings: { ...DEFAULT_SETTINGS } }
   try {
     const stored = (await chrome.storage.sync.get(DEFAULT_SETTINGS)) as Partial<ExtensionSettings>
-    return withDefaults(stored)
+    return { ok: true, settings: withDefaults(stored) }
   } catch (e) {
-    // Storage bị chặn (policy) hoặc lỗi quota ⇒ dùng mặc định thay vì làm
-    // hỏng cả lần điền dữ liệu. Vẫn cảnh báo ra console: không có dấu vết thì
-    // không ai hiểu vì sao extension lại dùng base API mặc định.
-    console.warn('[manifest-autofill] could not read settings, using defaults', e)
-    return { ...DEFAULT_SETTINGS }
+    // Storage bị chặn (policy) hoặc lỗi quota. Vẫn cảnh báo ra console: không
+    // có dấu vết thì không ai hiểu vì sao extension lại không đọc được setting.
+    console.warn('[manifest-autofill] could not read settings', e)
+    return { ok: false, error: 'Could not read the settings.' }
   }
+}
+
+/**
+ * Đọc setting, lỗi thì dùng mặc định — KHÔNG ném.
+ *
+ * Content script dùng hàm này: lỗi ở đó chỉ được báo qua giá trị mặc định,
+ * vì hỏng cả lần điền dữ liệu còn tệ hơn việc điền bằng base API mặc định.
+ * Tầng UI dùng `readSettingsResult` để phân biệt được hai trường hợp.
+ */
+export async function readSettings(): Promise<ExtensionSettings> {
+  const outcome = await readSettingsResult()
+  return outcome.ok ? outcome.settings : { ...DEFAULT_SETTINGS }
+}
+
+/**
+ * Chuẩn hoá patch trước khi ghi.
+ *
+ * Quy tắc ép kiểu CHỈ nằm trong `withDefaults` — hàm này chỉ chọn ra những
+ * key có thật trong patch (để không đụng key khác) rồi lấy giá trị đã chuẩn
+ * hoá của chúng.
+ *
+ * Danh sách key lấy từ `DEFAULT_SETTINGS` ⇒ exhaustive BẰNG CẤU TRÚC: thêm
+ * setting mới vào interface thì không thể quên thêm vào đây. Nếu liệt kê tay,
+ * một setting mới sẽ bị BỎ QUA khi ghi — không lỗi, `saveSettings` vẫn báo
+ * thành công ⇒ mất setting trong im lặng.
+ */
+function normalizePatch(patch: Partial<ExtensionSettings>): Partial<ExtensionSettings> {
+  const normalized = withDefaults(patch)
+  const out: Partial<ExtensionSettings> = {}
+  for (const key of Object.keys(DEFAULT_SETTINGS) as (keyof ExtensionSettings)[]) {
+    if (patch[key] === undefined) continue
+    assign(out, key, normalized[key])
+  }
+  return out
+}
+
+/**
+ * Gán một key của `ExtensionSettings` mà vẫn giữ đúng kiểu của chính key đó.
+ *
+ * Cần hàm riêng vì `out[key] = value` với `key` là union thì TypeScript không
+ * đòi kiểm tra kiểu chéo giữa các key — `ExtensionSettings[K]` là đủ.
+ */
+function assign<K extends keyof ExtensionSettings>(
+  out: Partial<ExtensionSettings>,
+  key: K,
+  value: ExtensionSettings[K],
+): void {
+  out[key] = value
 }
 
 /**
@@ -61,6 +128,41 @@ export async function writeSettings(
   patch: Partial<ExtensionSettings>,
 ): Promise<ExtensionSettings> {
   const next = withDefaults({ ...(await readSettings()), ...patch })
-  if (hasChromeStorage()) await chrome.storage.sync.set(next)
+  if (hasChromeStorage()) {
+    // CHỈ ghi những key có trong patch.
+    //
+    // Nếu ghi toàn bộ settings, một lần đọc lỗi (storage bị chặn / quota)
+    // khiến `next` mang giá trị MẶC ĐỊNH cho apiBase/siteApiBase ⇒ ghi đè
+    // luôn base API tuỳ chỉnh của người dùng. Ghi patch ⇒ không đụng tới
+    // key nào khác.
+    await chrome.storage.sync.set(normalizePatch(patch))
+  }
   return next
+}
+
+/**
+ * Kết quả lưu setting — KHÔNG ném lỗi.
+ *
+ * `writeSettings` cố tình ném (xem JSDoc của nó): mất setting do người dùng
+ * chủ động thì phải báo. Tầng UI cần một biến thể trả về kết quả để tự
+ * quyết định hiển thị và có rollback hay không.
+ */
+export type SaveSettingsResult =
+  | { ok: true; settings: ExtensionSettings }
+  | { ok: false; error: string }
+
+/**
+ * Lưu setting mà KHÔNG ném lỗi — cho tầng UI.
+ *
+ * Chi tiết kỹ thuật nằm ở console; người dùng chỉ thấy câu tiếng Anh.
+ */
+export async function saveSettings(
+  patch: Partial<ExtensionSettings>,
+): Promise<SaveSettingsResult> {
+  try {
+    return { ok: true, settings: await writeSettings(patch) }
+  } catch (e) {
+    console.error('[manifest-autofill] could not save settings', e)
+    return { ok: false, error: 'Could not save the settings. Please try again.' }
+  }
 }
