@@ -1,3 +1,10 @@
+/**
+ * Biết ĐIỀN GÌ và ĐIỀU PHỐI việc điền.
+ *
+ * Module này quyết định điền field nào, điền theo thứ tự nào (mở dialog → điền →
+ * báo cáo) và trả về báo cáo cho người dùng. Từ vựng DOM của site (tìm section,
+ * nút, bảng, dialog…) nằm ở `site.ts`.
+ */
 import { nextFrame, sleep, waitFor } from './wait'
 import { readFieldValue, setFieldValue } from './dom'
 import { mapCargo, mapContainer, mapHeader, type FieldPlan, type MappingContext } from './mapping'
@@ -8,7 +15,6 @@ import {
   findButtonByText,
   findContainerAddButton,
   findContainerTable,
-  findDialogWithField,
   findManifestDialog,
   findNewCargoDialog,
   findReusedCargoDialog,

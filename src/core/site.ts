@@ -193,7 +193,7 @@ function ownOverlay(dialog: HTMLElement): HTMLElement | null {
  * KHÔNG coi "node bị gỡ khỏi DOM" là "đã đóng": node bị detach chỉ có nghĩa là
  * Vue đã thay thế element — site có thể dựng lại dialog sau khi từ chối lưu,
  * lúc đó node cũ detach nhưng dòng hàng CHƯA được lưu. Muốn biết dialog đã
- * đóng thì phải tra lại dialog HIỆN TẠI rồi hỏi nó (xem `currentDialog`).
+ * đóng thì phải tra lại dialog HIỆN TẠI rồi hỏi nó (xem `currentCargoDialog`).
  *
  * Không dùng `isVisible` của `select.ts`: hàm đó coi mọi phần tử là hiển thị khi
  * môi trường không có layout engine (jsdom) ⇒ không dùng để kiểm tra "dialog đã
@@ -308,7 +308,7 @@ export function findManifestDialog(root: ParentNode): HTMLElement | null {
 }
 
 /** Tìm dialog có chứa field `prop` (dùng để phân biệt dialog hàng với dialog đầu). */
-export function findDialogWithField(root: ParentNode, prop: string): HTMLElement | null {
+function findDialogWithField(root: ParentNode, prop: string): HTMLElement | null {
   const dialogs = Array.from(root.querySelectorAll<HTMLElement>('.el-dialog'))
   for (let i = dialogs.length - 1; i >= 0; i--) {
     const dialog = dialogs[i]!
