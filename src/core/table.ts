@@ -7,11 +7,17 @@ export interface TableHandles {
   bodyRows: HTMLElement[]
 }
 
-/** Đọc cấu trúc bảng (hỗ trợ cả `<table>` thật lẫn `el-table` của Element Plus). */
+/**
+ * Đọc cấu trúc bảng (hỗ trợ cả `<table>` thật lẫn `el-table` của Element Plus).
+ *
+ * Header của `el-table` có THÊM một ô `<th class="el-table__gutter">` khi bảng
+ * cuộn ngang, nhưng body KHÔNG có ô tương ứng ⇒ phải loại ô gutter, nếu
+ * không mọi chỉ số cột lệch sang phải một ô (箱号 sẽ ghi vào 尺寸).
+ */
 export function readTableHandles(table: HTMLElement): TableHandles {
   const headerCells = Array.from(
     table.querySelectorAll<HTMLElement>('thead th, .el-table__header th'),
-  )
+  ).filter((th) => !th.classList.contains('el-table__gutter'))
   const bodyRows = Array.from(
     table.querySelectorAll<HTMLElement>('tbody tr, .el-table__row'),
   ).filter((row) => !row.closest('thead'))

@@ -208,6 +208,75 @@ describe('fillManifest', () => {
     expect(report.items.filter((i) => i.status === 'warn')).toHaveLength(0)
     expect(report.ok).toBe(true)
   })
+
+  it('auto-submit được site nhận ⇒ không có cảnh báo', async () => {
+    buildHeaderForm()
+
+    const report = await fillManifest({ data, ctx, root: document, autoSubmit: true })
+
+    expect(report.items.some((i) => i.prop === 'SUBMIT')).toBe(false)
+    expect(report.ok).toBe(true)
+  })
+
+  it('site từ chối form (dialog vẫn mở) ⇒ báo cảnh báo, không báo thành công', async () => {
+    // 尺寸/箱型/箱状态 bị bỏ trống ⇒ site từ chối form, dialog không đóng.
+    buildHeaderForm({ keepDialogOpenOnSubmit: true })
+
+    const report = await fillManifest({ data, ctx, root: document, autoSubmit: true })
+
+    const submit = report.items.find((i) => i.prop === 'SUBMIT')
+    expect(submit?.status).toBe('warn')
+    expect(submit?.note).toContain('the site did not accept the form')
+    expect(submit?.note).toContain('尺寸')
+    expect(report.ok).toBe(false)
+  })
+
+  it('item "ok" của header vẫn mang note (mã mà site lưu cho 付款方式)', async () => {
+    buildHeaderForm()
+
+    const report = await fillManifest({ data, ctx, root: document })
+    const payWay = report.items.find((i) => i.prop === 'PAY_WAY_ID')
+
+    expect(payWay?.status).toBe('ok')
+    expect(payWay?.note).toContain('到付')
+    expect(payWay?.note).toContain('C')
+  })
+
+  it('không có nút 确定 ⇒ báo cảnh báo, không báo thành công', async () => {
+    // Không có nút ⇒ KHÔNG có gì được submit ⇒ tuyệt đối không báo "ok".
+    buildHeaderForm({ submitButton: 'missing' })
+
+    const report = await fillManifest({ data, ctx, root: document, autoSubmit: true })
+
+    const submit = report.items.find((i) => i.prop === 'SUBMIT')
+    expect(submit?.status).toBe('warn')
+    expect(submit?.note).toContain('确定')
+    expect(report.ok).toBe(false)
+  })
+
+  it('nút 确定 bị disable ⇒ báo cảnh báo, không báo thành công', async () => {
+    buildHeaderForm({ submitButton: 'disabled' })
+
+    const report = await fillManifest({ data, ctx, root: document, autoSubmit: true })
+
+    const submit = report.items.find((i) => i.prop === 'SUBMIT')
+    expect(submit?.status).toBe('warn')
+    expect(submit?.note).toContain('disabled')
+    expect(submit?.note).toContain('确定')
+    expect(report.ok).toBe(false)
+  })
+
+  it('nút 新增舱单信息 bị disable ⇒ báo lỗi rõ ràng, không điền gì', async () => {
+    buildHeaderForm({ addManifestDisabled: true })
+
+    const report = await fillManifest({ data, ctx, root: document })
+
+    expect(report.ok).toBe(false)
+    expect(report.message).toContain('disabled')
+    expect(report.message).toContain('新增舱单信息')
+    // Không có field nào được ghi ⇒ báo cáo rỗng.
+    expect(report.items).toHaveLength(0)
+  })
 })
 
 function reportItem(report: { items: Array<{ prop: string; status: string }> }, prop: string) {
