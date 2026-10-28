@@ -37,7 +37,9 @@ Người dùng nhập một **blNo** (số bill of lading) → extension gọi A
 | `GET getDrType/` | options 交货条款 (`DR_TYPE_STR`) |
 | `GET getPort/` | options 5 cảng (dây chuyền) |
 | `GET getCntrCode/` | options 箱型 / 尺寸 |
-| `GET getPackageCode/` | options 包装类型 |
+
+> Extension chỉ gọi **4** endpoint ở trên. `getPackageCode/` **không** được gọi: `PACKAGE_STR`
+> và `PACKAGE_COD` đều để trống (xem §4.2) ⇒ dict 包装 không có nơi dùng.
 
 ### 2.2 Nguồn dữ liệu
 
@@ -95,6 +97,8 @@ data
 │    4. mỗi cdCon    → bảng inline editable 9 field   │
 │    5. trả báo cáo                                   │
 │  core/dom.ts   — tìm field & đặt giá trị (Vue 3)    │
+│  core/site.ts  — từ vựng DOM của site (section/nút/ │
+│                  bảng/dialog, "ẩn hay hiện")        │
 │  core/mapping.ts — data → giá trị field (config)    │
 │  core/api.ts   — gọi dadaex, bóc envelope           │
 └─────────────────────────────────────────────────────┘
@@ -110,24 +114,28 @@ data
 | `core/api.ts` | Chuẩn hoá blNo, gọi API, bóc envelope, sinh lỗi có kiểu | — |
 | `core/mapping.ts` | `data` → `{formProp, value}[]` cho form đầu / hàng / container. **Mapping là dữ liệu (config), không hardcode trong code** | — |
 | `core/dom.ts` | Tìm control theo `prop`, đặt giá trị đúng kiểu Vue/Element Plus, chờ render | DOM |
-| `core/fill.ts` | Điều phối: mở dialog → điền form → thêm dòng bảng → sinh báo cáo | `dom`, `mapping` |
+| `core/site.ts` | Từ vựng DOM của site: tìm section, nút `新增`, bảng, dialog; hỏi "element này ẩn hay hiện" | DOM |
+| `core/fill.ts` | Điều phối: mở dialog → điền form → thêm dòng bảng → sinh báo cáo | `dom`, `mapping`, `site` |
 
-`core/options.ts` đọc/ghi `chrome.storage.sync` cho: API base URL, mapping override, giá trị mặc định.
+`core/options.ts` đọc/ghi `chrome.storage.sync` cho: API base URL, base URL của API dict của site, và cờ tự submit.
 
 ### 3.2 Trang Options
 
 Cho phép sửa (không cần build lại):
-- API base URL + endpoint.
-- Ghi đè mapping (formProp ↔ đường dẫn trong `data`) cho từng field.
-- Bật/tắt từng field trong báo cáo.
+- **Manifest data API** — base URL của API dadaex (mặc định `https://www.dadaex.cn/api/vn/insight/manifest`).
+- **Site dictionary API** — base path của 4 endpoint dict của site (mặc định `/api/booking/exportManifestDataMaintain`).
+- **Automatically click 确定 on the header form after filling** — mặc định **TẮT**.
 
-Cấu hình mặc định nằm trong `src/core/default-mapping.ts` (ship kèm extension).
+> **Không có** tuỳ chọn "tên cảng tiếng Trung / tiếng Anh": widget cảng của site chỉ có
+> tên tiếng Trung (`filter: "E_PORT_NAM"`), nên setting đó vô dụng và đã bị gỡ.
+> Mapping override theo field cũng không nằm trong phạm vi bản này — mapping là hằng
+> trong `src/core/mapping.ts`.
 
 ---
 
 ## 4. Bảng mapping (mặc định)
 
-### 4.1 Form đầu (36 field)
+### 4.1 Form đầu (28 field có nhãn + 5 field mã cảng)
 
 | Form prop | Label | Nguồn |
 |---|---|---|
@@ -135,7 +143,7 @@ Cấu hình mặc định nằm trong `src/core/default-mapping.ts` (ship kèm e
 | `E_SHIP_NAM` | 船名 | `data.shipName` |
 | `OUT_VOYAGE_NO` | 航次 | `data.voyage` |
 | `TRUST_COD` | 承运人代码 | `sea_order.sea_order_bind.supplyId` → tra `getTrustCode()` (xem rule bên dưới) |
-| `PAY_WAY_ID` | 付款方式 | `data.payType` → `"0"` khi `false`, `"1"` khi `true` (site không có endpoint dict riêng cho 付款方式 trong bundle) |
+| `PAY_WAY_ID` | 付款方式 | `data.payType` → `预付` (`P`) khi `true`, `到付` (`C`) khi `false` |
 | `DR_TYPE_STR` | 交货条款 | `data.transportTerms` → tra `getDrType()` |
 | `START_PORT_NAM` / `_COD` | 收货地（装货港） | `loadPortData.name` / `loadCode` |
 | `DISCHRG_PORT_NAM` / `_COD` | 卸货港 | `uploadPortData.name` / `uploadCode` |
@@ -153,10 +161,20 @@ Cấu hình mặc định nằm trong `src/core/default-mapping.ts` (ship kèm e
 |---|---|---|
 | `TRUST_COD` | `supplyId` khớp `id` của option trong `getTrustCode()`; nếu không có `id` thử khớp `code`/`value` bằng chính `supplyId` | ⚠️ báo "không tìm thấy 承运人 cho supplyId=X", để trống |
 | `DR_TYPE_STR` | `transportTerms` khớp `value`/`code` của option trong `getDrType()`; không có thì dùng luôn giá trị thô | ⚠️ báo, để trống |
-| `PAY_WAY_ID` | `payType` boolean → `"0"` / `"1"` | — |
-| 5 cảng | `*_NAM` = `portData.name` (tên tiếng Trung, vd `上海`), `*_COD` = `loadCode`/`uploadCode`/`aimPortCode` | ⚠️ nếu option không tồn tại trong `getPort()` |
+| `PAY_WAY_ID` | `payType` boolean → **nhãn** `预付` (`true`) / `到付` (`false`) | — |
+| 3 cảng | `*_NAM` = `portData.name` (tên tiếng Trung, vd `上海`), `*_COD` = `loadCode`/`uploadCode`/`aimPortCode` | ⚠️ nếu không tìm thấy suggestion |
 
-Tên cảng: mặc định lấy `name` (tiếng Trung). Nếu cần tiếng Anh thì đổi sang `nameEn` — cấu hình được trong Options (không cần build lại).
+> **Đã xác minh 2026-10-27 từ bundle của site** (xem
+> `docs/superpowers/plans/2026-10-27-live-site-alignment.md`):
+>
+> - 付款方式 là `el-select` với option **tĩnh**: `请选择` / `预付` (`P`) / `到付` (`C`) /
+>   `免费` (`F`). Adapter khớp option theo **text hiển thị** → phải trả **nhãn**, không
+>   phải mã.
+> - 5 field cảng + 提单签发地 là **`el-autocomplete`**, suggestion hiển thị dạng
+>   `名称/代码` (vd `上海/CNSHA`). Site tự điền `*_PORT_COD` khi suggestion được click
+>   (tách theo dấu `/` **cuối cùng**).
+> - Vì widget chỉ có tên tiếng Trung, **không có tuỳ chọn tên tiếng Anh** — setting
+>   `portNameField` đã bị gỡ khỏi thiết kế.
 
 **Cố ý để trống** (API không có, hoặc ngữ nghĩa không khớp):
 
@@ -170,19 +188,18 @@ Tên cảng: mặc định lấy `name` (tiếng Trung). Nếu cần tiếng Anh
 
 Mỗi field để trống sẽ xuất hiện trong báo cáo với nhãn ⚠️ *thiếu dữ liệu nguồn*.
 
-### 4.2 Bảng hàng — `cdgoods[]` (dialog 24 field)
+### 4.2 Bảng hàng — `cdgoods[]` (dialog 24 field, tiêu đề `货物信息`, nút lưu `保存`)
 
 | Form prop | Nguồn |
 |---|---|
-| `CARGO_KIND_COD` | suy ra: có `dangerClass` **và** `quarantineName` → `G`; chỉ `dangerClass` → `D`; chỉ `quarantineName` → `R`; không có → `S` |
+| `CARGO_KIND_COD` | suy ra: có `dangerClass` **và** `quarantineName` → `危险品+冷藏品`; chỉ `dangerClass` → `危险品`; chỉ `quarantineName` → `冷藏品`; không có → `普货` |
 | `CARGO_HS_COD` | `hscode` |
-| `PACKAGE_STR` / `PACKAGE_COD` | `unit` / `packType` |
-| `PIECE_NUM` | `amount` |
+| `PIECE_NUM` | `amount` — nhưng phải ghi **số nguyên** (`"114.000"` → `"114"`): rule `只允许整数` của site (`/^\d*$/`), không thì form bị từ chối với `请填必填表格` |
 | `GWEIGHT_TON` | `weight` |
 | `GVOL_NUM` | `volume` |
 | `NWEIGHT_TON` | `grossWeight` |
 | `E_CARGO_NAM` | `name` (trim khoảng trắng thừa) |
-| `MARK_STR` | `sign` (mặc định site là `N/M`) |
+| `MARK_STR` | `shantou` (fallback `sign`) — 唛头; dữ liệu thật có `shantou = "N/M"`, `sign = null` |
 | `DANG_CLASS_NAM` | `dangerClass` |
 | `DANG_UN_NO` | `unNub` |
 | `DANG_LABLE_STR` | `dangerCode` |
@@ -192,22 +209,43 @@ Mỗi field để trống sẽ xuất hiện trong báo cáo với nhãn ⚠️ 
 | `DANGER_EM_STR` | `exigencyEmail` |
 | `DANGER_FX_STR` | `exigencyFax` |
 
-Để trống: `DANG_PAGE_NO`, `DANG_EMS_NO`, `DANG_MFAG_NO`, `DANG_CONTACTSTR`, `TEMP_ID`, `SET_TEMP_NUM`.
+Để trống: `DANG_PAGE_NO`, `DANG_EMS_NO`, `DANG_MFAG_NO`, `DANG_CONTACTSTR`, `TEMP_ID`,
+`SET_TEMP_NUM`, `PACKAGE_STR`, `PACKAGE_COD`.
+
+> **Đã xác minh 2026-10-27 từ bundle của site** (xem
+> `docs/superpowers/plans/2026-10-27-live-site-alignment.md`, FACT 5):
+>
+> - `CARGO_KIND_COD` là `el-select` với option **tĩnh** `普货` / `危险品` / `冷藏品` /
+>   `危险品+冷藏品` (mã `S`/`D`/`R`/`G`) → adapter khớp theo **text**, nên phải trả nhãn.
+> - `PACKAGE_STR` + `PACKAGE_COD` là **2 `el-autocomplete`**, suggestion dạng `名称/代码`.
+>   API không có *包装类型 thật* (`unit` chỉ là `"PACKAGES"`, `packType` = `null`) và
+>   `PACKAGE_COD` bắt buộc đúng 2 ký tự → **để trống**, người dùng tự chọn.
+> - Nút lưu của dialog là **`保存`** (không phải `确定`).
 
 ### 4.3 Bảng container — `cdCon[]` (bảng inline editable, 9 field)
 
 | Form prop | Nguồn |
 |---|---|
 | `CNTR_NO` | `boxNub` |
-| `CNTR_SIZE_COD` | `vC` → dict `getCntrCode().cntr_size` |
-| `CNTR_TYPE_COD` | `cType` → dict `getCntrCode().cntr_type` |
 | `SEAL_NO` | `sealNUb` |
 | `PIECE_NUM` | `amount` |
 | `WEIGH_TON` | `weight` |
 | `VOLUME_NUM` | `volume` |
-| `SOC_ID` | `self` ? `1` : `0` |
+| `SOC_ID` | `self` ? `货主箱` : `非货主箱` (site lưu mã `Y` / `N`) |
 
-Để trống: `CNTR_EF_ID` (箱状态).
+Để trống: `CNTR_SIZE_COD` (尺寸), `CNTR_TYPE_COD` (箱型), `CNTR_EF_ID` (箱状态).
+
+> **Đã xác minh 2026-10-27 từ bundle của site** (FACT 6):
+>
+> - 4 cột là `el-select` (`CNTR_SIZE_COD`, `CNTR_TYPE_COD`, `CNTR_EF_ID`, `SOC_ID`),
+>   5 cột còn lại là `el-input`.
+> - `SOC_ID` phải ghi **nhãn** `货主箱` / `非货主箱` (site lưu mã `Y`/`N`), không phải
+>   `'1'`/`'0'` cũng không phải mã thô — adapter khớp option theo **text hiển thị**.
+> - Dict `getCntrCode/` trả **chuỗi thuần** (`"40"`, `"HQ"`) — **không có `id`** ⇒
+>   `vC`/`cType` (mã số của API) **không tra được** ra 尺寸/箱型 ⇒ để trống.
+> - Nút thêm dòng là `新增` và **chèn dòng mới vào index 0** (đầu bảng).
+> - Cả 3 field để trống đều là field **bắt buộc** của site → ghi chú phải nói rõ người
+>   dùng cần tự chọn trên trang.
 
 ---
 
@@ -249,20 +287,31 @@ mà nhận diện lúc chạy.
 
 | Phát hiện trong DOM | Chiến lược |
 |---|---|
-| `input` / `textarea` (kể cả nằm trong component tuần biến) | native setter + `input`/`change`/`blur` (§5.2) |
 | Có `.el-select` bên trong | Mở dropdown → chờ option → click option khớp (xem bên dưới) |
-| Có `input[readonly]` + popper tự dựng | Click để mở popper → gõ vào ô lọc → chờ → click phần tử khớp trong popper |
+| Có `.el-autocomplete` bên trong | Gõ tên cảng vào input → chờ suggestion → click suggestion `名称/代码` (xem bên dưới) |
+| `input[readonly]` + popper tự dựng | Click để mở popper → gõ vào ô lọc → chờ → click phần tử khớp trong popper |
+| `input` / `textarea` | native setter + `input`/`change`/`blur` (§5.2) |
 | Có `.el-cascader` | Click → chọn lần lượt theo từng cấp |
 
 **Cách chọn option (dùng chung cho mọi loại dropdown):**
-1. Tra option list từ API dict của site (`getTrustCode`, `getDrType`, `getPort`, `getCntrCode`, `getPackageCode`) — dùng chung session, không cần token riêng.
+1. Tra option list từ API dict của site (`getTrustCode`, `getDrType`, `getPort`, `getCntrCode`) — dùng chung session, không cần token riêng.
 2. Click control để mở dropdown (Element Plus render popper ra `body`, không nằm trong form).
 3. Tìm phần tử option theo nhiều selector phổ biến: `.el-select-dropdown__item`, `.el-cascader-node`, `[role="option"]`, `.el-popper li`.
-4. Click option khớp **text** (khớp chính xác trước, khớp chứa sau).
+4. Click option khớp **text** (khớp chính xác trước, khớp **tiều tố** sau, khớp chứa cuối cùng).
 5. Nếu control có ô filter (`input` bên trong popper hoặc `filterable`), gõ giá trị cần tìm để lọc rồi mới click.
 6. Không tìm thấy option → ⚠️ báo kèm giá trị cần tìm, bỏ qua field (không click bừa).
 
-Các cảng có phụ thuộc dây chuyền (`signPlace → startPort → dischrgPort → transPort → destPort`) → điền đúng thứ tự, chờ render sau mỗi bước.
+**Riêng `el-autocomplete` của 5 field cảng:**
+1. Gõ **tên cảng tiếng Trung** vào input (site lọc `E_PORT_NAM LIKE '%kw%'` — **không** gõ
+   cả `名称/代码`, nếu không sẽ không ra suggestion nào).
+2. Chờ popper suggestion (`.el-popper` chứa `ul.el-autocomplete-suggestion > li`).
+3. Click suggestion có text `名称/代码` (khớp chính xác `matchValue` trước, rồi tới tiều tố
+   tên cảng).
+4. Site tự cascade `*_PORT_COD` → extension đọc lại `*_PORT_COD` để verify.
+
+**Sửa chọn dropdown cũ:** Element Plus giữ dropdown đã đóng trong DOM (ẩn, không unmount)
+và Vue flush DOM trên microtask → phải **chỉ** dùng dropdown vừa mở (qua `aria-controls`,
+hoặc dropdown mới nhất trong DOM), tuyệt đối không click vào dropdown đang ẩn.
 
 **Xác nhận bằng DOM thật:** trước khi viết adapter cho field cảng, cần chạy 1 lần DOM dump trên dialog
 **新增舱单信息** (xem §8) để chốt cấu trúc popper của component tuần biến. Đây là bước xác minh
@@ -371,9 +420,11 @@ manifest-huagang/
 │   │   └── fill.ts             điều phối (nằm trong core)
 │   ├── core/
 │   │   ├── api.ts
+│   │   ├── site-api.ts         dict của site (4 endpoint)
 │   │   ├── mapping.ts
 │   │   ├── default-mapping.ts
 │   │   ├── dom.ts
+│   │   ├── site.ts             từ vựng DOM của site
 │   │   ├── fill.ts
 │   │   ├── wait.ts             nextFrame, waitFor
 │   │   └── types.ts
