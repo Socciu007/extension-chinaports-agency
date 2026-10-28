@@ -23,6 +23,8 @@ export interface FieldPlan {
   verify?: { prop: string; note: string }
   /** nhãn tiếng Trung của cột, dùng khi điền bảng inline */
   columnLabel?: string
+  /** site BẮT BUỘC có field này — nếu bỏ trống thì manifest không submit được */
+  required?: boolean
 }
 
 export interface MappingContext {
@@ -269,6 +271,14 @@ const REQUIRED_DANGER: readonly string[] = [
 ]
 const REQUIRED_COLD: readonly string[] = ['TEMP_ID', 'SET_TEMP_NUM']
 
+/** Field BẮT BUỘC của site trong bảng container (FACT 5.3). */
+const REQUIRED_CONTAINER: readonly string[] = [
+  'CNTR_SIZE_COD',
+  'CNTR_TYPE_COD',
+  'CNTR_EF_ID',
+  'SOC_ID',
+]
+
 const REQUIRED_BY_KIND: Record<CargoKind, readonly string[]> = {
   S: REQUIRED_BASE,
   D: [...REQUIRED_BASE, ...REQUIRED_DANGER],
@@ -349,9 +359,17 @@ export function mapCargo(goods: ManifestCargo): FieldPlan[] {
         label,
         status: 'skip',
         note: options.skipNote ?? skippedNote(prop, label, kind, required),
+        required: required.has(prop),
       })
     } else {
-      plans.push({ prop, label, status: 'fill', value: v, note: options.fillNote })
+      plans.push({
+        prop,
+        label,
+        status: 'fill',
+        value: v,
+        note: options.fillNote,
+        required: required.has(prop),
+      })
     }
   }
 
@@ -362,6 +380,7 @@ export function mapCargo(goods: ManifestCargo): FieldPlan[] {
     status: 'fill',
     value: kindLabel,
     note: `The site stores the code "${kind}" for "${kindLabel}"`,
+    required: true,
   })
 
   push('CARGO_HS_COD', 'HS编码', goods.hscode)
@@ -445,6 +464,7 @@ export function mapContainer(
         status: 'skip',
         note: options.skipNote ?? 'The API provides no data for this field',
         columnLabel,
+        required: REQUIRED_CONTAINER.includes(prop),
       })
     } else {
       plans.push({
@@ -454,6 +474,7 @@ export function mapContainer(
         value: v,
         note: options.fillNote,
         columnLabel,
+        required: REQUIRED_CONTAINER.includes(prop),
       })
     }
   }

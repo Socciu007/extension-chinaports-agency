@@ -53,6 +53,11 @@ export interface FillItem {
    */
   row?: number
   note?: string
+  /**
+   * site BẮT BUỘC có field này — bỏ trống thì manifest không submit được.
+   * `skip` ở field bắt buộc ⇒ `ok` của cả lần điền là `false`.
+   */
+  required?: boolean
 }
 
 export interface FillReport {
@@ -93,6 +98,7 @@ export async function fillPlans(
         status: 'skip',
         row,
         note: plan.note,
+        required: plan.required,
       })
       // Nhánh skip không đụng DOM ⇒ không cần chờ frame (17/24 plan của hàng là skip).
       continue
@@ -111,6 +117,7 @@ export async function fillPlans(
         status: result.strategy === 'text' ? 'error' : 'warn',
         row,
         note: result.reason,
+        required: plan.required,
       })
       await nextFrame()
       continue
@@ -126,6 +133,7 @@ export async function fillPlans(
           status: 'warn',
           row,
           note: plan.verify.note,
+          required: plan.required,
         })
         await nextFrame()
         continue
@@ -134,7 +142,15 @@ export async function fillPlans(
 
     // `ok` cũng mang note: ví dụ "The site stores the code \"P\" for \"预付\"" để
     // người dùng đối chiếu mã mà site lưu.
-    items.push({ scope, prop: plan.prop, label: plan.label, status: 'ok', row, note: plan.note })
+    items.push({
+      scope,
+      prop: plan.prop,
+      label: plan.label,
+      status: 'ok',
+      row,
+      note: plan.note,
+      required: plan.required,
+    })
     await nextFrame()
   }
 
@@ -627,6 +643,7 @@ export async function fillContainerRows(
             status: 'skip',
             row: rowNo,
             note: plan.note,
+            required: plan.required,
           })
           continue
         }
@@ -641,6 +658,7 @@ export async function fillContainerRows(
             status: 'error',
             row: rowNo,
             note: `Could not find the column "${columnLabel}" in the table`,
+            required: plan.required,
           })
           continue
         }
@@ -656,6 +674,7 @@ export async function fillContainerRows(
             status: 'error',
             row: rowNo,
             note: `Could not find the cell of the column "${columnLabel}"`,
+            required: plan.required,
           })
           continue
         }
@@ -670,6 +689,7 @@ export async function fillContainerRows(
           row: rowNo,
           // `ok` cũng mang note (ví dụ mã mà site lưu cho 货主箱标志).
           note: result.ok ? plan.note : result.reason,
+          required: plan.required,
         })
         await nextFrame()
       }
@@ -837,6 +857,12 @@ export async function fillManifest(options: FillOptions): Promise<FillReport> {
     cargoRows: cargo.rows,
     containerRows: container.rows,
     // `ok` = mọi thứ định ghi đều đã ghi được; `warn`/`error` đều cần người dùng xử lý.
-    ok: items.every((i) => i.status === 'ok' || i.status === 'skip'),
+    //
+    // `skip` chỉ được coi là ổn khi site KHÔNG bắt buộc field đó.
+    // Field site bắt buộc mà API không có (包装类型/代码, 尺寸, 箱型, 箱状态…)
+    // ⇒ manifest không thể submit ⇒ `ok` phải là false.
+    ok: items.every(
+      (i) => i.status === 'ok' || (i.status === 'skip' && !i.required),
+    ),
   }
 }

@@ -161,7 +161,10 @@ describe('fillManifest', () => {
     expect(
       (document.getElementById('el-id-x-E_SHIP_NAM') as HTMLInputElement).value,
     ).toBe('CALLAO BRIDGE')
-    expect(report.ok).toBe(true)
+    // Site BẮT BUỘC có 包装类型/代码 nhưng API không có ⇒ không thể submit
+    // ⇒ báo cáo không được claim là thành công.
+    expect(report.items.some((i) => i.prop === 'PACKAGE_STR' && i.required)).toBe(true)
+    expect(report.ok).toBe(false)
   })
 
   it('báo lỗi khi dialog không mở trong 5 giây', async () => {
@@ -188,7 +191,8 @@ describe('fillManifest', () => {
 
     expect(hiddenClicks).toBe(0)
     expect(document.getElementById('manifest-dialog')).not.toBeNull()
-    expect(report.ok).toBe(true)
+    expect(report.items.some((i) => i.prop === 'PACKAGE_STR' && i.required)).toBe(true)
+    expect(report.ok).toBe(false)
   })
 
   it('tìm nút theo text chính xác và ưu tiên nút đang hiển thị', () => {
@@ -200,22 +204,41 @@ describe('fillManifest', () => {
     expect(findButtonByText('新增舱单信息')?.id).toBe('visible')
   })
 
-  it('báo cáo tổng hợp không có lỗi và không có cảnh báo', async () => {
+  it('báo cáo tổng hợp không có lỗi và không có cảnh báo, nhưng field bắt buộc bị bỏ trống ⇒ chưa thành công', async () => {
     buildHeaderForm()
 
     const report = await fillManifest({ data, ctx, root: document })
 
     expect(report.items.filter((i) => i.status === 'error')).toHaveLength(0)
     expect(report.items.filter((i) => i.status === 'warn')).toHaveLength(0)
-    expect(report.ok).toBe(true)
+    // Không lỗi, không cảnh báo — nhưng 包装类型/代码 và 尺寸/箱型/箱状态 của site
+    // vẫn trống ⇒ manifest KHÔNG submit được ⇒ `ok` phải là false.
+    const blocked = report.items.filter((i) => i.status === 'skip' && i.required)
+    expect(blocked.map((i) => i.prop)).toContain('PACKAGE_STR')
+    expect(blocked.map((i) => i.prop)).toContain('CNTR_SIZE_COD')
+    expect(report.ok).toBe(false)
   })
 
-  it('auto-submit được site nhận ⇒ không có cảnh báo', async () => {
+  it('auto-submit: site nhận form nhưng field bắt buộc còn trống ⇒ vẫn chưa thành công', async () => {
     buildHeaderForm()
 
     const report = await fillManifest({ data, ctx, root: document, autoSubmit: true })
 
     expect(report.items.some((i) => i.prop === 'SUBMIT')).toBe(false)
+    expect(report.items.some((i) => i.prop === 'PACKAGE_STR' && i.required)).toBe(true)
+    expect(report.ok).toBe(false)
+  })
+
+  it('không có field bắt buộc nào bị bỏ trống ⇒ báo thành công', async () => {
+    buildHeaderForm()
+
+    // Manifest không có dòng hàng, không có container ⇒ không field BẮT BUỘC nào
+    // bị skip ⇒ `ok` phải là true. Test này bảo đảm predicate của `ok` không
+    // luôn trả false (nếu vậy thì 4 test trên vẫn xanh).
+    const empty: ManifestData = { ...data, cdgoods: [], cdCon: [] }
+    const report = await fillManifest({ data: empty, ctx, root: document })
+
+    expect(report.items.filter((i) => i.status === 'skip' && i.required)).toHaveLength(0)
     expect(report.ok).toBe(true)
   })
 
