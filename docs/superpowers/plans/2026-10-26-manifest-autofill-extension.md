@@ -7953,7 +7953,7 @@ function ownOverlay(dialog: HTMLElement): HTMLElement | null {
  * KHÔNG coi "node bị gỡ khỏi DOM" là "đã đóng": node bị detach chỉ có nghĩa là
  * Vue đã thay thế element — site có thể dựng lại dialog sau khi từ chối lưu,
  * lúc đó node cũ detach nhưng dòng hàng CHƯA được lưu. Muốn biết dialog đã
- * đóng thì phải tra lại dialog HIỆN TẠI rồi hỏi nó (xem `currentDialog`).
+ * đóng thì phải tra lại dialog HIỆN TẠI rồi hỏi nó (xem `currentCargoDialog`).
  *
  * Không dùng `isVisible` của `select.ts`: hàm đó coi mọi phần tử là hiển thị khi
  * môi trường không có layout engine (jsdom) ⇒ không dùng để kiểm tra "dialog đã
@@ -8068,7 +8068,7 @@ export function findManifestDialog(root: ParentNode): HTMLElement | null {
 }
 
 /** Tìm dialog có chứa field `prop` (dùng để phân biệt dialog hàng với dialog đầu). */
-export function findDialogWithField(root: ParentNode, prop: string): HTMLElement | null {
+function findDialogWithField(root: ParentNode, prop: string): HTMLElement | null {
   const dialogs = Array.from(root.querySelectorAll<HTMLElement>('.el-dialog'))
   for (let i = dialogs.length - 1; i >= 0; i--) {
     const dialog = dialogs[i]!
@@ -8085,6 +8085,23 @@ export function findDialogWithField(root: ParentNode, prop: string): HTMLElement
  */
 export function snapshotDialogs(): Set<HTMLElement> {
   return new Set(Array.from(document.querySelectorAll<HTMLElement>('.el-dialog')))
+}
+
+/**
+ * Các dialog đang **ẩn** lúc chụp ảnh.
+ *
+ * Cần để phân biệt hai ca mà nhìn giống nhau lúc chờ dialog:
+ * - site DÙNG LẠI một element đã mount sẵn (trước đó ẩn, giờ hiện lại) ⇒ đó
+ *   là dialog site mở cho dòng này;
+ * - dialog ĐÃ hiện sẵn trước khi bấm 新增 (dialog của dòng trước, hoặc do
+ *   người dùng tự mở) ⇒ tuyệt đối không ghi đè.
+ */
+export function snapshotHiddenDialogs(): Set<HTMLElement> {
+  const hidden = new Set<HTMLElement>()
+  for (const dialog of document.querySelectorAll<HTMLElement>('.el-dialog')) {
+    if (isHidden(dialog)) hidden.add(dialog)
+  }
+  return hidden
 }
 
 /**
@@ -8122,10 +8139,37 @@ export function currentCargoDialog(): HTMLElement | null {
  * trước, ghi vào đó là ghi đè dòng trước.
  */
 export function findVisibleCargoDialog(): HTMLElement | null {
+  const shown = visibleCargoDialogs()
+  const last = shown[shown.length - 1]
+  if (!last) return null
+  const name = last.querySelector<HTMLInputElement>('input[id$="-E_CARGO_NAM"]')
+  return (name?.value ?? '') === '' ? last : null
+}
+
+/** Các dialog hàng đang hiện (có field E_CARGO_NAM). */
+function visibleCargoDialogs(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>('.el-dialog')).filter(
+    (d) =>
+      d.querySelector('input[id$="-E_CARGO_NAM"], textarea[id$="-E_CARGO_NAM"]') &&
+      !isHidden(d),
+  )
+}
+
+/**
+ * Dialog hàng mà site DÙNG LẠI một element đã mount sẵn (không tạo node mới).
+ *
+ * Chỉ nhận dialog **trước đây đang ẩn** và **giờ đã hiện**: đó là duy nhất
+ * chứng cứ cho thấy site vừa hiện nó lên cho dòng này. Dialog ĐÃ hiện sẵn trước
+ * khi bấm 新增 là dialog của dòng trước, hoặc do người dùng tự mở ⇒ tuyệt đối
+ * không ghi đè.
+ *
+ * Form phải TRỐNG: còn dữ liệu của dòng trước ⇒ đó là dialog của dòng trước.
+ */
+export function findReusedCargoDialog(beforeHidden: Set<HTMLElement>): HTMLElement | null {
   const dialogs = Array.from(document.querySelectorAll<HTMLElement>('.el-dialog')).filter((d) =>
     d.querySelector('input[id$="-E_CARGO_NAM"], textarea[id$="-E_CARGO_NAM"]'),
   )
-  const shown = dialogs.filter((d) => !isHidden(d))
+  const shown = dialogs.filter((d) => beforeHidden.has(d) && !isHidden(d))
   const last = shown[shown.length - 1]
   if (!last) return null
   const name = last.querySelector<HTMLInputElement>('input[id$="-E_CARGO_NAM"]')
@@ -8166,15 +8210,16 @@ import {
   findButtonByText,
   findContainerAddButton,
   findContainerTable,
-  findDialogWithField,
   findManifestDialog,
   findNewCargoDialog,
+  findReusedCargoDialog,
   findTableBySectionTitle,
   findVisibleCargoDialog,
   isDisabled,
   isHidden,
   isReusableCargoDialog,
   snapshotDialogs,
+  snapshotHiddenDialogs,
 } from './site'
 import { findColumnIndex, getCell, readTableHandles, setCellValue } from './table'
 ```
@@ -8183,7 +8228,7 @@ import { findColumnIndex, getCell, readTableHandles, setCellValue } from './tabl
 
 - [ ] **Step 3: Sửa `src/core/fill.ts` — xoá các hàm đã chuyển sang `site.ts`**
 
-Xoá hẳn (kể cả doc comment phía trên) **21 hàm** sau khỏi `src/core/fill.ts`:
+Xoá hẳn (kể cả doc comment phía trên) **28 hàm** sau khỏi `src/core/fill.ts`:
 
 `findButtonByText`, `titleMatches`, `findTitleElement`, `precedes`,
 `sectionOf`, `findAddButtons`, `pickBestButton`, `findAddButtonBySectionTitle`,
@@ -8191,7 +8236,8 @@ Xoá hẳn (kể cả doc comment phía trên) **21 hàm** sau khỏi `src/core/
 `tableHeaderTexts`, `sectionTableRoot`, `findContainerTable`,
 `findTableBySectionTitle`, `countGoodsListRows`, `findContainerAddButton`,
 `findManifestDialog`, `findDialogWithField`, `snapshotDialogs`,
-`findNewCargoDialog`, `currentCargoDialog`, `findVisibleCargoDialog`,
+`snapshotHiddenDialogs`, `findNewCargoDialog`, `currentCargoDialog`,
+`findVisibleCargoDialog`, `visibleCargoDialogs`, `findReusedCargoDialog`,
 `isReusableCargoDialog`.
 
 Hai hằng số `CONTAINER_SECTION_TITLES` và `CONTAINER_TABLE_COLUMN` đi theo
@@ -8241,7 +8287,7 @@ import { findButtonByText } from '../src/core/site'
 - [ ] **Step 5: Chạy test — phải PASS y hệt, không test nào đổi**
 
 Run: `npm test`
-Expected: **11 file / 221 test PASS** — đúng bằng trước khi tách. Một test nào
+Expected: **11 file / 224 test PASS** — đúng bằng trước khi tách. Một test nào
 đổi từ PASS sang FAIL (hoặc ngược lại) ⇒ đã đổi hành vi ⇒ phải sửa lại cho
 khớp, không được "chỉnh" test cho qua.
 
