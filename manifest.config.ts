@@ -6,8 +6,6 @@ export default defineManifest({
   name: 'Manifest Autofill — 预配舱单',
   description:
     'Autofill 预配舱单 (manifest) data on China Ports from the dadaex API.',
-  // Chrome chỉ chấp nhận version là 1-4 số nguyên ngăn cách bằng dấu chấm.
-  // `npm version prerelease` sinh ra "0.1.0-beta.0" khiến extension fail to load.
   version: pkg.version.split('-')[0] ?? '0.0.0',
   version_name: pkg.version,
   icons: {
