@@ -236,14 +236,14 @@ function overlayHtml(dialogHtml: string): string {
 }
 
 /** Ẩn dialog đúng như Element Plus: ẩn OVERLAY của nó, không ẩn `.el-dialog`. */
-function hideDialog(dialog: HTMLElement): void {
+export function hideDialog(dialog: HTMLElement): void {
   const overlay = dialog.closest<HTMLElement>('.el-overlay')
   if (overlay) overlay.style.display = 'none'
   else dialog.style.display = 'none'
 }
 
 /** Hiện lại dialog (overlay của nó). */
-function showDialog(dialog: HTMLElement): void {
+export function showDialog(dialog: HTMLElement): void {
   const overlay = dialog.closest<HTMLElement>('.el-overlay')
   if (overlay) overlay.style.display = 'block'
   else dialog.style.display = 'block'
@@ -657,6 +657,24 @@ export function wireCargoAdd(options: CargoDialogOptions = {}): void {
 export function buildCargoDialog(options: CargoDialogOptions = {}): HTMLElement {
   resetClicks()
   return createCargoDialog(options)
+}
+
+/**
+ * Dialog hàng ĐÃ mount sẵn nhưng đang ẩn — biến thể "site dùng lại một
+ * element đã mount sẵn" (site hiện lại ĐÚNG element cũ, không mount node mới).
+ *
+ * Đây là ca mà nhìn giống hệt "không có dialog mới nào xuất hiện": sau khi
+ * bấm 新增 mà không thấy node nào mới thì chỉ có thể là site đang hiện lại
+ * element cũ ⇒ extension phải nhận ra nó (chụp ảnh dialog đang ẩn TRƯỚC khi
+ * bấm, rồi so với lúc chờ dialog).
+ *
+ * Dialog trả về đang ẨN — dùng `showDialog` để mô phỏng site hiện lại nó.
+ */
+export function buildPreMountedCargoDialog(options: CargoDialogOptions = {}): HTMLElement {
+  resetClicks()
+  const dialog = createCargoDialog(options)
+  hideDialog(dialog)
+  return dialog
 }
 
 /** Tuỳ chọn của section 箱信息 (bảng container). */
