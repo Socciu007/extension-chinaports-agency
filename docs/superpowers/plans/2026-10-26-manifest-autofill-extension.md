@@ -9552,67 +9552,154 @@ git commit src/core/protocol.ts src/core/options.ts src/content/index.ts tests/o
 **Files:**
 - Modify: `src/popup/App.vue`
 - Create: `src/popup/styles.css`
+- Modify: `src/core/options.ts` — `readSettingsResult` / `saveSettings` / `normalizePatch`
+- Modify: `src/core/report.ts` — câu thông báo trung lập về nguyên nhân
+- Create: `tests/popup.test.ts`
+- Modify: `tests/options.test.ts`, `tests/report.test.ts`, `tests/http.test.ts`
+- Modify: `package.json`, `package-lock.json`, `vitest.config.ts`
 
-- [ ] **Step 1: Tạo `src/popup/styles.css`**
+> **Vì sao task này đụng cả `src/core/` chứ không chỉ popup:** popup là nơi
+> **hiển thị** setting, mà `readSettings()` cũ nuốt lỗi ⇒ popup không phân
+> biệt được "chưa lưu gì" với "đọc hỏng" ⇒ gửi `autoSubmit: false` đè lên
+> opt-in đã lưu. Sửa tận gốc ở `options.ts` thì Task 16 (options page) cũng
+> được dùng luôn.
+
+- [ ] **Step 1: Test tooling cho component Vue**
+
+Popup là component Vue ⇒ cần mount được trong test. Thêm devDependency và
+bật plugin `vue` cho Vitest:
+
+```bash
+npm i -D @vue/test-utils
+```
+
+```ts
+// vitest.config.ts
+import { defineConfig } from 'vitest/config'
+import vue from '@vitejs/plugin-vue'
+
+export default defineConfig({
+  plugins: [vue()],
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    include: ['tests/**/*.test.ts'],
+    testTimeout: 20000,
+  },
+})
+```
+
+> Lưu ý khi test component: `flushPromises()` của `@vue/test-utils` dùng
+> `setImmediate`, mà Vitest cũng fake `setImmediate` ⇒ **treo** dưới fake
+> timer. Test nào cần timer thì dùng `vi.useFakeTimers()` +
+> `vi.advanceTimersByTimeAsync(...)`, không dùng `flushPromises()`.
+
+- [ ] **Step 2: `src/core/options.ts` — phân biệt "chưa lưu" với "đọc hỏng"**
+
+`readSettings()` cũ nuốt mọi lỗi đọc và trả về mặc định ⇒ tầng UI coi
+"đọc hỏng" là "setting = false". Thêm biến thể **báo cáo** thất bại, và xây
+`readSettings()` trên đó (content script vẫn cần hàm nuốt lỗi):
+
+```ts
+/**
+ * Kết quả đọc setting — KHÔNG ném lỗi, và nói rõ đọc CÓ thành công hay không.
+ *
+ * Phân biệt "chưa lưu gì" với "đọc hỏng" là điều kiện tiên quyết: `false` là
+ * một giá trị HỢP LỆ của `autoSubmit`, nên nếu lần đọc hỏng bị đóng băng thành
+ * `false` thì opt-in đã lưu sẽ bị ghi đè trong im lặng.
+ */
+export type ReadSettingsResult =
+  | { ok: true; settings: ExtensionSettings }
+  | { ok: false; error: string }
+
+export async function readSettingsResult(): Promise<ReadSettingsResult> {
+  if (!hasChromeStorage()) return { ok: true, settings: { ...DEFAULT_SETTINGS } }
+  try {
+    const stored = (await chrome.storage.sync.get(DEFAULT_SETTINGS)) as Partial<ExtensionSettings>
+    return { ok: true, settings: withDefaults(stored) }
+  } catch (e) {
+    console.warn('[manifest-autofill] could not read settings', e)
+    return { ok: false, error: 'Could not read the settings.' }
+  }
+}
+
+export async function readSettings(): Promise<ExtensionSettings> {
+  const outcome = await readSettingsResult()
+  return outcome.ok ? outcome.settings : { ...DEFAULT_SETTINGS }
+}
+```
+
+`writeSettings()` **ghi patch-only** (không ghi toàn bộ settings) và
+`normalizePatch` dùng CHUNG quy tắc với `withDefaults` ⇒ giá trị ghi xuống
+storage không bao giờ lệch với giá trị đọc lên:
+
+```ts
+function normalizePatch(patch: Partial<ExtensionSettings>): Partial<ExtensionSettings> {
+  const normalized = withDefaults(patch)
+  const out: Partial<ExtensionSettings> = {}
+  for (const key of Object.keys(DEFAULT_SETTINGS) as (keyof ExtensionSettings)[]) {
+    if (patch[key] === undefined) continue
+    assign(out, key, normalized[key])
+  }
+  return out
+}
+
+function assign<K extends keyof ExtensionSettings>(
+  out: Partial<ExtensionSettings>,
+  key: K,
+  value: ExtensionSettings[K],
+): void {
+  out[key] = value
+}
+```
+
+> Danh sách key lấy từ `DEFAULT_SETTINGS` ⇒ **exhaustive bằng cấu trúc**. Liệt
+> kê tay thì một setting mới sẽ bị **bỏ qua** khi ghi — không lỗi,
+> `saveSettings` vẫn báo thành công ⇒ mất setting trong im lặng.
+
+`saveSettings()` là biến thể **không ném** cho tầng UI (lưu setting do người
+dùng chủ động làm thì mất phải báo, không được im lặng):
+
+```ts
+export type SaveSettingsResult =
+  | { ok: true; settings: ExtensionSettings }
+  | { ok: false; error: string }
+
+export async function saveSettings(
+  patch: Partial<ExtensionSettings>,
+): Promise<SaveSettingsResult> {
+  try {
+    return { ok: true, settings: await writeSettings(patch) }
+  } catch (e) {
+    console.error('[manifest-autofill] could not save settings', e)
+    return { ok: false, error: 'Could not save the settings. Please try again.' }
+  }
+}
+```
+
+- [ ] **Step 3: `src/core/report.ts` — câu thông báo không bịa nguyên nhân**
+
+`blockingFields()` giữ nguyên điều kiện lọc (`required === true && status !== 'ok'`)
+⇒ `skip` bắt buộc vẫn chặn, `skip` không bắt buộc vẫn không chặn. Chỉ đổi câu
+thông báo: nguyên nhân khác nhau theo `status` (`skip` = API không có dữ liệu,
+`warn` = site không cascade được, `error` = site từ chối) nên lý do cụ thể
+phải nằm ở `note` của từng item, không gộp về một lý do chung:
+
+```ts
+return (
+  `The site requires ${blocking.length} field(s) that could not be filled in: ` +
+  `${names}. See the note under each field for the reason, then complete them on the page.`
+)
+```
+
+- [ ] **Step 4: `src/popup/styles.css`**
+
+Ngoài CSS gốc của task, thêm `.settings-error` (dùng chung style với `.error`)
+và `.blocking-note` (ghi chú dưới từng field bị chặn):
 
 ```css
-:root {
-  color-scheme: light;
-}
-
-body {
-  margin: 0;
-  font: 13px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
-  color: #1f2328;
-  background: #fff;
-}
-
-.popup {
-  width: 360px;
-  padding: 12px;
-  box-sizing: border-box;
-}
-
-.row {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-
-.row + .row {
-  margin-top: 8px;
-}
-
-input[type='text'] {
-  flex: 1;
-  min-width: 0;
-  padding: 6px 8px;
-  border: 1px solid #d0d7de;
-  border-radius: 6px;
-  font: inherit;
-}
-
-button {
-  padding: 6px 10px;
-  border: 1px solid #d0d7de;
-  border-radius: 6px;
-  background: #f6f8fa;
-  font: inherit;
-  cursor: pointer;
-}
-
-button.primary {
-  background: #1f883d;
-  border-color: #1f883d;
-  color: #fff;
-}
-
-button:disabled {
-  opacity: 0.6;
-  cursor: progress;
-}
-
-.error {
+.error,
+.settings-error {
   margin-top: 8px;
   padding: 8px;
   border-radius: 6px;
@@ -9621,102 +9708,75 @@ button:disabled {
   white-space: pre-wrap;
 }
 
-.summary {
-  margin-top: 8px;
-  color: #57606a;
-}
-
-table {
-  width: 100%;
-  margin-top: 8px;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-
-th,
-td {
-  padding: 4px 6px;
-  border-bottom: 1px solid #eaeef2;
-  text-align: left;
-  vertical-align: top;
-}
-
-td.note {
-  color: #57606a;
-  max-width: 150px;
-  overflow-wrap: anywhere;
+.blocking-note {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
 }
 ```
 
-- [ ] **Step 2: Ghi đè `src/popup/App.vue`**
+- [ ] **Step 5: `src/popup/App.vue`**
+
+Ba điều kiện bắt buộc, cả ba đều là điều code review phát hiện ra:
+
+1. **Control của `autoSubmit` chỉ hiện SAU khi đọc xong** (`settingsLoaded`).
+   Hiện sớm thì một setting đã lưu là `true` sẽ hiện ra là CHƯA tick trong
+   lúc đọc ⇒ người dùng tưởng auto-submit đang tắt; và nếu người dùng tick
+   sớm thì lần đọc trả về sau sẽ đè lên lựa chọn của họ.
+2. **Payload chỉ kèm `autoSubmit` khi đã đọc được.** Bỏ trống key ⇒ content
+   script tự đọc setting (`request.autoSubmit ?? settings.autoSubmit` coi
+   `false` là CÓ giá trị ⇒ gửi `false` đi là đè lên opt-in đã lưu trong im
+   lặng).
+3. **Lỗi lưu setting và lỗi lần điền là hai khe riêng** — lỗi lưu setting
+   không được xoá mất lỗi của lần điền (và ngược lại).
 
 ```vue
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { readSettings, writeSettings } from '../core/options'
+import { DeadlineError, withDeadline } from '../core/http'
+import { readSettingsResult, saveSettings } from '../core/options'
 import {
   MSG_FILL,
   MSG_GET_BL_NO,
+  type FillRequest,
   type FillResult,
   type GetBlNoResult,
   type ReportItem,
 } from '../core/protocol'
+import { blockingFields, describeIncompleteFill } from '../core/report'
+import { MANIFEST_URL } from '../core/site-url'
 import './styles.css'
 
-const MANIFEST_URL =
-  'https://www.chinaports-agency.com:8870/#/exportBusinessOperations/maintenanceOfManifestData'
+const FILL_DEADLINE_MS = 300_000
+const READ_DEADLINE_MS = 10_000
 
 const blNo = ref('')
 const autoSubmit = ref(false)
 const busy = ref(false)
-const error = ref('')
+/** Lỗi khi làm việc với trang (đọc 提单号, điền form). */
+const pageError = ref('')
+/** Lỗi khi lưu setting — RIÊNG, không đè lên lỗi của lần điền. */
+const settingsError = ref('')
 const result = ref<FillResult | null>(null)
+const settingsLoaded = ref(false)
+/** Giá trị autoSubmit đã lưu THẬT — dùng để rollback khi lưu thất bại. */
+const savedAutoSubmit = ref(false)
+/** Đang lưu setting auto-submit — khoá control để không có 2 lần ghi chồng nhau. */
+const saving = ref(false)
 
 const items = computed<ReportItem[]>(() => result.value?.items ?? [])
-
-const counts = computed(() => {
-  const acc = { ok: 0, skip: 0, warn: 0, error: 0 }
-  for (const item of items.value) acc[item.status] += 1
-  return acc
-})
-
-/** Mỗi icon ứng với đúng một trạng thái — không trùng lẫn. */
-function icon(item: ReportItem): string {
-  if (item.status === 'ok') return '✅'
-  if (item.status === 'warn') return '⚠️'
-  if (item.status === 'error') return '❌'
-  return '⏭'
-}
-
-async function activeTabId(): Promise<number | undefined> {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-  return tab?.id
-}
-
-async function takeBlNoFromPage(): Promise<void> {
-  error.value = ''
-  try {
-    const tabId = await activeTabId()
-    if (tabId === undefined) throw new Error('no active tab')
-    const res = (await chrome.tabs.sendMessage(tabId, {
-      type: MSG_GET_BL_NO,
-    })) as GetBlNoResult
-    if (res?.blNo) {
-      blNo.value = res.blNo
-    } else {
-      error.value = 'No bill of lading number found on the current page.'
-    }
-  } catch {
-    error.value = 'Open the manifest declaration page and try again.'
-  }
-}
+const blocking = computed(() => blockingFields(items.value))
 
 async function runFill(): Promise<void> {
-  error.value = ''
+  // Nút bị disable khi `busy`, nhưng phím Enter trên ô nhập KHÔNG bị disable
+  // ⇒ phải chặn ở đây, nếu không sẽ có hai lần điền chạy chồng nhau.
+  if (busy.value) return
+
+  pageError.value = ''
   result.value = null
   const value = blNo.value.trim()
   if (!value) {
-    error.value = 'Enter a bill of lading number first.'
+    pageError.value = 'Enter a bill of lading number first.'
     return
   }
 
@@ -9724,32 +9784,65 @@ async function runFill(): Promise<void> {
   try {
     const tabId = await activeTabId()
     if (tabId === undefined) throw new Error('no active tab')
-    const res = (await chrome.tabs.sendMessage(tabId, {
-      type: MSG_FILL,
-      blNo: value,
-      autoSubmit: autoSubmit.value,
-    })) as FillResult
+    const request: FillRequest = { type: MSG_FILL, blNo: value }
+    // CHỈ gửi `autoSubmit` khi đã đọc xong setting.
+    if (settingsLoaded.value) request.autoSubmit = autoSubmit.value
+
+    const res = (await withDeadline(
+      chrome.tabs.sendMessage(tabId, request),
+      FILL_DEADLINE_MS,
+      'The manifest fill',
+    )) as FillResult
     result.value = res
-    if (!res?.ok) error.value = res?.message ?? 'Could not fill the manifest data.'
-  } catch {
-    error.value =
-      'Could not reach the page. Open the manifest declaration page and try again.'
+    if (!res?.ok) {
+      pageError.value = describeIncompleteFill(res?.items ?? [], res?.message)
+    }
+  } catch (e) {
+    pageError.value =
+      e instanceof DeadlineError
+        ? 'The fill is taking longer than expected. It may still be running on the page — check the manifest form before trying again.'
+        : 'Could not reach the page. Open the manifest declaration page and try again.'
   } finally {
     busy.value = false
   }
 }
 
-async function openPage(): Promise<void> {
-  await chrome.tabs.create({ url: MANIFEST_URL })
-}
-
 async function onToggleAutoSubmit(): Promise<void> {
-  await writeSettings({ autoSubmit: autoSubmit.value })
+  // Đang lưu ⇒ bỏ qua lần click này và đưa checkbox về giá trị đã lưu thật.
+  if (saving.value) {
+    autoSubmit.value = savedAutoSubmit.value
+    return
+  }
+  const next = autoSubmit.value
+  saving.value = true
+  try {
+    const outcome = await saveSettings({ autoSubmit: next })
+    if (outcome.ok) {
+      savedAutoSubmit.value = outcome.settings.autoSubmit
+      // Đồng bộ control với giá trị ĐÃ LƯU — nếu không, UI và storage lệch nhau.
+      autoSubmit.value = outcome.settings.autoSubmit
+      settingsError.value = ''
+      return
+    }
+    // Lưu thất bại ⇒ đưa checkbox về giá trị đã lưu thật và BÁO cho người dùng.
+    autoSubmit.value = savedAutoSubmit.value
+    settingsError.value = outcome.error
+  } finally {
+    saving.value = false
+  }
 }
 
 onMounted(async () => {
-  const settings = await readSettings()
-  autoSubmit.value = settings.autoSubmit
+  const outcome = await readSettingsResult()
+  if (!outcome.ok) {
+    // Đọc hỏng ⇒ KHÔNG được coi là "setting = false".
+    settingsError.value = outcome.error
+    return
+  }
+  autoSubmit.value = outcome.settings.autoSubmit
+  savedAutoSubmit.value = outcome.settings.autoSubmit
+  settingsLoaded.value = true
+  settingsError.value = ''
 })
 </script>
 
@@ -9762,7 +9855,11 @@ onMounted(async () => {
         placeholder="Bill of lading number (提单号)"
         @keyup.enter="runFill"
       />
-      <button type="button" title="Read the bill of lading number entered on the page" @click="takeBlNoFromPage">
+      <button
+        type="button"
+        title="Read the bill of lading number entered on the page"
+        @click="takeBlNoFromPage"
+      >
         Read from page
       </button>
     </div>
@@ -9772,55 +9869,118 @@ onMounted(async () => {
         {{ busy ? 'Filling…' : 'Fill data' }}
       </button>
       <button type="button" @click="openPage">Open page</button>
-      <label>
-        <input v-model="autoSubmit" type="checkbox" @change="onToggleAutoSubmit" />
-        Auto-click 确定
+      <label v-if="settingsLoaded">
+        <input
+          v-model="autoSubmit"
+          type="checkbox"
+          :disabled="saving"
+          @change="onToggleAutoSubmit"
+        />
+        Auto-click 确定 after filling
       </label>
     </div>
 
-    <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="settingsError" class="settings-error">{{ settingsError }}</p>
+    <p v-if="pageError" class="error">{{ pageError }}</p>
 
-    <div v-if="result" class="summary">
-      ✅ {{ counts.ok }} · ⚠️ {{ counts.warn }} · ⏭ {{ counts.skip }} · ❌ {{ counts.error }} ·
-      cargo: {{ result.cargoRows }} · containers: {{ result.containerRows }}
+    <div v-if="blocking.length" class="blocking">
+      <p class="blocking-title">
+        The site requires these fields, but they could not be filled in — see the note under each one:
+      </p>
+      <ul>
+        <li v-for="field in blocking" :key="`${field.scope}-${field.row ?? 0}-${field.prop}`">
+          <span class="blocking-label">{{ field.label }}</span>
+          <span class="blocking-prop">{{ field.prop }}</span>
+          <span v-if="field.note" class="blocking-note">{{ field.note }}</span>
+        </li>
+      </ul>
     </div>
 
-    <table v-if="items.length">
-      <thead>
-        <tr>
-          <th></th>
-          <th>Field</th>
-          <th>Note</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="item in items" :key="`${item.scope}-${item.row ?? 0}-${item.prop}`">
-          <td>{{ icon(item) }}</td>
-          <td>{{ item.label }}</td>
-          <td class="note">{{ item.note ?? '' }}</td>
-        </tr>
-      </tbody>
-    </table>
+    <!-- … bảng báo cáo + khối summary như task gốc … -->
   </div>
 </template>
 ```
 
-- [ ] **Step 3: Typecheck**
+- [ ] **Step 6: Test**
 
-Run: `npm run typecheck`
-Expected: không lỗi.
+`tests/popup.test.ts` (mới) — component test bằng `@vue/test-utils`, stub
+`chrome` bằng store in-memory. Phải cover:
 
-- [ ] **Step 4: Build**
+| Test | Điều kiện | Kỳ vọng |
+|---|---|---|
+| load-gate | đọc xong | checkbox hiện, tick đúng giá trị đã lưu |
+| omitted-payload | đọc xong, `autoSubmit = true` | payload **có** key `autoSubmit` |
+| omitted-payload (read fail) | `storage.get` reject | payload **không có** key `autoSubmit`; checkbox KHÔNG hiện; lỗi ở `.settings-error`, không ở `.error` |
+| rollback | `storage.set` reject | checkbox quay về giá trị đã lưu, `.settings-error` có câu |
+| in-flight guard | tick lần hai khi lần đầu còn treo | `set` chỉ gọi MỘT lần, `store` giữ `true` |
+| error slots | lỗi trang vs lỗi setting | không xoá lẫn nhau |
 
-Run: `npm run build`
-Expected: build thành công.
+`tests/options.test.ts` — thêm: `readSettingsResult` đọc lỗi ⇒ `ok = false` và
+không ném; `readSettings()` **vẫn** trả mặc định khi đọc lỗi; patch chỉ đụng
+`autoSubmit` ⇒ `set` nhận đúng `{ autoSubmit: true }`; `apiBase` toàn khoảng
+trắng ⇒ ghi mặc định; `autoSubmit` không phải boolean ⇒ ép `false`; `apiBase`
+`null` trong patch ⇒ ghi mặc định, không ném.
 
-- [ ] **Step 5: Commit**
+`tests/report.test.ts` — thêm: thứ tự field bị chặn; câu thông báo **không**
+chứa "no data from the API"; `warn` bắt buộc vẫn chặn; `skip` bắt buộc +
+`warn` không bắt buộc cùng tồn tại.
+
+`tests/http.test.ts` — thêm case promise treo ⇒ `withDeadline` ném
+`DeadlineError`.
+
+- [ ] **Step 7: Typecheck + test + build + check-manifest**
 
 ```bash
-git add src/popup/App.vue src/popup/styles.css
-git commit -m "feat: add popup UI for blNo input and fill report"
+npm run typecheck && npx vitest run && npm run build && npm run check-manifest
 ```
+
+Expected: typecheck không lỗi; **363 test / 18 file** pass; build thành công;
+manifest hợp lệ.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add tests/popup.test.ts
+git commit package-lock.json package.json vitest.config.ts src/core/options.ts src/core/report.ts src/options/App.vue src/popup/App.vue src/popup/styles.css tests/http.test.ts tests/options.test.ts tests/report.test.ts -m "fix: report blocking fields accurately and stop losing the auto-submit setting"
+```
+
+> **Ghi chú (đã thực hiện 2026-10-28):** commit gốc của task này là
+> `5e12a71 feat: add popup UI for blNo input and fill report`. Bản sửa trong
+> bước trên là commit **sửa sau code review**, gồm **12 file** — 11 file sửa
+> + `tests/popup.test.ts` (file mới ⇒ cần `git add` trước).
+>
+> **Ghi chú lần 2 (code review 2026-10-28):**
+> 1. `readSettings()` nuốt lỗi ⇒ popup coi "đọc hỏng" là "setting = false" ⇒
+>    gửi `autoSubmit: false` đè lên opt-in đã lưu (content script coi `false`
+>    là CÓ giá trị). Đã thêm `readSettingsResult()` + `settingsLoaded` chỉ mở
+>    khi đọc thành công.
+> 2. `writeSettings` ghi **toàn bộ** settings ⇒ một lần đọc lỗi khiến
+>    `apiBase`/`siteApiBase` tuỳ chỉnh của người dùng bị ghi đè bằng mặc
+>    định. Đã đổi sang ghi patch-only.
+> 3. Lưu setting thất bại ⇒ checkbox im lặng mất lựa chọn. Đã thêm
+>    `saveSettings()` + rollback về giá trị đã lưu thật + báo lỗi.
+> 4. Câu "with no data from the API" **bịa nguyên nhân** cho field bị chặn vì
+>    lý do khác (site không cascade được, site từ chối). Đã đổi sang câu
+>    trung lập + hiện `note` của từng field.
+> 5. `writeSettings` **ném** lỗi ⇒ tầng UI không bắt được. Đã thêm
+>    `saveSettings()` không ném.
+> 6. `normalizePatch` lặp lại quy tắc ép kiểu của `withDefaults` (và gọi
+>    `.trim()` không có `?.`) ⇒ đã cho nó dùng chung `withDefaults`.
+> 7. Component Vue chưa có test ⇒ thêm `@vue/test-utils` + `tests/popup.test.ts`.
+>
+> **Ghi chú lần 3 (code review 2026-10-28):** `normalizePatch` liệt kê key tay
+> ⇒ một setting thêm vào interface sau này sẽ bị **bỏ qua** khi ghi (không
+> lỗi, vẫn báo thành công ⇒ mất setting trong im lặng). Đã đổi sang lấy key
+> từ `DEFAULT_SETTINGS` ⇒ exhaustive bằng cấu trúc, kèm test tự thêm một key
+> mới vào `DEFAULT_SETTINGS` để chứng minh key đó **không bị bỏ sót**.
+>
+> **Hai ghi chú KHÔNG lấy (có lý do):**
+> - Popup **không** tự retry khi đọc setting hỏng (control ẩn hẳn tới khi
+>   mở lại popup). Mở lại popup là đủ để thử lại; thêm nút "Retry" là đồ trang
+>   trí.
+> - `readSettingsResult()` trả `ok: true` khi **không có** `chrome.storage`
+>   (ngữ cảnh không phải extension) — đó không phải "đọc hỏng". Manifest có
+>   khai báo `permissions: ["storage"]` nên trong extension luôn có storage.
 
 ---
 
