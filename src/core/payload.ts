@@ -158,14 +158,21 @@ export function buildHeaderPayload(data: ManifestData, ctx: MappingContext): Hea
     // 提单签发地 — API không có dữ liệu.
     sign_place_cod: '',
     sign_place_str: '',
+    // Tên cảng: site lưu TÊN TIẾNG TRUNG — dict `getPort()` của site chỉ có tên
+    // Trung (`E_PORT_NAM`) và widget autocomplete chỉ gợi ý tên Trung.
+    // `PortData.name` là tên Trung, `PortData.nameEn` là tên Anh ⇒ KHÔNG dùng
+    // `nameEn` ở đây.
+    //
+    // Ưu tiên tên từ API (luôn có) rồi mới tới dict `getPort()` — cùng thứ tự
+    // với DOM path (`mapping.ts`).
     start_port_cod: str(data.loadCode),
-    start_port_nam: str(ctx.findPort(data.loadCode ?? undefined)) || str(data.loadPortData?.nameEn),
+    start_port_nam: str(data.loadPortData?.name) || str(ctx.findPort(data.loadCode ?? undefined)),
     dischrg_port_cod: uploadCode,
     dischrg_port_nam:
-      str(ctx.findPort(data.uploadCode ?? undefined)) || str(data.uploadPortData?.nameEn),
+      str(data.uploadPortData?.name) || str(ctx.findPort(data.uploadCode ?? undefined)),
     dest_port_cod: hasDestPort ? aimCode : '',
     dest_port_nam: hasDestPort
-      ? str(ctx.findPort(aimCode)) || str(data.aimPortData?.nameEn)
+      ? str(data.aimPortData?.name) || str(ctx.findPort(aimCode))
       : '',
     // 中转港 — API không có dữ liệu.
     trans_port_cod: '',

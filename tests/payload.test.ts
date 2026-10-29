@@ -12,11 +12,16 @@ import fixture from './fixtures/manifest-ONEYSHAGT1569600.json'
 /** Dữ liệu mẫu (phần `data` của envelope của API). */
 const manifest = fixture.data as ManifestData
 
-/** Tên cảng mà dict của site trả về. */
+/**
+ * Tên cảng mà dict `getPort()` của site trả về.
+ *
+ * Site CHỈ có tên cảng tiếng Trung (`E_PORT_NAM`) — widget autocomplete chỉ
+ * gợi ý tên Trung ⇒ dict không bao giờ trả tên tiếng Anh.
+ */
 const PORT_NAMES: Record<string, string> = {
-  CNSHA: 'SHANGHAI',
-  IDBLW: 'BELAWAN',
-  IDSUB: 'SURABAYA',
+  CNSHA: '上海',
+  IDBLW: '勿拉湾',
+  IDSUB: '泗水',
 }
 
 /** `ctx` giả lập — dict của site trong test này chỉ có tên cảng. */
@@ -149,9 +154,11 @@ describe('buildHeaderPayload', () => {
 
   it('điền cảng theo mã + tên cảng', () => {
     expect(payload.start_port_cod).toBe('CNSHA')
-    expect(payload.start_port_nam).toBe('SHANGHAI')
+    // Tên cảng lấy từ `loadPortData.name` của API — tên TIẾNG TRUNG, vì site
+    // lưu tên Trung (`PortData.nameEn` là tên Anh).
+    expect(payload.start_port_nam).toBe('上海')
     expect(payload.dischrg_port_cod).toBe('IDBLW')
-    expect(payload.dischrg_port_nam).toBe('BELAWAN')
+    expect(payload.dischrg_port_nam).toBe('勿拉湾')
   })
 
   it('KHÔNG điền 交货地 khi aimPortCode trùng cảng 卸货港', () => {
@@ -166,15 +173,27 @@ describe('buildHeaderPayload', () => {
       ...manifest,
       uploadCode: 'IDBLW',
       aimPortCode: 'IDSUB',
-      aimPortData: { nameEn: 'SURABAYA' },
+      aimPortData: { name: '泗水', nameEn: 'SURABAYA' },
     }
     const withDest = buildHeaderPayload(data, ctx)
     expect(withDest.dest_port_cod).toBe('IDSUB')
-    // Dict của site là nguồn sự thật; `aimPortData.nameEn` chỉ là fallback.
-    expect(withDest.dest_port_nam).toBe('SURABAYA')
+    // Tên lấy từ API trước, dict `getPort()` sau — cùng thứ tự với DOM path.
+    expect(withDest.dest_port_nam).toBe('泗水')
   })
 
-  it('fallback sang `aimPortData.nameEn` khi dict không có cảng đó', () => {
+  it('fallback sang dict `getPort()` khi API không có tên cảng', () => {
+    const data: ManifestData = {
+      ...manifest,
+      uploadCode: 'IDBLW',
+      aimPortCode: 'IDSUB',
+      aimPortData: null,
+    }
+    const withDest = buildHeaderPayload(data, ctx)
+    expect(withDest.dest_port_cod).toBe('IDSUB')
+    expect(withDest.dest_port_nam).toBe(PORT_NAMES.IDSUB)
+  })
+
+  it('KHÔNG dùng `aimPortData.nameEn` khi không có tên Trung', () => {
     const data: ManifestData = {
       ...manifest,
       uploadCode: 'IDBLW',
@@ -183,7 +202,8 @@ describe('buildHeaderPayload', () => {
     }
     const withDest = buildHeaderPayload(data, ctx)
     expect(withDest.dest_port_cod).toBe('IDXYZ')
-    expect(withDest.dest_port_nam).toBe('UNKNOWN PORT')
+    // Không có tên Trung ở API lẫn dict ⇒ để trống (KHÔNG điền tên Anh).
+    expect(withDest.dest_port_nam).toBe('')
   })
 
   it('lấy 3 bên theo vai trò (0 = 发货人, 1 = 收货人, 2 = 通知人)', () => {
@@ -236,6 +256,163 @@ describe('buildHeaderPayload', () => {
       }
       expect(empty[key]).toBe('')
     }
+  })
+})
+
+/**
+ * Tên cảng trong body header.
+ *
+ * Site lưu TÊN TIẾNG TRUNG: dict `getPort()` của site chỉ có tên Trung
+ * (`E_PORT_NAM`) và widget autocomplete chỉ gợi ý tên Trung ⇒ `PortData.name`
+ * (Trung) là nguồn đúng, `PortData.nameEn` (Anh) KHÔNG được dùng.
+ */
+describe('buildHeaderPayload — tên cảng', () => {
+  /** Dict `getPort()` không tra được cảng nào. */
+  const noDict: MappingContext = {
+    ...ctx,
+    findPort: () => undefined,
+  }
+
+  /** Dict trả tên KHÁC tên của API cho cùng một mã cảng (biến thể có hậu tố). */
+  const CONFLICT_NAMES: Record<string, string> = {
+    CNSHA: '上海港',
+    IDBLW: '勿拉湾港',
+    IDSUB: '泗水港',
+  }
+
+  const conflictingDict: MappingContext = {
+    ...ctx,
+    findPort: (code) => CONFLICT_NAMES[code ?? ''] ?? PORT_NAMES[code ?? ''],
+  }
+
+  it('start_port_nam lấy tên Trung từ API khi dict không tra được', () => {
+    const payload = buildHeaderPayload(manifest, noDict)
+    expect(payload.start_port_nam).toBe('上海')
+  })
+
+  it('start_port_nam lấy từ dict `getPort()` khi API không có tên cảng', () => {
+    const data: ManifestData = { ...manifest, loadCode: 'IDSUB', loadPortData: null }
+    const payload = buildHeaderPayload(data, ctx)
+    expect(payload.start_port_nam).toBe('泗水')
+  })
+
+  it('start_port_nam lấy từ API trước, dict `getPort()` sau', () => {
+    // Dict trả '上海港' cho mã CNSHA ⇒ phải lấy tên của API ('上海').
+    const payload = buildHeaderPayload(manifest, conflictingDict)
+    expect(payload.start_port_nam).toBe('上海')
+  })
+
+  it('start_port_nam để trống khi API lẫn dict đều không có tên', () => {
+    const data: ManifestData = { ...manifest, loadCode: 'IDXYZ', loadPortData: null }
+    const payload = buildHeaderPayload(data, ctx)
+    expect(payload.start_port_nam).toBe('')
+  })
+
+  it('dischrg_port_nam lấy tên Trung từ API khi dict không tra được', () => {
+    const payload = buildHeaderPayload(manifest, noDict)
+    expect(payload.dischrg_port_nam).toBe('勿拉湾')
+  })
+
+  it('dischrg_port_nam lấy từ dict `getPort()` khi API không có tên cảng', () => {
+    const data: ManifestData = { ...manifest, uploadCode: 'IDSUB', uploadPortData: null }
+    const payload = buildHeaderPayload(data, ctx)
+    expect(payload.dischrg_port_nam).toBe('泗水')
+  })
+
+  it('dischrg_port_nam lấy từ API trước, dict `getPort()` sau', () => {
+    // Dict trả '勿拉湾港' cho mã IDBLW ⇒ phải lấy tên của API ('勿拉湾').
+    const payload = buildHeaderPayload(manifest, conflictingDict)
+    expect(payload.dischrg_port_nam).toBe('勿拉湾')
+  })
+
+  it('dischrg_port_nam để trống khi API lẫn dict đều không có tên', () => {
+    const data: ManifestData = { ...manifest, uploadCode: 'IDXYZ', uploadPortData: null }
+    const payload = buildHeaderPayload(data, ctx)
+    expect(payload.dischrg_port_nam).toBe('')
+  })
+
+  it('dest_port_nam lấy tên Trung từ API khi dict không tra được', () => {
+    const data: ManifestData = {
+      ...manifest,
+      uploadCode: 'IDBLW',
+      aimPortCode: 'IDSUB',
+      aimPortData: { name: '泗水', nameEn: 'SURABAYA' },
+    }
+    const payload = buildHeaderPayload(data, noDict)
+    expect(payload.dest_port_nam).toBe('泗水')
+  })
+
+  it('dest_port_nam lấy từ dict `getPort()` khi API không có tên cảng', () => {
+    const data: ManifestData = {
+      ...manifest,
+      uploadCode: 'IDBLW',
+      aimPortCode: 'IDSUB',
+      aimPortData: null,
+    }
+    const payload = buildHeaderPayload(data, ctx)
+    expect(payload.dest_port_nam).toBe('泗水')
+  })
+
+  it('dest_port_nam lấy từ API trước, dict `getPort()` sau', () => {
+    // Dict trả '泗水港' cho mã IDSUB ⇒ phải lấy tên của API ('泗水').
+    const data: ManifestData = {
+      ...manifest,
+      uploadCode: 'IDBLW',
+      aimPortCode: 'IDSUB',
+      aimPortData: { name: '泗水', nameEn: 'SURABAYA' },
+    }
+    const payload = buildHeaderPayload(data, conflictingDict)
+    expect(payload.dest_port_nam).toBe('泗水')
+  })
+
+  it('dest_port_nam để trống khi API lẫn dict đều không có tên', () => {
+    const data: ManifestData = {
+      ...manifest,
+      uploadCode: 'IDBLW',
+      aimPortCode: 'IDXYZ',
+      aimPortData: null,
+    }
+    const payload = buildHeaderPayload(data, ctx)
+    expect(payload.dest_port_nam).toBe('')
+  })
+
+  it('dest_port_nam để trống khi 交货地 trùng cảng 卸货港', () => {
+    // Quy tắc có sẵn trong `buildHeaderPayload`: 交货地 khác 卸货港 mới điền.
+    const data: ManifestData = {
+      ...manifest,
+      uploadCode: 'IDBLW',
+      aimPortCode: 'IDBLW',
+      aimPortData: { name: '勿拉湾' },
+    }
+    const payload = buildHeaderPayload(data, ctx)
+    expect(payload.dest_port_cod).toBe('')
+    expect(payload.dest_port_nam).toBe('')
+  })
+
+  it('dest_port_nam để trống khi không có mã 交货地', () => {
+    const data: ManifestData = {
+      ...manifest,
+      uploadCode: 'IDBLW',
+      aimPortCode: '',
+      aimPortData: { name: '泗水' },
+    }
+    const payload = buildHeaderPayload(data, ctx)
+    expect(payload.dest_port_cod).toBe('')
+    expect(payload.dest_port_nam).toBe('')
+  })
+
+  it('KHÔNG dùng `nameEn` cho tên cảng', () => {
+    const data: ManifestData = {
+      ...manifest,
+      loadPortData: { name: '上海', nameEn: 'SHANGHAI' },
+      uploadPortData: { name: '勿拉湾', nameEn: 'BELAWAN' },
+    }
+    // Dict không tra được gì ⇒ tên chỉ có thể đến từ API ⇒ KHÔNG phải `nameEn`.
+    const payload = buildHeaderPayload(data, noDict)
+    expect(payload.start_port_nam).toBe('上海')
+    expect(payload.start_port_nam).not.toBe('SHANGHAI')
+    expect(payload.dischrg_port_nam).toBe('勿拉湾')
+    expect(payload.dischrg_port_nam).not.toBe('BELAWAN')
   })
 })
 
