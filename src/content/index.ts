@@ -1,118 +1,243 @@
-import {
-  describeApiError,
-  fetchManifest,
-  ManifestApiError,
-  normalizeBlNo,
-} from '../core/api'
-import { fillManifest } from '../core/fill'
+/**
+ * Content script — điền manifest cho trang khai 预配舱单.
+ *
+ * ĐƯỜNG CHÍNH: API.
+ *
+ *   popup → `MSG_CREATE_MANIFEST` → `runManifest` (đọc manifest từ API bên
+ *   ngoài → đọc dict của site → dựng payload → (tuỳ chọn) ghi lên site).
+ *
+ * `runManifest` KHÔNG reject ⇒ mọi lỗi thành `CreateResult` có `ok: false` +
+ * `message` tiếng Anh.
+ */
+import { runManifest } from '../core/manifest-run'
 import { readSettings } from '../core/options'
 import {
-  MSG_FILL,
-  type FillRequest,
-  type FillResult,
+  MSG_CREATE_MANIFEST,
+  type CreateRequest,
+  type CreateResult,
 } from '../core/protocol'
-import {
-  createMappingContext,
-  describeSiteError,
-  loadSiteDicts,
-} from '../core/site-api'
-import type { MappingContext } from '../core/mapping'
 import { MANIFEST_ROUTE } from '../core/site-url'
-import type { ManifestData } from '../core/types'
 
 function isManifestPage(): boolean {
   return location.hash.includes(MANIFEST_ROUTE)
 }
 
-function emptyResult(message: string): FillResult {
-  return { ok: false, message, items: [], cargoRows: 0, containerRows: 0 }
+/**
+ * Kết quả lỗi — phải có ĐỦ field của `CreateResult`.
+ *
+ * `preview` rỗng vẫn hợp lệ: `HeaderPayload` là `{[key: string]: string}`.
+ */
+function errorResult(message: string): CreateResult {
+  return {
+    ok: false,
+    blocked: false,
+    steps: [],
+    items: [],
+    preview: { header: {}, cargo: [], containers: [] },
+    cargoRows: 0,
+    containerRows: 0,
+    billCreated: false,
+    written: false,
+    message,
+  }
 }
 
-/** Lần điền đang chạy — dùng để chặn hai lần điền chồng nhau. */
-let inFlight: Promise<FillResult> | null = null
+/** Lần chạy đang chạy — dùng để chặn hai lần chạy chồng nhau. */
+let inFlight: Promise<CreateResult> | null = null
 
-async function handleFill(request: FillRequest): Promise<FillResult> {
+/**
+ * Chạy manifest theo yêu cầu của popup.
+ *
+ * Sai trang ⇒ trả lỗi NGAY, KHÔNG gọi network.
+ */
+async function handleCreate(request: CreateRequest): Promise<CreateResult> {
   if (!isManifestPage()) {
-    return emptyResult(
+    return errorResult(
       'Open the 预配舱单申报平台 page (#/exportBusinessOperations/maintenanceOfManifestData) and try again.',
     )
   }
 
   const settings = await readSettings()
   const apiBase = request.apiBase ?? settings.apiBase
-  const blNo = normalizeBlNo(request.blNo ?? '')
+  const siteApiBase = request.siteApiBase ?? settings.siteApiBase
+  // So sánh CHẶT: bất kỳ giá trị nào khác `true` (kể cả `'true'` hay `1`)
+  // ⇒ chỉ preview, KHÔNG gửi POST nào lên site.
+  const allowWrite = request.allowWrite === true
 
-  if (!blNo) return emptyResult('Enter a bill of lading number first.')
-
-  let data: ManifestData
-  try {
-    data = await fetchManifest(blNo, { baseUrl: apiBase })
-  } catch (e) {
-    if (e instanceof ManifestApiError && e.kind === 'not_found') {
-      return emptyResult(`No manifest was found for bill of lading number ${blNo}.`)
-    }
-    // Lỗi phải map theo `kind` — không bao giờ lộ `error.message` cho người dùng.
-    return emptyResult(`Could not fetch the manifest data: ${describeApiError(e)}`)
-  }
-
-  let ctx: MappingContext
-  try {
-    const dicts = await loadSiteDicts({ baseUrl: settings.siteApiBase })
-    ctx = createMappingContext(dicts)
-  } catch (e) {
-    return emptyResult(`Could not read the site dictionaries: ${describeSiteError(e)}`)
-  }
-
-  const report = await fillManifest({
-    root: document,
-    data,
-    ctx,
-    autoSubmit: request.autoSubmit ?? settings.autoSubmit,
-    log: (message) => console.debug('[manifest-autofill]', message),
+  return runManifest({
+    blNo: request.blNo ?? '',
+    allowWrite,
+    apiBase,
+    siteApiBase,
+    // Site lưu token trong cookie `token` ⇒ `site-api` tự biến nó thành
+    // header `Authorization: JWT <token>`
+    cookieString: document.cookie,
   })
-
-  return {
-    ok: report.ok,
-    message: report.message,
-    items: report.items,
-    cargoRows: report.cargoRows,
-    containerRows: report.containerRows,
-  }
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const type = (message as { type?: string } | undefined)?.type
+  if (type !== MSG_CREATE_MANIFEST) return false
 
-  if (type === MSG_FILL) {
-    // Chống chạy chồng: hai lần điền cùng lúc sẽ bấm 新增舱单信息 hai lần và
-    // ghi đè lên nhau ⇒ sinh dòng hàng TRÙNG trong manifest thật.
-    if (inFlight) {
-      sendResponse(emptyResult('A fill is already running — wait for it to finish.'))
-      return false
-    }
-
-    const run: Promise<FillResult> = handleFill(message as FillRequest)
-      .catch((e: unknown) => {
-        // Chi tiết kỹ thuật chỉ nằm ở console; người dùng chỉ thấy câu ngắn.
-        console.error('[manifest-autofill] unexpected error', e)
-        return emptyResult('Something went wrong while filling the manifest.')
-      })
-      .finally(() => {
-        inFlight = null
-      })
-
-    inFlight = run
-    void run.then((result) => {
-      try {
-        sendResponse(result)
-      } catch {
-        // Tab đã điều hướng đi ⇒ port đã đóng ⇒ không còn ai nghe.
-      }
-    })
-    return true
+  // Chống chạy chồng: hai lần chạy cùng lúc sẽ tạo bill hai lần ⇒ dòng hàng
+  // TRÙNG trong manifest thật.
+  if (inFlight) {
+    sendResponse(
+      errorResult('A manifest run is already in progress — wait for it to finish.'),
+    )
+    return false
   }
 
-  return false
+  const run: Promise<CreateResult> = handleCreate(message as CreateRequest)
+    .catch((e: unknown) => {
+      // Chi tiết kỹ thuật chỉ nằm ở console; người dùng chỉ thấy câu ngắn.
+      console.error('[manifest-autofill] unexpected error', e)
+      return errorResult('Something went wrong while running the manifest.')
+    })
+    .finally(() => {
+      inFlight = null
+    })
+
+  inFlight = run
+  void run.then((result) => {
+    try {
+      sendResponse(result)
+    } catch {
+      // Tab đã điều hướng đi ⇒ port đã đóng ⇒ không còn ai nghe.
+    }
+  })
+  return true
 })
 
 console.debug('[manifest-autofill] content script ready')
+
+/*
+ * ===========================================================================
+ * ĐƯỜNG DOM — ĐÃ COMMENT LẠI, GIỮ LẠI ĐỂ ĐỌC (task này KHÔNG xoá)
+ *
+ * API là đường CHÍNH (xem phần đầu file). Đường DOM — bấm nút 新增舱单信息
+ * trên form rồi điền từng field, xác minh lại giá trị — không còn được gọi;
+ * nó chỉ còn là đường DỰ PHÒNG.
+ *
+ * Task 6 sẽ XOÁ HẲN các module của đường DOM:
+ *
+ *   - `src/core/fill.ts`
+ *   - `src/core/site.ts`
+ *   - `src/core/select.ts`
+ *   - `src/core/table.ts`
+ *   - `src/core/dom.ts`
+ *   - `src/core/wait.ts`
+ *   - nửa DOM của `src/core/mapping.ts`
+ *
+ * Giữ nguyên logic cũ ở đây để còn đọc được — xoá thì mất mạch. Khi Task 6
+ * xoá các module trên thì xoá luôn khối comment này.
+ *
+ * Import ở trên KHÔNG còn dùng cho đường DOM (`fillManifest`,
+ * `loadSiteDicts`, `createMappingContext`, `describeSiteError`,
+ * `MappingContext`, `ManifestData`) — chúng bị bỏ khỏi phần code đang chạy
+ * để không còn import chết.
+ * ===========================================================================
+ */
+
+// import {
+//   describeApiError,
+//   fetchManifest,
+//   ManifestApiError,
+//   normalizeBlNo,
+// } from '../core/api'
+// import { fillManifest } from '../core/fill'
+// import { MSG_FILL, type FillRequest, type FillResult } from '../core/protocol'
+// import {
+//   createMappingContext,
+//   describeSiteError,
+//   loadSiteDicts,
+// } from '../core/site-api'
+// import type { MappingContext } from '../core/mapping'
+// import type { ManifestData } from '../core/types'
+
+// function emptyResult(message: string): FillResult {
+//   return { ok: false, message, items: [], cargoRows: 0, containerRows: 0 }
+// }
+
+// async function handleFill(request: FillRequest): Promise<FillResult> {
+//   if (!isManifestPage()) {
+//     return emptyResult(
+//       'Open the 预配舱单申报平台 page (#/exportBusinessOperations/maintenanceOfManifestData) and try again.',
+//     )
+//   }
+
+//   const settings = await readSettings()
+//   const apiBase = request.apiBase ?? settings.apiBase
+//   const blNo = normalizeBlNo(request.blNo ?? '')
+
+//   if (!blNo) return emptyResult('Enter a bill of lading number first.')
+
+//   let data: ManifestData
+//   try {
+//     data = await fetchManifest(blNo, { baseUrl: apiBase })
+//   } catch (e) {
+//     if (e instanceof ManifestApiError && e.kind === 'not_found') {
+//       return emptyResult(`No manifest was found for bill of lading number ${blNo}.`)
+//     }
+//     // Lỗi phải map theo `kind` — không bao giờ lộ `error.message` cho người dùng.
+//     return emptyResult(`Could not fetch the manifest data: ${describeApiError(e)}`)
+//   }
+
+//   let ctx: MappingContext
+//   try {
+//     const dicts = await loadSiteDicts({ baseUrl: settings.siteApiBase })
+//     ctx = createMappingContext(dicts)
+//   } catch (e) {
+//     return emptyResult(`Could not read the site dictionaries: ${describeSiteError(e)}`)
+//   }
+
+//   const report = await fillManifest({
+//     root: document,
+//     data,
+//     ctx,
+//     autoSubmit: request.autoSubmit ?? settings.autoSubmit,
+//     log: (message) => console.debug('[manifest-autofill]', message),
+//   })
+
+//   return {
+//     ok: report.ok,
+//     message: report.message,
+//     items: report.items,
+//     cargoRows: report.cargoRows,
+//     containerRows: report.containerRows,
+//   }
+// }
+
+// chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+//   const type = (message as { type?: string } | undefined)?.type
+//   if (type === MSG_FILL) {
+//     // Chống chạy chồng: hai lần điền cùng lúc sẽ bấm 新增舱单信息 hai lần và
+//     // ghi đè lên nhau ⇒ sinh dòng hàng TRÙNG trong manifest thật.
+//     if (inFlight) {
+//       sendResponse(emptyResult('A fill is already running — wait for it to finish.'))
+//       return false
+//     }
+
+//     const run: Promise<FillResult> = handleFill(message as FillRequest)
+//       .catch((e: unknown) => {
+//         // Chi tiết kỹ thuật chỉ nằm ở console; người dùng chỉ thấy câu ngắn.
+//         console.error('[manifest-autofill] unexpected error', e)
+//         return emptyResult('Something went wrong while filling the manifest.')
+//       })
+//       .finally(() => {
+//         inFlight = null
+//       })
+
+//     inFlight = run
+//     void run.then((result) => {
+//       try {
+//         sendResponse(result)
+//       } catch {
+//         // Tab đã điều hướng đi ⇒ port đã đóng ⇒ không còn ai nghe.
+//       }
+//     })
+//     return true
+//   }
+
+//   return false
+// })
