@@ -106,7 +106,7 @@ GET https://www.dadaex.cn/api/vn/insight/manifest?blNo={blNo}
 | `src/core/fill.ts` | điều phối: mở dialog → điền form → thêm dòng bảng → báo cáo |
 | `src/core/protocol.ts` | kiểu message popup ↔ content script |
 | `src/core/options.ts` | đọc/ghi `chrome.storage.sync` |
-| `src/background/index.ts` | service worker (mở trang manifest khi cài mới) |
+| ~~`src/background/index.ts`~~ | ~~service worker~~ — **đã bỏ** 2026-10-29 (spec §13) |
 | `src/content/index.ts` | bootstrap content script + message handler |
 | `src/popup/*` | giao diện popup (Vue 3) |
 | `src/options/*` | giao diện tuỳ chọn (Vue 3) |
@@ -266,10 +266,16 @@ git commit -m "chore: scaffold extension project with vite, vitest and typescrip
 
 ## Task 2: Manifest extension + entry point giả
 
+> **Đã bị thay thế (2026-10-29):** phần **background service worker** của task
+> này đã bị **xoá** — `src/background/` không còn tồn tại và `manifest.config.ts`
+> không khai báo `background.service_worker`. Lý do + hệ quả: xem spec
+> `docs/superpowers/specs/2026-10-26-manifest-autofill-extension-design.md` §13.
+> Các bước còn lại của task này vẫn đúng như đã viết.
+
 **Files:**
 - Modify: `manifest.config.ts`
 - Create: `public/logo.png`
-- Create: `src/background/index.ts`
+- Create: `src/background/index.ts` — **đã bỏ** 2026-10-29 (spec §13)
 - Create: `src/content/index.ts`
 - Create: `src/popup/index.html`
 - Create: `src/popup/main.ts`

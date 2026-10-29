@@ -414,7 +414,6 @@ manifest-huagang/
 │   ├── logo.png
 │   └── manifest.json           (fallback nếu không dùng crxjs)
 ├── src/
-│   ├── background/index.ts     service worker
 │   ├── content/
 │   │   ├── index.ts            bootstrap content script
 │   │   └── fill.ts             điều phối (nằm trong core)
@@ -510,3 +509,40 @@ extension **không** đánh dấu field này là bắt buộc (`REQUIRED_HEADER`
 Bản ghi thật `ONEYSHAGT1569600` có `phone` cho cả 3 bên nên không gặp lỗi này.
 Cần một task riêng để sửa (đưa `*_TE_STR` vào nhóm bắt buộc khi bên tương ứng
 không có bất kỳ thông tin liên hệ nào).
+
+---
+
+## 13. Bỏ background service worker (2026-10-29)
+
+**Quyết định:** extension **không** khai báo `background.service_worker`; xoá
+`src/background/` và bỏ khối `background` khỏi `manifest.config.ts`.
+
+**Lý do.** Extension không cần service worker: popup gửi `MSG_FILL` thẳng cho
+content script, cả hai đều đọc `chrome.storage.sync` trực tiếp ⇒ không có tác vụ
+nào cần chạy nền.
+
+Kết quả trực tiếp: bản production (`npm run build`) **không** còn
+`service-worker-loader.js` ⇒ Chrome không phải đăng ký service worker nào ⇒ hết
+lỗi *"Service worker registration failed. Status code: 3"* do loader import
+cross-origin (`http://localhost:<port>/@crx/client-worker`) — MV3 bắt buộc
+service worker cùng origin với extension.
+
+**Đánh đổi: mất hành vi tự mở tab khi cài mới.** Service worker cũ chỉ làm đúng
+một việc: mở trang khai báo 舱单 khi extension vừa cài. Popup đã có nút **Open
+page** để mở trang đó ⇒ hành vi "tự mở tab khi cài mới" **không còn**, các chức
+năng khác giữ nguyên.
+
+**Hệ quả.**
+
+| | Trước | Sau |
+|---|---|---|
+| `dist/manifest.json` | có `background.service_worker` | **không** có `background` |
+| `dist/service-worker-loader.js` | có (import same-origin) | **không** sinh ra |
+| Chrome đăng ký service worker | có | **không** ⇒ hết lỗi "Status code: 3" |
+
+**Giới hạn còn lại của crxjs beta.23:** ở chế độ `serve`, plugin **luôn** tự thêm
+`background.service_worker` trỏ tới loader import cross-origin, kể cả khi
+manifest của ta không khai báo background (xem `renderCrxManifest` trong
+`node_modules/@crxjs/vite-plugin/dist/index.mjs`). Không có tuỳ chọn nào tắt
+được. ⇒ **Bản dev vẫn không load được trong Chrome; muốn test thật thì luôn
+`npm run build` rồi Load unpacked `dist/`.**
