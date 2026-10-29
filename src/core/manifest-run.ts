@@ -21,6 +21,7 @@
  * - tên cảng lấy từ `PortData.name` (tiếng Trung), KHÔNG dùng `nameEn`.
  */
 import { describeApiError, fetchManifest, ManifestApiError } from './api'
+import { HTTP_TIMEOUT_MS } from './http'
 import {
   BLANK_NOTES,
   CARGO_LABELS,
@@ -76,7 +77,11 @@ export interface ManifestRunOptions {
   siteFetchImpl?: typeof fetch
   /** Cookie của site (chứa `token` cho header `Authorization`). */
   cookieString?: string
-  /** Timeout cho MỖI request (ms). Mặc định = phần hạn còn lại của lần chạy. */
+  /**
+   * Timeout cho MỖI request (ms).
+   *
+   * Mặc định = `min(HTTP_TIMEOUT_MS, phần hạn còn lại của lần chạy)`.
+   */
   timeoutMs?: number
   /** Hạn của cả lần chạy (ms). Mặc định `DEFAULT_DEADLINE_MS`. */
   deadlineMs?: number
@@ -140,6 +145,13 @@ class NoBillNumberError extends Error {
   }
 }
 
+/*
+ * LƯU Ý quy ước key — hai hệ khác nhau cùng nằm trong file này:
+ *
+ * - `IGNORED_PROPS` dùng TÊN FIELD VIẾT HOA (giống `prop` trong report);
+ * - `byDesignBlanks` dùng key CHỮ THƯỜNG của payload.
+ */
+
 /**
  * Field mà site TỰ tính / server gán / điều khiển luồng.
  *
@@ -156,16 +168,36 @@ const IGNORED_PROPS: ReadonlySet<string> = new Set([
 ])
 
 /**
+ * Câu nhắc operator — extension KHÔNG BAO GIỜ tự xoá bill trên site.
+ *
+ * Dùng chung ở nhiều message để câu chữ không lệch nhau.
+ */
+const NEVER_DELETES_BILLS =
+  'The extension never deletes bills on its own — please finish this manifest by hand on the site.'
+
+/** Field bị site XOÁ theo loại hàng — để trống là ĐÚNG, không phải lỗi. */
+const ALL_BLANKED: ReadonlySet<string> = new Set([...DANGER_FIELDS, ...TEMP_FIELDS])
+const DANGER_BLANKED: ReadonlySet<string> = new Set(DANGER_FIELDS)
+const TEMP_BLANKED: ReadonlySet<string> = new Set(TEMP_FIELDS)
+const NOTHING_BLANKED: ReadonlySet<string> = new Set<string>()
+
+/**
  * Field bị site XOÁ theo loại hàng — để trống là ĐÚNG, không phải lỗi.
  *
- * Key trong `DANGER_FIELDS`/`TEMP_FIELDS` là key CHỮ THƯỜNG của payload
- * (khác với `prop` viết HOA trong report).
+ * - `S` (thường)      — site xoá CẢ field nguy hiểm lẫn field nhiệt độ;
+ * - `D` (nguy hiểm)   — site xoá field nhiệt độ;
+ * - `R` (kiểm dịch)   — site xoá field nguy hiểm;
+ * - `G` (cả hai)      — site KHÔNG xoá gì.
+ *
+ * Key ở đây là key CHỮ THƯỜNG của payload (khác với `prop` viết HOA trong
+ * report). Set được tạo MỘT LẦN ở cấp module ⇒ không cấp phát lại cho mỗi
+ * dòng.
  */
 function byDesignBlanks(kind: CargoKind): ReadonlySet<string> {
-  if (kind === 'S') return new Set([...DANGER_FIELDS, ...TEMP_FIELDS])
-  if (kind === 'D') return new Set(TEMP_FIELDS)
-  if (kind === 'R') return new Set(DANGER_FIELDS)
-  return new Set<string>()
+  if (kind === 'S') return ALL_BLANKED
+  if (kind === 'D') return TEMP_BLANKED
+  if (kind === 'R') return DANGER_BLANKED
+  return NOTHING_BLANKED
 }
 
 /**
@@ -216,16 +248,43 @@ function blankItem(
   }
 }
 
-/** Report của header — theo thứ tự key trong payload. */
-function reportHeader(header: HeaderPayload): ReportItem[] {
+/** Một dòng cần dựng report (header là 1 dòng, không có số thứ tự). */
+interface ReportRowSpec {
+  scope: FillScope
+  values: Record<string, unknown>
+  /** số thứ tự của dòng — `undefined` cho header */
+  row?: number
+  /** field này có BẮT BUỘC không */
+  required: (prop: string) => boolean
+  /**
+   * Key mà site XOÁ theo loại hàng — để trống là ĐÚNG ⇒ không báo.
+   *
+   * Key ở đây là key CHỮ THƯỜNG của payload (khác với `prop` viết HOA).
+   */
+  skipped?: ReadonlySet<string>
+}
+
+/** Report của MỘT dòng — theo thứ tự key trong dòng. */
+function reportRow(spec: ReportRowSpec): ReportItem[] {
   const items: ReportItem[] = []
-  for (const [key, value] of Object.entries(header)) {
+  for (const [key, value] of Object.entries(spec.values)) {
     const prop = key.toUpperCase()
     if (IGNORED_PROPS.has(prop)) continue
+    // Field site xoá theo loại hàng ⇒ để trống là ĐÚNG ⇒ không báo.
+    if (spec.skipped?.has(key)) continue
     if (!isBlankValue(value)) continue
-    items.push(blankItem('header', prop, REQUIRED_HEADER.includes(prop), undefined))
+    items.push(blankItem(spec.scope, prop, spec.required(prop), spec.row))
   }
   return items
+}
+
+/** Report của header — theo thứ tự key trong payload. */
+function reportHeader(header: HeaderPayload): ReportItem[] {
+  return reportRow({
+    scope: 'header',
+    values: header,
+    required: (prop) => REQUIRED_HEADER.includes(prop),
+  })
 }
 
 /** Report của các dòng hàng — theo thứ tự dòng, rồi thứ tự key trong dòng. */
@@ -233,45 +292,36 @@ function reportCargo(
   rows: Record<string, unknown>[],
   kinds: CargoKind[],
 ): ReportItem[] {
-  const items: ReportItem[] = []
-  rows.forEach((row, index) => {
+  return rows.flatMap((row, index) => {
     const kind = kinds[index] ?? 'S'
-    const skipped = byDesignBlanks(kind)
-    for (const [key, value] of Object.entries(row)) {
-      const prop = key.toUpperCase()
-      if (IGNORED_PROPS.has(prop)) continue
-      // Field site xoá theo loại hàng ⇒ để trống là ĐÚNG ⇒ không báo.
-      if (skipped.has(key)) continue
-      if (!isBlankValue(value)) continue
-      items.push(
-        blankItem('cargo', prop, REQUIRED_BY_KIND[kind].includes(prop), index + 1),
-      )
-    }
+    return reportRow({
+      scope: 'cargo',
+      values: row,
+      row: index + 1,
+      required: (prop) => REQUIRED_BY_KIND[kind].includes(prop),
+      skipped: byDesignBlanks(kind),
+    })
   })
-  return items
 }
 
 /** Report của các dòng container — theo thứ tự dòng, rồi thứ tự key trong dòng. */
 function reportContainers(rows: Record<string, unknown>[]): ReportItem[] {
-  const items: ReportItem[] = []
-  rows.forEach((row, index) => {
-    for (const [key, value] of Object.entries(row)) {
-      const prop = key.toUpperCase()
-      if (IGNORED_PROPS.has(prop)) continue
-      if (!isBlankValue(value)) continue
-      items.push(
-        blankItem('container', prop, REQUIRED_CONTAINER.includes(prop), index + 1),
-      )
-    }
-  })
-  return items
+  return rows.flatMap((row, index) =>
+    reportRow({
+      scope: 'container',
+      values: row,
+      row: index + 1,
+      required: (prop) => REQUIRED_CONTAINER.includes(prop),
+    }),
+  )
 }
 
 /**
  * Câu mô tả trạng thái trên site — luôn nói rõ extension đã làm gì.
  *
- * Ba cờ có ý nghĩa khác nhau: `createAttempted` (đã GỬI yêu cầu tạo bill),
- * `billCreated` (bill ĐÃ được tạo) và `written` (đã lưu xong).
+ * Ba cờ có ý nghĩa khác nhau: `createAttempted` (đã CỐ gửi yêu cầu tạo bill —
+ * không đảm bảo site đã nhận), `billCreated` (bill ĐÃ được tạo) và `written`
+ * (đã lưu xong).
  */
 function partialStateSentence(
   createAttempted: boolean,
@@ -281,12 +331,12 @@ function partialStateSentence(
 ): string {
   if (!createAttempted) return 'Nothing was created on the site.'
   if (!billCreated) {
-    return 'The manifest bill was sent to the site but the site did not confirm it — it may already exist. Check the site before trying again.'
+    return 'The manifest bill may already exist on the site — the site did not confirm the creation. Check the site before trying again.'
   }
   if (rowsAdded < cargoRows) {
-    return `The manifest bill was created on the site and ${rowsAdded} of ${cargoRows} cargo rows were added. The extension never deletes bills on its own — please finish this manifest by hand on the site.`
+    return `The manifest bill was created on the site and ${rowsAdded} of ${cargoRows} cargo rows were added. ${NEVER_DELETES_BILLS}`
   }
-  return 'The manifest bill was created on the site. The extension never deletes bills on its own — please finish this manifest by hand on the site.'
+  return `The manifest bill was created on the site. ${NEVER_DELETES_BILLS}`
 }
 
 /** Message khi run thành công nhưng còn field BẮT BUỘC bị trống. */
@@ -311,7 +361,8 @@ function describeError(error: unknown): string {
 export async function runManifest(options: ManifestRunOptions): Promise<ManifestRunResult> {
   const steps: string[] = []
   const items: ReportItem[] = []
-  let deadlineAt = Date.now() + DEFAULT_DEADLINE_MS
+  /** Hạn của lần chạy — tính một lần, lúc bắt đầu run. */
+  const deadlineAt = Date.now() + (options?.deadlineMs ?? DEFAULT_DEADLINE_MS)
 
   let preview: ManifestRunPreview = { header: {}, cargo: [], containers: [] }
   let cargoRows = 0
@@ -324,8 +375,16 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
 
   /** Phần hạn còn lại của lần chạy (ms) — luôn ít nhất 1 ms. */
   const remaining = (): number => Math.max(1, deadlineAt - Date.now())
-  /** Timeout cho MỖI request — không vượt quá hạn của lần chạy. */
-  const requestTimeout = (): number => options.timeoutMs ?? remaining()
+  /**
+   * Timeout cho MỖI request.
+   *
+   * - `options.timeoutMs` do caller truyền ⇒ dùng NGUYÊN VẸN (một số tình
+   *   huống cần một request được phép vượt hạn của lần chạy);
+   * - mặc định ⇒ `min(HTTP_TIMEOUT_MS, phần hạn còn lại)` ⇒ một request treo
+   *   KHÔNG giữ cả lần chạy (mặc định 4 phút) bị treo.
+   */
+  const requestTimeout = (): number =>
+    options.timeoutMs ?? Math.min(HTTP_TIMEOUT_MS, remaining())
   /** Options cho mọi request tới API của site. */
   const siteOptions = (): SiteFetchOptions => ({
     baseUrl: options.siteApiBase,
@@ -339,23 +398,41 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
       throw new ManifestRunError('deadline', `The run reached its time limit before "${step}".`)
     }
   }
+  /**
+   * Dựng `ManifestRunResult` từ trạng thái hiện tại của lần chạy.
+   *
+   * Số field BẮT BUỘC bị trống được tính ĐÚNG MỘT LẦN ở đây ⇒ `blocked` và
+   * `message` không thể lệch nhau.
+   */
+  const buildResult = (overrides: Partial<ManifestRunResult> = {}): ManifestRunResult => {
+    const requiredCount = items.filter((item) => item.required === true).length
+    const result: ManifestRunResult = {
+      ok: false,
+      blocked: requiredCount > 0,
+      steps,
+      items,
+      preview,
+      cargoRows,
+      containerRows,
+      billCreated,
+      written,
+    }
+    if (billNo !== undefined) result.billNo = billNo
+    Object.assign(result, overrides)
+    // Message mặc định khi còn field BẮT BUỘC bị trống. Message do caller
+    // truyền qua `overrides.message` được giữ nguyên.
+    if (result.message === undefined && requiredCount > 0) {
+      result.message = blockedMessage(requiredCount)
+    }
+    return result
+  }
 
   try {
-    deadlineAt = Date.now() + (options.deadlineMs ?? DEFAULT_DEADLINE_MS)
-
     if ((options.blNo ?? '').trim() === '') {
-      return {
+      return buildResult({
         ok: false,
-        blocked: false,
         message: 'Enter a bill of lading number before running the manifest.',
-        steps,
-        items,
-        preview,
-        cargoRows,
-        containerRows,
-        billCreated: false,
-        written: false,
-      }
+      })
     }
 
     checkDeadline('fetching the manifest data')
@@ -390,22 +467,7 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
     // KHÔNG ghi (preview) ⇒ dừng luôn ở đây, KHÔNG gửi POST nào.
     if (options.allowWrite !== true) {
       steps.push('Preview only — nothing was written to the site')
-      const requiredCount = items.filter((item) => item.required === true).length
-      const result: ManifestRunResult = {
-        ok: true,
-        blocked: requiredCount > 0,
-        steps,
-        items,
-        preview,
-        cargoRows,
-        containerRows,
-        billCreated: false,
-        written: false,
-      }
-      // Còn field BẮT BUỘC bị trống ⇒ operator vẫn phải điền tay trên site,
-      // kể cả khi lần chạy này chỉ preview.
-      if (requiredCount > 0) result.message = blockedMessage(requiredCount)
-      return result
+      return buildResult({ ok: true })
     }
 
     // 1) Tạo bill — server gán mã bill nội bộ.
@@ -430,7 +492,6 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
     steps.push('Read the bill number from the site')
 
     // 3) Gắn từng dòng hàng vào bill.
-    checkDeadline('adding the cargo rows')
     for (const row of cargoPayloads) {
       // Kiểm tra hạn trước TỪNG dòng — nhiều dòng có thể vượt hạn.
       checkDeadline('adding the cargo rows')
@@ -451,40 +512,15 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
     steps.push('Saved the manifest with its containers')
     written = true
 
-    const requiredCount = items.filter((item) => item.required === true).length
-    const result: ManifestRunResult = {
-      ok: true,
-      blocked: requiredCount > 0,
-      steps,
-      items,
-      preview,
-      cargoRows,
-      containerRows,
-      billNo,
-      billCreated: true,
-      written: true,
-    }
-    if (requiredCount > 0) result.message = blockedMessage(requiredCount)
-    return result
+    return buildResult({ ok: true })
   } catch (e) {
-    const requiredCount = items.filter((item) => item.required === true).length
-    const state = partialStateSentence(createAttempted, billCreated, rowsAdded, cargoRows)
-    const result: ManifestRunResult = {
-      ok: false,
-      blocked: requiredCount > 0,
-      steps,
-      items,
-      preview,
-      cargoRows,
-      containerRows,
-      billCreated,
-      written,
-    }
-    if (billNo !== undefined) result.billNo = billNo
+    const result = buildResult()
     if (e instanceof NoBillNumberError) {
       result.message =
-        'The manifest bill was created on the site, but the site did not return its bill number, so no cargo rows were attached. The extension never deletes bills on its own — please finish this manifest by hand on the site.'
+        'The manifest bill was created on the site, but the site did not return its bill number, so no cargo rows were attached. ' +
+        NEVER_DELETES_BILLS
     } else {
+      const state = partialStateSentence(createAttempted, billCreated, rowsAdded, cargoRows)
       result.message = `${describeError(e)} ${state}`
     }
     return result

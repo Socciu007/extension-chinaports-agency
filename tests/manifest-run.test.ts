@@ -49,6 +49,8 @@ interface SiteFakeOptions {
   createDelayMs?: number
   /** Endpoint GET cần trả về mã lỗi 4000 (session hết hạn). */
   failGet?: string
+  /** Site từ chối yêu cầu tạo bill (code 5000). */
+  failCreate?: boolean
 }
 
 /**
@@ -104,6 +106,9 @@ function siteFetch(options: SiteFakeOptions = {}): {
     const billIndex = billPostCount
     billPostCount += 1
     if (billIndex === 0) {
+      if (options.failCreate) {
+        return okResponse({ code: 5000, data: null, msg: 'boom' })
+      }
       if (options.createDelayMs) {
         await new Promise((resolve) => setTimeout(resolve, options.createDelayMs))
       }
@@ -175,6 +180,37 @@ function twoGoodsEnvelope(): { status: number; data: ManifestData } {
     status: 1,
     data: { ...manifest, cdgoods: [goods, { ...goods, id: 131330 }] },
   }
+}
+
+/**
+ * Dòng hàng mẫu, ép theo loại hàng cần test.
+ *
+ * `deriveCargoKind` xác định loại hàng như sau:
+ *
+ * - nguy hiểm = `dangerClass` khác rỗng **HOẶC** `unNub` khác rỗng;
+ * - kiểm dịch = `quarantineName` khác rỗng **HOẶC** `quarantineCode` khác rỗng;
+ * - `G` = cả hai, `D` = chỉ nguy hiểm, `R` = chỉ kiểm dịch, `S` = không có gì.
+ */
+function goodsOfKind(kind: 'D' | 'R' | 'G'): ManifestCargo {
+  const goods = manifest.cdgoods?.[0] as ManifestCargo
+  return {
+    ...goods,
+    // Nguy hiểm: có `dangerClass` ⇒ `deriveCargoKind` coi là hàng nguy hiểm.
+    dangerClass: kind === 'R' ? null : '2.1',
+    unNub: null,
+    // Kiểm dịch: có `quarantineName` ⇒ `deriveCargoKind` coi là hàng kiểm dịch.
+    // Loại `D` thì KHÔNG được kiểm dịch — có cả hai thì thành `G`.
+    quarantineName: kind === 'D' ? null : '冷藏',
+    quarantineCode: null,
+    // API không có dữ liệu người liên hệ nguy hiểm ⇒ các field này trống.
+    exigencyName: null,
+    exigencyPhone: null,
+  }
+}
+
+/** Envelope chứa đúng một dòng hàng loại `kind`. */
+function kindEnvelope(kind: 'D' | 'R' | 'G'): { status: number; data: ManifestData } {
+  return { status: 1, data: { ...manifest, cdgoods: [goodsOfKind(kind)] } }
 }
 
 describe('runManifest — preview mode', () => {
@@ -262,13 +298,66 @@ describe('runManifest — preview mode', () => {
     expect(result.preview.cargo[0]?.cargo_kind_cod).toBe('S')
   })
 
+  it('hàng NGUY HIỂM (D) ⇒ báo field nguy hiểm bắt buộc, KHÔNG báo field nhiệt độ', async () => {
+    const h = harness(kindEnvelope('D'))
+    const result = await preview(h)
+
+    expect(result.preview.cargo[0]?.cargo_kind_cod).toBe('D')
+    const cargoItems = result.items.filter((entry) => entry.scope === 'cargo')
+    const required = cargoItems
+      .filter((entry) => entry.required === true)
+      .map((entry) => entry.prop)
+    const reported = cargoItems.map((entry) => entry.prop)
+    // Field nguy hiểm mà API không có dữ liệu ⇒ BẮT BUỘC phải báo.
+    expect(required).toContain('DANG_UN_NO')
+    expect(required).toContain('DANGER_CONTACT_NAM')
+    expect(required).toContain('DANGER_TE_STR')
+    // `DANG_CLASS_NAM` CÓ giá trị ('2.1') ⇒ không phải field trống.
+    expect(required).not.toContain('DANG_CLASS_NAM')
+    // Site XOÁ field nhiệt độ với loại `D` ⇒ KHÔNG được báo (kể cả `skip`).
+    expect(reported).not.toContain('TEMP_ID')
+    expect(reported).not.toContain('SET_TEMP_NUM')
+  })
+
+  it('hàng KIỂM DỊCH (R) ⇒ báo field nhiệt độ bắt buộc, KHÔNG báo field nguy hiểm', async () => {
+    const h = harness(kindEnvelope('R'))
+    const result = await preview(h)
+
+    expect(result.preview.cargo[0]?.cargo_kind_cod).toBe('R')
+    const cargoItems = result.items.filter((entry) => entry.scope === 'cargo')
+    const required = cargoItems
+      .filter((entry) => entry.required === true)
+      .map((entry) => entry.prop)
+    const reported = cargoItems.map((entry) => entry.prop)
+    expect(required).toContain('TEMP_ID')
+    expect(required).toContain('SET_TEMP_NUM')
+    // Site XOÁ field nguy hiểm với loại `R` ⇒ KHÔNG được báo (kể cả `skip`).
+    expect(reported).not.toContain('DANG_UN_NO')
+    expect(reported).not.toContain('DANGER_CONTACT_NAM')
+    expect(reported).not.toContain('DANGER_TE_STR')
+  })
+
+  it('hàng NGUY HIỂM + KIỂM DỊCH (G) ⇒ báo CẢ hai nhóm field bắt buộc', async () => {
+    const h = harness(kindEnvelope('G'))
+    const result = await preview(h)
+
+    expect(result.preview.cargo[0]?.cargo_kind_cod).toBe('G')
+    const required = result.items
+      .filter((entry) => entry.scope === 'cargo' && entry.required === true)
+      .map((entry) => entry.prop)
+    expect(required).toContain('DANG_UN_NO')
+    expect(required).toContain('DANGER_CONTACT_NAM')
+    expect(required).toContain('DANGER_TE_STR')
+    expect(required).toContain('TEMP_ID')
+    expect(required).toContain('SET_TEMP_NUM')
+  })
+
   it('preview mode CŨNG mang message khi còn field bắt buộc bị trống', async () => {
     const h = harness()
     const result = await preview(h)
 
     expect(result.ok).toBe(true)
     expect(result.blocked).toBe(true)
-    expect(result.message).toContain('5 field(s)')
     expect(result.message).toBe(
       '5 field(s) required by the site are not provided by the API — they are listed in the report and must be filled in by hand on the site.',
     )
@@ -310,6 +399,8 @@ describe('runManifest — write mode', () => {
     expect(posts[0]?.url).toBe(`${SITE_BASE}/`)
     expect(posts[1]?.url).toBe(`${SITE_BASE}/cargo/add/`)
     expect(posts[2]?.url).toBe(`${SITE_BASE}/`)
+    // Bước TẠO bill dùng `is_all` = "0" (KHÔNG phải "2" = 发送).
+    expect(posts[0]?.body?.is_all).toBe('0')
     for (const post of posts) {
       expect(post.method).toBe('POST')
     }
@@ -389,6 +480,8 @@ describe('runManifest — write mode', () => {
     expect(result.written).toBe(false)
     expect(result.ok).toBe(false)
     expect(result.message).toContain('The manifest bill was created on the site')
+    // Dòng hàng 1 gắn được, dòng hàng 2 bị site từ chối ⇒ báo đúng số dòng.
+    expect(result.message).toContain('1 of 2 cargo rows were added')
     expect(result.message).toContain('never deletes bills on its own')
   })
 
@@ -438,8 +531,10 @@ describe('runManifest — lỗi', () => {
   })
 
   it('hết hạn giữa chừng ⇒ không POST dòng hàng, báo trạng thái một phần', async () => {
-    const h = harness({ status: 1, data: manifest }, { createDelayMs: 25 })
-    const result = await write(h, { deadlineMs: 20, timeoutMs: 5000 })
+    // Cửa sổ thời gian rộng (400 ms trễ vs 300 ms hạn) ⇒ không bị flake do
+    // máy chậm.
+    const h = harness({ status: 1, data: manifest }, { createDelayMs: 400 })
+    const result = await write(h, { deadlineMs: 300, timeoutMs: 5000 })
 
     const posts = postsOf(h)
     expect(posts).toHaveLength(1)
@@ -472,5 +567,26 @@ describe('runManifest — lỗi', () => {
     expect(result.message).toContain('Something went wrong while running the manifest.')
     expect(result.message).toContain('Nothing was created on the site.')
     expect(postsOf(h)).toHaveLength(0)
+  })
+
+  it('site từ chối tạo bill ⇒ không POST dòng hàng, cảnh báo bill có thể đã tồn tại', async () => {
+    const h = harness({ status: 1, data: manifest }, { failCreate: true })
+    const result = await write(h)
+
+    expect(result.ok).toBe(false)
+    expect(result.billCreated).toBe(false)
+    expect(result.billNo).toBeUndefined()
+    expect(result.written).toBe(false)
+
+    // Chỉ có đúng 1 POST (tạo bill) — KHÔNG có POST dòng hàng nào.
+    const posts = postsOf(h)
+    expect(posts).toHaveLength(1)
+    expect(posts[0]?.url).toBe(`${SITE_BASE}/`)
+    expect(posts.filter((post) => post.url.includes('cargo/add/'))).toHaveLength(0)
+
+    expect(result.message).toContain('The site rejected the request.')
+    expect(result.message).toContain('may already exist on the site')
+    // KHÔNG được nói "chưa tạo gì cả" — yêu cầu ĐÃ gửi lên site.
+    expect(result.message).not.toContain('Nothing was created on the site.')
   })
 })

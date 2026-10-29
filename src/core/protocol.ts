@@ -5,7 +5,9 @@ export type FillScope = 'header' | 'cargo' | 'container'
 
 /**
  * - `ok`    — điền thành công, đã xác minh lại giá trị trên form
- * - `warn`  — điền xong nhưng bước xác minh không khớp (vd mã cảng site chưa cascade)
+ * - `warn`  — DOM path: điền xong nhưng bước xác minh không khớp (vd mã cảng
+ *             site chưa cascade). API path: site BẮT BUỘC field này nhưng API
+ *             không cung cấp ⇒ để trống, operator phải điền tay.
  * - `skip`  — API không cung cấp field này, cố ý để trống (có `note` giải thích)
  * - `error` — không điền được (không tìm thấy field, không chọn được option, …)
  */
