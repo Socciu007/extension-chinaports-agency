@@ -4,10 +4,8 @@ import { DeadlineError, withDeadline } from '../core/http'
 import { readSettingsResult, saveSettings } from '../core/options'
 import {
   MSG_FILL,
-  MSG_GET_BL_NO,
   type FillRequest,
   type FillResult,
-  type GetBlNoResult,
   type ReportItem,
 } from '../core/protocol'
 import { blockingFields, describeIncompleteFill } from '../core/report'
@@ -22,9 +20,6 @@ import './styles.css'
  * trả lời, và nếu không có hạn thì nút "Fill data" kẹt vĩnh viễn.
  */
 const FILL_DEADLINE_MS = 300_000
-
-/** Hạn chờ cho việc đọc 提单号 từ trang — nhanh hơn nhiều vì content script trả lời đồng bộ. */
-const READ_DEADLINE_MS = 10_000
 
 const blNo = ref('')
 const autoSubmit = ref(false)
@@ -74,29 +69,6 @@ function icon(item: ReportItem): string {
 async function activeTabId(): Promise<number | undefined> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
   return tab?.id
-}
-
-async function takeBlNoFromPage(): Promise<void> {
-  pageError.value = ''
-  try {
-    const tabId = await activeTabId()
-    if (tabId === undefined) throw new Error('no active tab')
-    const res = (await withDeadline(
-      chrome.tabs.sendMessage(tabId, { type: MSG_GET_BL_NO }),
-      READ_DEADLINE_MS,
-      'Reading the bill of lading number',
-    )) as GetBlNoResult
-    if (res?.blNo) {
-      blNo.value = res.blNo
-    } else {
-      pageError.value = 'No bill of lading number found on the current page.'
-    }
-  } catch (e) {
-    pageError.value =
-      e instanceof DeadlineError
-        ? 'The page did not respond in time — open the manifest declaration page and try again.'
-        : 'Open the manifest declaration page and try again.'
-  }
 }
 
 async function runFill(): Promise<void> {
@@ -212,13 +184,6 @@ onMounted(async () => {
         placeholder="Bill of lading number (提单号)"
         @keyup.enter="runFill"
       />
-      <button
-        type="button"
-        title="Read the bill of lading number entered on the page"
-        @click="takeBlNoFromPage"
-      >
-        Read from page
-      </button>
     </div>
 
     <div class="row">

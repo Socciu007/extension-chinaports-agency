@@ -8,10 +8,8 @@ import { fillManifest } from '../core/fill'
 import { readSettings } from '../core/options'
 import {
   MSG_FILL,
-  MSG_GET_BL_NO,
   type FillRequest,
   type FillResult,
-  type GetBlNoResult,
 } from '../core/protocol'
 import {
   createMappingContext,
@@ -24,31 +22,6 @@ import type { ManifestData } from '../core/types'
 
 function isManifestPage(): boolean {
   return location.hash.includes(MANIFEST_ROUTE)
-}
-
-/**
- * Element Plus giữ dialog đã đóng trong DOM (chỉ ẩn bằng `display:none`) ⇒
- * `querySelector` có thể trả về ô 提单号 của một lần khai trước đó.
- */
-function isVisibleInput(el: HTMLElement): boolean {
-  let node: HTMLElement | null = el.parentElement
-  while (node) {
-    if (node.style.display === 'none') return false
-    node = node.parentElement
-  }
-  return true
-}
-
-/** Đọc 提单号 đang hiển thị trên trang (dùng để lấy sẵn cho ô nhập ở popup). */
-function readBlNoFromPage(): string {
-  const inputs = Array.from(
-    document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
-      'input[id$="-BILL_NBR"], textarea[id$="-BILL_NBR"]',
-    ),
-  )
-  // Ưu tiên ô đang hiển thị; không có thì mới lấy ô đầu tiên.
-  const input = inputs.find(isVisibleInput) ?? inputs[0]
-  return input?.value?.trim() ?? ''
 }
 
 function emptyResult(message: string): FillResult {
@@ -109,12 +82,6 @@ async function handleFill(request: FillRequest): Promise<FillResult> {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const type = (message as { type?: string } | undefined)?.type
-
-  if (type === MSG_GET_BL_NO) {
-    const result: GetBlNoResult = { ok: true, blNo: readBlNoFromPage() }
-    sendResponse(result)
-    return false
-  }
 
   if (type === MSG_FILL) {
     // Chống chạy chồng: hai lần điền cùng lúc sẽ bấm 新增舱单信息 hai lần và

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { MSG_FILL, MSG_GET_BL_NO } from '../src/core/protocol'
+import { MSG_FILL } from '../src/core/protocol'
 
 type SendResponse = (response: unknown) => void
 type Listener = (
@@ -100,33 +100,5 @@ describe('content script — chống hai lần điền chồng nhau', () => {
     expect(ret3).toBe(true)
 
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
-  })
-})
-
-describe('content script — đọc 提单号 từ trang', () => {
-  it('lấy ô đang hiển thị, không lấy ô của dialog đã đóng', () => {
-    document.body.innerHTML = `
-      <div style="display:none">
-        <input id="crud-old-BILL_NBR" value="OLD-ONE" />
-      </div>
-      <div>
-        <input id="crud-new-BILL_NBR" value="ONEYSHAGT1569600" />
-      </div>
-    `
-
-    const send = vi.fn()
-    const ret = listener?.({ type: MSG_GET_BL_NO }, {}, send)
-
-    expect(ret).toBe(false)
-    expect(send).toHaveBeenCalledWith({ ok: true, blNo: 'ONEYSHAGT1569600' })
-  })
-
-  it('không có ô nào ⇒ trả về chuỗi rỗng', () => {
-    document.body.innerHTML = '<div>nothing here</div>'
-
-    const send = vi.fn()
-    listener?.({ type: MSG_GET_BL_NO }, {}, send)
-
-    expect(send).toHaveBeenCalledWith({ ok: true, blNo: '' })
   })
 })

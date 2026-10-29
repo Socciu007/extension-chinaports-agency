@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import PopupApp from '../src/popup/App.vue'
-import { MSG_FILL, MSG_GET_BL_NO } from '../src/core/protocol'
+import { MSG_FILL } from '../src/core/protocol'
 import { DEFAULT_SETTINGS } from '../src/core/options'
 
 /**
@@ -482,73 +482,6 @@ describe('popup — hai khe lỗi tách biệt', () => {
       expect(wrapper.find('.settings-error').exists()).toBe(true)
     } finally {
       errorSpy.mockRestore()
-    }
-  })
-})
-
-describe('popup — đọc 提单号 từ trang', () => {
-  it('đọc thành công ⇒ đưa 提单号 của trang vào ô nhập', async () => {
-    sendMessage = async (message) => {
-      if (message.type === MSG_GET_BL_NO) {
-        return { ok: true, blNo: 'ABC123' }
-      }
-      return { ok: true }
-    }
-
-    const wrapper = mount(PopupApp)
-    await flushPromises()
-
-    await buttonByText(wrapper, 'Read from page').trigger('click')
-    await flushPromises()
-
-    expect((wrapper.find('input[type="text"]').element as HTMLInputElement).value).toBe('ABC123')
-    expect(wrapper.find('.error').exists()).toBe(false)
-  })
-
-  it('trang không trả lời ⇒ báo lỗi sau hạn chờ, không kẹt vĩnh viễn', async () => {
-    // Dùng fake timer: hạn chờ là 10_000ms ⇒ chạy thật sẽ tốn 10 giây.
-    //
-    // VỚI FAKE TIMER thì `flushPromises()` của @vue/test-utils KHÔNG tự
-    // resolve (nó đi qua `setImmediate`, mà vitest cũng fake) ⇒ thay bằng
-    // `vi.advanceTimersByTimeAsync` vừa chạy timer vừa đẩy microtask.
-    let resolveRead: ((value: unknown) => void) | undefined
-    sendMessage = async (message) => {
-      if (message.type === MSG_GET_BL_NO) {
-        return new Promise((resolve) => {
-          resolveRead = resolve
-        })
-      }
-      return { ok: true, items: [], cargoRows: 0, containerRows: 0 }
-    }
-
-    vi.useFakeTimers()
-    try {
-      const wrapper = mount(PopupApp)
-      // Đẩy microtask cho lần đọc setting của `onMounted` xong.
-      await vi.advanceTimersByTimeAsync(0)
-
-      await buttonByText(wrapper, 'Read from page').trigger('click')
-      // Timer của hạn chờ phải được tạo TRƯỚC khi đẩy đồng hồ, nếu không nó
-      // sẽ được hẹn ở mốc mới ⇒ không nổ trong cửa sổ 10_000ms.
-      await vi.advanceTimersByTimeAsync(0)
-      await vi.advanceTimersByTimeAsync(10_001)
-      await vi.advanceTimersByTimeAsync(0)
-
-      expect(wrapper.find('.error').text()).toContain('did not respond in time')
-
-      // Popup KHÔNG bị kẹt: sau khi lần đọc treo thì vẫn điền được bình
-      // thường. (Assert này thay cho cái cũ chỉ kiểm tra nút không bị
-      // disable — vốn luôn đúng vì `takeBlNoFromPage` không set `busy`.)
-      await wrapper.find('input[type="text"]').setValue('BL123')
-      await buttonByText(wrapper, 'Fill data').trigger('click')
-      await vi.advanceTimersByTimeAsync(0)
-
-      expect(sentTypes.filter((t) => t === MSG_FILL)).toHaveLength(1)
-      // Lỗi của lần đọc bị xoá khi bắt đầu lần điền mới.
-      expect(wrapper.find('.error').exists()).toBe(false)
-    } finally {
-      vi.useRealTimers()
-      resolveRead?.({ ok: true, blNo: '' })
     }
   })
 })

@@ -9051,6 +9051,10 @@ git commit -m "feat: load site dictionaries and build the mapping context"
 >
 > 7. **`MSG_PING` là code chết** — popup chỉ dùng `MSG_GET_BL_NO` và
 >    `MSG_FILL`. Bỏ hẳn `MSG_PING` khỏi `protocol.ts` và content script.
+>
+>    *(Ghi chú 2026-10-29: sau khi Task 15 xong, người dùng yêu cầu bỏ chức
+>    năng "đọc 提单号 từ trang" ⇒ `MSG_GET_BL_NO` và `GetBlNoResult` cũng đã
+>    bị gỡ khỏi `protocol.ts` và content script. Xem ghi chú ở Task 15.)*
 
 - [ ] **Step 1: Tạo `src/core/protocol.ts`**
 
@@ -9058,7 +9062,6 @@ git commit -m "feat: load site dictionaries and build the mapping context"
 import type { FillScope } from './fill'
 
 export const MSG_FILL = 'manifest-autofill:fill'
-export const MSG_GET_BL_NO = 'manifest-autofill:get-bl-no'
 
 /**
  * - `ok`    — điền thành công, đã xác minh lại giá trị trên form
@@ -9096,11 +9099,6 @@ export interface FillResult {
   items: ReportItem[]
   cargoRows: number
   containerRows: number
-}
-
-export interface GetBlNoResult {
-  ok: boolean
-  blNo?: string
 }
 ```
 
@@ -9240,10 +9238,8 @@ import { fillManifest } from '../core/fill'
 import { readSettings } from '../core/options'
 import {
   MSG_FILL,
-  MSG_GET_BL_NO,
   type FillRequest,
   type FillResult,
-  type GetBlNoResult,
 } from '../core/protocol'
 import {
   createMappingContext,
@@ -9257,31 +9253,6 @@ const MANIFEST_HASH = '/exportBusinessOperations/maintenanceOfManifestData'
 
 function isManifestPage(): boolean {
   return location.hash.includes(MANIFEST_HASH)
-}
-
-/**
- * Element Plus giữ dialog đã đóng trong DOM (chỉ ẩn bằng `display:none`) ⇒
- * `querySelector` có thể trả về ô 提单号 của một lần khai trước đó.
- */
-function isVisibleInput(el: HTMLElement): boolean {
-  let node: HTMLElement | null = el.parentElement
-  while (node) {
-    if (node.style.display === 'none') return false
-    node = node.parentElement
-  }
-  return true
-}
-
-/** Đọc 提单号 đang hiển thị trên trang (dùng để lấy sẵn cho ô nhập ở popup). */
-function readBlNoFromPage(): string {
-  const inputs = Array.from(
-    document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
-      'input[id$="-BILL_NBR"], textarea[id$="-BILL_NBR"]',
-    ),
-  )
-  // Ưu tiên ô đang hiển thị; không có thì mới lấy ô đầu tiên.
-  const input = inputs.find(isVisibleInput) ?? inputs[0]
-  return input?.value?.trim() ?? ''
 }
 
 function emptyResult(message: string): FillResult {
@@ -9342,12 +9313,6 @@ async function handleFill(request: FillRequest): Promise<FillResult> {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const type = (message as { type?: string } | undefined)?.type
-
-  if (type === MSG_GET_BL_NO) {
-    const result: GetBlNoResult = { ok: true, blNo: readBlNoFromPage() }
-    sendResponse(result)
-    return false
-  }
 
   if (type === MSG_FILL) {
     // Chống chạy chồng: hai lần điền cùng lúc sẽ bấm 新增舱单信息 hai lần và
@@ -9518,6 +9483,10 @@ git commit src/core/protocol.ts src/core/options.ts src/content/index.ts tests/o
 >    thêm `withDefaults` + `try/catch`.
 > 7. `readBlNoFromPage()` đọc trúng ô 提单号 của dialog đã đóng ⇒ đã ưu tiên
 >    ô đang hiển thị.
+>
+>    *(Ghi chú 2026-10-29: chức năng "đọc 提单号 từ trang" đã bị gỡ bỏ theo
+>    yêu cầu của người dùng ⇒ `readBlNoFromPage()`, `isVisibleInput()` và
+>    `MSG_GET_BL_NO` không còn tồn tại. Xem ghi chú ở Task 15.)*
 >
 > **Ghi chú lần 3 (code review 2026-10-28) — đã sửa trong working tree.**
 > Reviewer đã **APPROVED**; 4 trong 6 ghi chú không chặn được lấy thêm:
@@ -9737,10 +9706,8 @@ import { DeadlineError, withDeadline } from '../core/http'
 import { readSettingsResult, saveSettings } from '../core/options'
 import {
   MSG_FILL,
-  MSG_GET_BL_NO,
   type FillRequest,
   type FillResult,
-  type GetBlNoResult,
   type ReportItem,
 } from '../core/protocol'
 import { blockingFields, describeIncompleteFill } from '../core/report'
@@ -9748,12 +9715,11 @@ import { MANIFEST_URL } from '../core/site-url'
 import './styles.css'
 
 const FILL_DEADLINE_MS = 300_000
-const READ_DEADLINE_MS = 10_000
 
 const blNo = ref('')
 const autoSubmit = ref(false)
 const busy = ref(false)
-/** Lỗi khi làm việc với trang (đọc 提单号, điền form). */
+/** Lỗi khi làm việc với trang (điền form). */
 const pageError = ref('')
 /** Lỗi khi lưu setting — RIÊNG, không đè lên lỗi của lần điền. */
 const settingsError = ref('')
@@ -9855,13 +9821,6 @@ onMounted(async () => {
         placeholder="Bill of lading number (提单号)"
         @keyup.enter="runFill"
       />
-      <button
-        type="button"
-        title="Read the bill of lading number entered on the page"
-        @click="takeBlNoFromPage"
-      >
-        Read from page
-      </button>
     </div>
 
     <div class="row">
@@ -9981,6 +9940,22 @@ git commit package-lock.json package.json vitest.config.ts src/core/options.ts s
 > - `readSettingsResult()` trả `ok: true` khi **không có** `chrome.storage`
 >   (ngữ cảnh không phải extension) — đó không phải "đọc hỏng". Manifest có
 >   khai báo `permissions: ["storage"]` nên trong extension luôn có storage.
+>
+> **Ghi chú lần 4 (2026-10-29) — bỏ chức năng "đọc 提单号 từ trang".**
+> Theo yêu cầu của người dùng, chức năng này đã bị **gỡ bỏ hoàn toàn**, không
+> chỉ ở popup:
+> - `src/popup/App.vue`: bỏ nút **Read from page**, bỏ hàm `takeBlNoFromPage()`
+>   và hằng `READ_DEADLINE_MS`.
+> - `src/content/index.ts`: bỏ handler `MSG_GET_BL_NO` cùng hai helper
+>   `readBlNoFromPage()` / `isVisibleInput()`.
+> - `src/core/protocol.ts`: bỏ `MSG_GET_BL_NO` và interface `GetBlNoResult`.
+> - `tests/popup.test.ts` + `tests/content.test.ts`: bỏ 4 test của tính năng này
+>   (363 → 359 test, vẫn xanh).
+>
+> Hệ quả: `MSG_FILL` là message **duy nhất** còn lại giữa popup và content
+> script. Việc đọc 提单号 giờ **do người dùng tự nhập** vào ô nhập của popup
+> (vẫn giữ nguyên tiện ích `normalizeBlNo` bỏ đuôi kiểu `P1` trong content
+> script) — không còn đường tắc nào để lấy số từ DOM của trang.
 
 ---
 
@@ -10214,21 +10189,20 @@ Expected:
 
 | # | Bước | Kết quả mong đợi |
 |---|---|---|
-| 1 | Bấm icon extension → **Read from page** | Ô nhập lấy được 提单号 đang hiển thị |
-| 2 | Nhập `ONEYSHAGT1569600` → **Fill data** | Báo cáo hiện ra, không có lỗi đỏ |
-| 3 | Đối chiếu form đầu | 提单号, 船名, 航次, 承运人代码, 交货条款, 付款方式, 3 cảng, 3 nhóm liên hệ đều đúng |
-| 4 | Đối chiếu bảng hàng | Đủ số dòng `cdgoods`; 24 field trong dialog hàng đúng giá trị, **trừ** 包装类型/代码 (`PACKAGE_STR` / `PACKAGE_COD`) — 2 field này **cố ý để trống** vì API không có 包装类型 thật, và site **bắt buộc** chúng ⇒ phải chọn tay trước khi bấm 保存 |
-| 5 | Đối chiếu bảng container | Đủ số dòng `cdCon`; 9 cột đúng giá trị, **trừ** 尺寸 / 箱型 / 箱状态 — 3 field này **cố ý để trống** (API không có dữ liệu dùng được) |
-| 6 | Bấm **确定** ở form đầu | **Sẽ bị site từ chối** nếu 3 ô container còn trống ⇒ điền tay 尺寸/箱型/箱状态 cho từng dòng rồi bấm lại; lúc đó bản ghi mới xuất hiện trong danh sách |
-| 7 | Bật **Auto-click 确定** rồi chạy lại | Extension tự bấm 确定; nếu container còn thiếu 尺寸/箱型/箱状态 thì site từ chối ⇒ extension phải báo ⚠️ *"the site did not accept the form — the container rows still require 尺寸 / 箱型 / 箱状态"*, **không** được báo thành công |
-| 8 | Kiểm tra cookie `token` của site có phải `HttpOnly` không | Ghi lại kết quả — xem ghi chú bên dưới |
-| 9 | **Cực tính `payType`** → 预付 hay 到付 | Xem ghi chú bên dưới — nhãn option đã xác minh, còn cực tính thì xác nhận |
-| 10 | **3 field `*_PORT_COD`** là input thường hay `el-select` | Xem ghi chú bên dưới — tên cảng đã xác minh là `el-autocomplete` |
-| 11 | **Shape `getCntrCode`** khi đã đăng nhập | Xem ghi chú bên dưới — 3 endpoint còn lại đã xác minh; `getPackageCode/` không dùng |
-| 12 | **Nút lưu của dialog 货物信息** | Phải là `保存` (xem ghi chú bên dưới) |
-| 13 | **3 field bắt buộc mà API không có**: 尺寸, 箱型, 箱状态 | Người dùng phải tự chọn trên site — báo cáo phải nói rõ |
+| 1 | Nhập `ONEYSHAGT1569600` → **Fill data** | Báo cáo hiện ra, không có lỗi đỏ |
+| 2 | Đối chiếu form đầu | 提单号, 船名, 航次, 承运人代码, 交货条款, 付款方式, 3 cảng, 3 nhóm liên hệ đều đúng |
+| 3 | Đối chiếu bảng hàng | Đủ số dòng `cdgoods`; 24 field trong dialog hàng đúng giá trị, **trừ** 包装类型/代码 (`PACKAGE_STR` / `PACKAGE_COD`) — 2 field này **cố ý để trống** vì API không có 包装类型 thật, và site **bắt buộc** chúng ⇒ phải chọn tay trước khi bấm 保存 |
+| 4 | Đối chiếu bảng container | Đủ số dòng `cdCon`; 9 cột đúng giá trị, **trừ** 尺寸 / 箱型 / 箱状态 — 3 field này **cố ý để trống** (API không có dữ liệu dùng được) |
+| 5 | Bấm **确定** ở form đầu | **Sẽ bị site từ chối** nếu 3 ô container còn trống ⇒ điền tay 尺寸/箱型/箱状态 cho từng dòng rồi bấm lại; lúc đó bản ghi mới xuất hiện trong danh sách |
+| 6 | Bật **Auto-click 确定** rồi chạy lại | Extension tự bấm 确定; nếu container còn thiếu 尺寸/箱型/箱状态 thì site từ chối ⇒ extension phải báo ⚠️ *"the site did not accept the form — the container rows still require 尺寸 / 箱型 / 箱状态"*, **không** được báo thành công |
+| 7 | Kiểm tra cookie `token` của site có phải `HttpOnly` không | Ghi lại kết quả — xem ghi chú bên dưới |
+| 8 | **Cực tính `payType`** → 预付 hay 到付 | Xem ghi chú bên dưới — nhãn option đã xác minh, còn cực tính thì xác nhận |
+| 9 | **3 field `*_PORT_COD`** là input thường hay `el-select` | Xem ghi chú bên dưới — tên cảng đã xác minh là `el-autocomplete` |
+| 10 | **Shape `getCntrCode`** khi đã đăng nhập | Xem ghi chú bên dưới — 3 endpoint còn lại đã xác minh; `getPackageCode/` không dùng |
+| 11 | **Nút lưu của dialog 货物信息** | Phải là `保存` (xem ghi chú bên dưới) |
+| 12 | **3 field bắt buộc mà API không có**: 尺寸, 箱型, 箱状态 | Người dùng phải tự chọn trên site — báo cáo phải nói rõ |
 
-> **Bước 9 — nhãn option của 付款方式 (`PAY_WAY_ID`).** **Đã xác minh** từ bundle thật
+> **Bước 8 — nhãn option của 付款方式 (`PAY_WAY_ID`).** **Đã xác minh** từ bundle thật
 > của site (2026-10-27): option tĩnh là `请选择` / `预付` (`P`) / `到付` (`C`) /
 > `免费` (`F`) — xem FACT 2 trong `2026-10-27-live-site-alignment.md`. Adapter
 > `pickFromSelect` khớp option theo **text hiển thị**, nên `mapHeader` phải trả
@@ -10245,7 +10219,7 @@ Expected:
 >   .map((el) => el.textContent.trim())
 > ```
 
-> **Bước 10 — kiểu DOM của các field cảng.** **Đã xác minh** từ bundle thật:
+> **Bước 9 — kiểu DOM của các field cảng.** **Đã xác minh** từ bundle thật:
 > `START_PORT_NAM` / `DISCHRG_PORT_NAM` / `TRANS_PORT_NAM` / `DEST_PORT_NAM` /
 > `SIGN_PLACE_STR` là **`el-autocomplete`**, và site tự điền `*_PORT_COD` qua
 > `onSelect` (tách theo dấu `/` **cuối cùng**) — xem FACT 3. Vì vậy extension chỉ
@@ -10259,7 +10233,7 @@ Expected:
 > console.log(el?.outerHTML, el?.closest('.el-select') !== null)
 > ```
 
-> **Bước 11 — shape thật của 5 endpoint dict.** **Đã xác minh** từ bundle thật
+> **Bước 10 — shape thật của 5 endpoint dict.** **Đã xác minh** từ bundle thật
 > (2026-10-27): `getTrustCode` → `data` là mảng object có `TRUST_COD`;
 > `getDrType` → `data` là mảng **chuỗi thuần**; `getPort` → mảng object có
 > `E_PORT_NAM` + `PORT_COD`; cả 5 endpoint tồn tại và lỗi nằm trong **HTTP 200**
@@ -10275,7 +10249,7 @@ Expected:
 > console.log(JSON.stringify(await r.json()).slice(0, 800))
 > ```
 
-> **Bước 12 — nút lưu của dialog 货物信息.** **Đã xác minh** từ bundle: footer của
+> **Bước 11 — nút lưu của dialog 货物信息.** **Đã xác minh** từ bundle: footer của
 > dialog hàng có đúng 2 nút là `取消` và ` 保存 ` — **không có `确定`**. `确定` chỉ
 > xuất hiện trong hộp thoại xác nhận xoá (`确定要删除这条货物信息吗？`). Extension phải
 > bấm `保存`.
@@ -10285,7 +10259,7 @@ Expected:
 > Array.from(document.querySelectorAll('.el-dialog__footer button')).map(b => b.textContent.trim())
 > ```
 
-> **Bước 13 — 3 field bắt buộc mà API không có.** 尺寸 (`CNTR_SIZE_COD`), 箱型
+> **Bước 12 — 3 field bắt buộc mà API không có.** 尺寸 (`CNTR_SIZE_COD`), 箱型
 > (`CNTR_TYPE_COD`) và 箱状态 (`CNTR_EF_ID`) đều là field **bắt buộc** của site, nhưng
 > API không cung cấp được:
 > - 尺寸/箱型: API trả `cType`/`vC` là **mã số**, còn dict `getCntrCode/` chỉ có
@@ -10296,7 +10270,7 @@ Expected:
 > the page"*. Sau khi chạy xong, hãy điền tay 3 ô này cho từng dòng container rồi bấm
 > 确定 ở form đầu.
 
-> **Bước 8 — kiểm tra `HttpOnly` của cookie `token`.** Chưa xác định được nếu chưa đăng nhập thật (request ẩn danh tới site không trả về `Set-Cookie` nào cả), nên phải kiểm tra thủ công sau khi đăng nhập:
+> **Bước 7 — kiểm tra `HttpOnly` của cookie `token`.** Chưa xác định được nếu chưa đăng nhập thật (request ẩn danh tới site không trả về `Set-Cookie` nào cả), nên phải kiểm tra thủ công sau khi đăng nhập:
 >
 > - DevTools → tab **Application** → **Cookies** → `https://www.chinaports-agency.com:8870` → cột **HttpOnly** của cookie `token`.
 > - Hoặc chạy trong Console trang đã đăng nhập: `document.cookie` — nếu **không** thấy `token` trong kết quả thì cookie đó là `HttpOnly`.
