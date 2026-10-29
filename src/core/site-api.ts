@@ -168,6 +168,18 @@ export interface SiteFetchOptions {
   cookieString?: string
   /** Thời gian chờ tối đa (ms) cho mỗi request — hết giờ thì báo lỗi `timeout`. */
   timeoutMs?: number
+  /**
+   * Nhãn của endpoint trong message lỗi.
+   *
+   * Mặc định là `path` — nhưng endpoint tạo bill có `path` RỖNG, nên message
+   * sẽ có hai dấu cách; endpoint đó truyền nhãn riêng.
+   */
+  label?: string
+  /**
+   * Header thêm cho request — nhận được cả 3 dạng của `HeadersInit`
+   * (object thuần, `Headers` instance, mảng cặp `[[name, value]]`).
+   */
+  headers?: HeadersInit
 }
 
 /**
@@ -228,7 +240,7 @@ export function describeSiteError(error: unknown): string {
         return 'The site did not respond in time. Please try again.'
     }
   }
-  return 'Something went wrong while reading the site dictionaries.'
+  return 'Something went wrong while talking to the site.'
 }
 
 /**
@@ -250,29 +262,43 @@ const SITE_SESSION_CODE = 4000
  * dict rỗng, còn một lỗi phía site (`code: 5000`) có thể đi kèm `data` khác
  * null — bỏ qua nó thì extension im lặng báo "không tìm thấy…" cho mọi field.
  */
-function assertSiteEnvelope(path: string, payload: unknown): void {
+function assertSiteEnvelope(label: string, payload: unknown): void {
   if (typeof payload !== 'object' || payload === null) {
     throw new SiteApiError(
       'bad_response',
-      `The site API ${path} returned a response that is not the site's {code, data, msg} envelope.`,
+      `The site API response for ${label} is not the site's {code, data, msg} envelope.`,
     )
   }
   const source = payload as { code?: unknown }
   if (typeof source.code !== 'number') {
     throw new SiteApiError(
       'bad_response',
-      `The site API ${path} returned a response with no numeric code — not the site's {code, data, msg} envelope.`,
+      `The site API response for ${label} has no numeric code — not the site's {code, data, msg} envelope.`,
     )
   }
   if (source.code === SITE_OK_CODE) return
   if (source.code === SITE_SESSION_CODE) {
     throw new SiteApiError(
       'session',
-      `The site rejected ${path} because the session is missing or expired. Log in to the site and try again.`,
+      `The site rejected the request to ${label} because the session is missing or expired. Log in to the site and try again.`,
       source.code,
     )
   }
-  throw new SiteApiError('site', `The site rejected ${path} (code ${source.code}).`, source.code)
+  throw new SiteApiError('site', `The site rejected the request to ${label} (code ${source.code}).`, source.code)
+}
+
+/**
+ * Tên header dạng `Content-Type`.
+ *
+ * `Headers` chuẩn hoá tên header về chữ thường (`authorization`) — HTTP không
+ * phân biệt hoa/thường nên vẫn đúng, nhưng giữ casing canonical giúp request
+ * đọc giống hệt cách site nhìn thấy.
+ */
+function canonicalHeaderName(name: string): string {
+  return name
+    .split('-')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join('-')
 }
 
 /**
@@ -292,25 +318,34 @@ async function sendSiteJson(
 ): Promise<unknown> {
   const base = options.baseUrl ?? DEFAULT_SITE_API_BASE
   const doFetch = options.fetchImpl ?? fetch
+  // Nhãn trong message lỗi — `path` rỗng (endpoint tạo bill) tạo ra message
+  // có hai dấu cách, nên endpoint đó truyền nhãn riêng.
+  const label = options.label ?? path
   // Service worker của MV3 không có `document` ⇒ không có `document.cookie`.
   const token = readCookieToken(
     options.cookieString ?? (typeof document !== 'undefined' ? document.cookie : ''),
   )
 
-  // Header của caller (vd `Content-Type` của POST) được giữ lại; hai dạng
-  // `Headers`/mảng cặp không dùng ở đây nên bỏ qua.
-  const headers: Record<string, string> = { Accept: 'application/json' }
-  const extra = init.headers
-  if (extra && !Array.isArray(extra) && !(extra instanceof Headers)) {
-    // Narrowing của TS ở đây là `Record<string, string>` — gán thẳng để
-    // compiler bắt được nếu mai đổi điều kiện và lọt header không phải chuỗi.
-    const merged: Record<string, string> = { ...extra }
-    Object.assign(headers, merged)
+  // `Headers` nhận được cả 3 dạng của `HeadersInit` (object thuần, `Headers`
+  // instance, mảng cặp) và gộp các header trùng tên (không phân biệt hoa/thường)
+  // ⇒ không header nào của caller bị rơi, không gửi 2 header cùng tên.
+  const headers = new Headers(options.headers)
+  for (const [name, value] of new Headers(init.headers)) {
+    headers.set(name, value)
   }
-  if (token) headers.Authorization = `JWT ${token}`
+  headers.set('Accept', 'application/json')
+  // Token trong cookie của site là nguồn xác thực ⇒ ghi đè `Authorization` mà
+  // caller đưa vào. Không có token trong cookie thì giữ nguyên của caller.
+  if (token) headers.set('Authorization', `JWT ${token}`)
 
   const query = params ? `?${new URLSearchParams(params).toString()}` : ''
   const url = `${base}/${path}${query}`
+
+  // `fetch` nhận object phẳng ⇒ đưa `Headers` về dạng đó (tên canonical).
+  const headerRecord: Record<string, string> = {}
+  headers.forEach((value, name) => {
+    headerRecord[canonicalHeaderName(name)] = value
+  })
 
   let res: JsonResponse
   try {
@@ -318,7 +353,7 @@ async function sendSiteJson(
       url,
       {
         ...init,
-        headers,
+        headers: headerRecord,
         // API cùng origin của site ⇒ cookie phải đi kèm mọi request.
         credentials: 'include',
       },
@@ -328,13 +363,13 @@ async function sendSiteJson(
     if (e instanceof HttpTimeoutError) {
       throw new SiteApiError('timeout', e.message)
     }
-    throw new SiteApiError('network', `Could not reach the site API ${path}: ${(e as Error).message}`)
+    throw new SiteApiError('network', `Could not reach the site API (${label}): ${(e as Error).message}`)
   }
 
   if (!res.ok) {
     throw new SiteApiError(
       'http',
-      `The site API ${path} returned HTTP ${res.status}`,
+      `The site API request to ${label} returned HTTP ${res.status}`,
       res.status,
     )
   }
@@ -342,12 +377,12 @@ async function sendSiteJson(
   if (res.invalidJson) {
     throw new SiteApiError(
       'bad_response',
-      `The site API ${path} response is not valid JSON`,
+      `The site API response for ${label} is not valid JSON`,
     )
   }
 
   const payload = res.data
-  assertSiteEnvelope(path, payload)
+  assertSiteEnvelope(label, payload)
   return payload
 }
 
@@ -375,12 +410,30 @@ export async function postSiteJson(
   body: unknown,
   options: SiteFetchOptions = {},
 ): Promise<unknown> {
+  let serialized: unknown
+  try {
+    serialized = JSON.stringify(body)
+  } catch (e) {
+    // Body cyclic (hoặc có BigInt) ⇒ serialize lỗi. Không để `TypeError` thô
+    // thoát ra ngoài — mọi lỗi của tầng này phải là `SiteApiError`.
+    throw new SiteApiError(
+      'bad_response',
+      `The request body for ${options.label ?? path} could not be serialized as JSON: ${(e as Error).message}`,
+    )
+  }
+  if (typeof serialized !== 'string') {
+    throw new SiteApiError(
+      'bad_response',
+      `The request body for ${options.label ?? path} could not be serialized as JSON.`,
+    )
+  }
+
   return sendSiteJson(
     path,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: serialized,
     },
     options,
   )
