@@ -199,13 +199,13 @@ describe('writeSettings', () => {
     expect(settings.autoSubmit).toBe(true)
   })
 
-  it('không ném lỗi khi không có chrome.storage', async () => {
+  it('không có chrome.storage ⇒ phải báo thất bại, KHÔNG được báo thành công', async () => {
+    // Không có storage ⇒ không có gì được ghi ⇒ `writeSettings` phải ném lỗi.
+    // Nếu nó vẫn trả về bình thường thì tầng UI sẽ hiện "Saved." dù không
+    // có byte nào được lưu.
     vi.stubGlobal('chrome', undefined)
 
-    const settings = await writeSettings({ autoSubmit: true })
-
-    expect(settings.autoSubmit).toBe(true)
-    expect(settings.apiBase).toBe(DEFAULT_SETTINGS.apiBase)
+    await expect(writeSettings({ autoSubmit: true })).rejects.toThrow()
   })
 
   it('auto-submit mặc định là tắt', () => {
@@ -346,6 +346,25 @@ describe('saveSettings', () => {
         },
       },
     })
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      const result = await saveSettings({ autoSubmit: true })
+
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.error).toBe('Could not save the settings. Please try again.')
+      }
+      expect(errorSpy).toHaveBeenCalled()
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('không có chrome.storage ⇒ ok = false (không được báo "đã lưu")', async () => {
+    // `writeSettings` ném lỗi khi không có storage ⇒ `saveSettings` phải báo
+    // thất bại, để tầng UI hiện lỗi thay vì "Saved.".
+    vi.stubGlobal('chrome', undefined)
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     try {

@@ -127,16 +127,21 @@ function assign<K extends keyof ExtensionSettings>(
 export async function writeSettings(
   patch: Partial<ExtensionSettings>,
 ): Promise<ExtensionSettings> {
-  const next = withDefaults({ ...(await readSettings()), ...patch })
-  if (hasChromeStorage()) {
-    // CHỈ ghi những key có trong patch.
+  if (!hasChromeStorage()) {
+    // Không có storage ⇒ KHÔNG ghi được gì ⇒ phải báo thất bại.
     //
-    // Nếu ghi toàn bộ settings, một lần đọc lỗi (storage bị chặn / quota)
-    // khiến `next` mang giá trị MẶC ĐỊNH cho apiBase/siteApiBase ⇒ ghi đè
-    // luôn base API tuỳ chỉnh của người dùng. Ghi patch ⇒ không đụng tới
-    // key nào khác.
-    await chrome.storage.sync.set(normalizePatch(patch))
+    // Báo "thành công" ở đây là mất setting trong im lặng: tầng UI sẽ hiện
+    // "Saved." dù không có byte nào được ghi đi.
+    throw new Error('chrome.storage.sync is not available')
   }
+  const next = withDefaults({ ...(await readSettings()), ...patch })
+  // CHỈ ghi những key có trong patch.
+  //
+  // Nếu ghi toàn bộ settings, một lần đọc lỗi (storage bị chặn / quota)
+  // khiến `next` mang giá trị MẶC ĐỊNH cho apiBase/siteApiBase ⇒ ghi đè
+  // luôn base API tuỳ chỉnh của người dùng. Ghi patch ⇒ không đụng tới
+  // key nào khác.
+  await chrome.storage.sync.set(normalizePatch(patch))
   return next
 }
 
@@ -164,5 +169,64 @@ export async function saveSettings(
   } catch (e) {
     console.error('[manifest-autofill] could not save settings', e)
     return { ok: false, error: 'Could not save the settings. Please try again.' }
+  }
+}
+
+/** Thay đổi của setting từ nơi khác (ví dụ popup ghi `autoSubmit`). */
+export interface SettingsChange {
+  apiBase?: string
+  siteApiBase?: string
+  autoSubmit?: boolean
+}
+
+/**
+ * Nghe `chrome.storage.onChanged` (area `sync`) và báo giá trị HIỆU LỰC.
+ *
+ * Tầng UI KHÔNG được tự đụng `chrome.storage` ⇒ việc đăng ký listener nằm ở
+ * đây. Giá trị báo ra đã qua `withDefaults` nên khớp với một lần đọc: base
+ * rỗng ⇒ mặc định, `autoSubmit` không phải boolean ⇒ false.
+ *
+ * Trả về hàm HUỶ đăng ký — component phải gọi nó khi unmount, nếu không
+ * listener sẽ giữ closure của component đã rời khỏi DOM.
+ */
+export function subscribeSettingsChanges(
+  onChange: (changes: SettingsChange) => void,
+): () => void {
+  if (!hasChromeStorage()) return () => {}
+  const onChanged = chrome.storage.onChanged
+  // Test stub có thể chỉ có `get`/`set` ⇒ không có API event thì bỏ qua.
+  if (typeof onChanged?.addListener !== 'function') return () => {}
+
+  const listener = (
+    changes: Record<string, { newValue?: unknown }>,
+    areaName: string,
+  ): void => {
+    // Chỉ `sync` mới là storage mà extension dùng.
+    if (areaName !== 'sync') return
+
+    const stored: Partial<ExtensionSettings> = {}
+    for (const key of Object.keys(DEFAULT_SETTINGS) as (keyof ExtensionSettings)[]) {
+      if (!(key in changes)) continue
+      const raw = changes[key]?.newValue
+      // Giá trị thiếu (key bị xoá) hoặc sai kiểu ⇒ để `withDefaults` quyết
+      // định: base rỗng ⇒ mặc định, `autoSubmit` không phải boolean ⇒ false.
+      if (typeof raw === 'string' || typeof raw === 'boolean') {
+        assign(stored, key, raw as ExtensionSettings[typeof key])
+      }
+    }
+    const effective = withDefaults(stored)
+
+    const updated: SettingsChange = {}
+    for (const key of Object.keys(DEFAULT_SETTINGS) as (keyof ExtensionSettings)[]) {
+      if (!(key in changes)) continue
+      assign(updated, key, effective[key])
+    }
+    if (Object.keys(updated).length === 0) return
+    onChange(updated)
+  }
+
+  onChanged.addListener(listener)
+  return () => {
+    onChanged.removeListener?.(listener)
   }
 }
