@@ -52,7 +52,7 @@ const PAY_WAY_OPTIONS: Record<'P' | 'C', { label: string; code: string }> = {
  * - còn lại (`null`/`undefined`, hoặc giá trị lạ như `2`, `-1`) → `undefined`:
  *   KHÔNG đoán, bỏ trống 付款方式. Lý do cụ thể do caller ghi vào note.
  */
-function payWayOf(
+export function payWayOf(
   payType: boolean | number | null | undefined,
 ): { label: string; code: string } | undefined {
   if (payType === true || payType === 1) return PAY_WAY_OPTIONS.P
