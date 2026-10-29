@@ -455,3 +455,58 @@ manifest-huagang/
 | 4 | `firmCode` **không** map vào trường AEO → để trống | ✅ chốt |
 | 5 | Field không có trong API → để trống + ghi chú ⚠️ trong báo cáo | ✅ chốt |
 | 6 | Không tự submit; người dùng bấm **确定** (có tuỳ chọn tự submit trong popup) | ✅ chốt |
+
+---
+
+## 12. Kết quả xác minh trên site thật (2026-10-29)
+
+- DOM dump của dialog 新增舱单信息: `docs/superpowers/specs/2026-10-26-dom-dump.md`
+- Selector cảng dùng thực tế: `input[id$="-<prop>"]` (Element Plus gán
+  `id = ${formId}-${prop}`) — dùng cho **mọi** field, kể cả 5 ô cảng; ô cảng
+  được nhận diện qua `.el-autocomplete` chứ không phải `.el-select`.
+- Shape thật của API dict: `getCntrCode/` → `data.cntr_type` + `data.cntr_size`
+  (mảng **chuỗi thuần**) — đúng như `pickArray(cntrRaw, ['cntr_type'|'cntr_size'])`
+  của extension.
+- Các field không điền được và lý do: xem bảng bên dưới.
+
+### 12.1 — Đã xác minh KHÔNG cần đăng nhập (bundle + API công khai)
+
+| # | Mục | Kết quả |
+|---|---|---|
+| 1 | `manifest_version`, `content_scripts`, `host_permissions`, `options_page` | ✅ khớp 100% với plan (`npm run build` + đọc `dist/manifest.json`) |
+| 2 | Nhãn option của 付款方式 | ✅ `请选择` / `预付`(`P`) / `到付`(`C`) / `免费`(`F`) — option **tĩnh**, adapter khớp theo **nhãn** |
+| 3 | Kiểu DOM của 5 ô cảng | ✅ `el-autocomplete` (không phải input thường, không phải `el-select`) ⇒ đọc được qua `input.value` |
+| 4 | Shape của `getCntrCode/` | ✅ `data.cntr_type` / `data.cntr_size` — mảng chuỗi |
+| 5 | Nút lưu của dialog 货物信息 | ✅ đúng 2 nút `取消` + ` 保存 ` (có khoảng trắng), **không có `确定`** ⇒ bấm `保存` sau khi trim |
+| 6 | Cơ chế cascade mã cảng | ✅ site tự tách `名称/代码` theo dấu `/` **cuối cùng** khi suggestion của ô *tên cảng* được chọn ⇒ cách extension gõ tên rồi click suggestion vẫn đúng |
+| 7 | Field bắt buộc của form đầu | ✅ site có 2 danh sách (`ge` / `ye`, tuỳ 收货人 = `TO ORDER` hay không); extension khớp, phần `START_PORT_COD`/`DISCHRG_PORT_COD` được cover bằng cơ chế `verify` mã cảng |
+| 8 | Field bắt buộc của dialog hàng | ✅ khớp `REQUIRED_BASE` / `REQUIRED_DANGER` / `REQUIRED_COLD` của extension |
+| 9 | Field bắt buộc của bảng container | ✅ khớp `REQUIRED_CONTAINER` (6 field) |
+| 10 | Enum vai trò `cabContacts[].type` | ⚠️ API trả **0/false = 发货人, 1/true = 收货人, 2 = 通知人** (bản ghi thật trả `2`, `true`, `false`) — `contactRole()` của extension đã xử lý đúng cả hai dạng |
+| 11 | 包装类型 thật của API | ✅ `packType` / `packDesc` / `packSize` đều `null` ⇒ để trống `PACKAGE_STR`/`PACKAGE_COD` là đúng |
+| 12 | Mã lỗi của API site | ✅ thành công = `2000`, hết phiên = `4000` (lỗi nằm trong HTTP 200) |
+
+### 12.2 — Còn phải kiểm trên trình duyệt (cần đăng nhập)
+
+| # | Mục | Trạng thái |
+|---|---|---|
+| 1 | Dump DOM thật của dialog + popper | ⏳ chưa chạy — xem `2026-10-26-dom-dump.md` mục A |
+| 2 | 12 dòng checklist chức năng của Task 17 | ⏳ chưa chạy |
+| 3 | **Cực tính `payType`** | ⏳ API trả `payType=false` cho `ONEYSHAGT1569600` ⇒ theo quy ước đã chốt extension chọn **到付 (`C`)**; cần đối chiếu bản ghi thật trên site |
+| 4 | Cookie `token` có `HttpOnly` không | ⏳ chưa kiểm (không ảnh hưởng cơ chế chính `credentials: 'include'`) |
+
+### 12.3 — Khoảng trống phát hiện khi xác minh
+
+**`电话` (`*_TE_STR`) chưa được coi là field bắt buộc của extension.**
+
+Site kiểm lúc bấm 确定: mỗi bên trong `[发货人, 收货人, 通知人]` phải có **ít nhất
+một** trong `电话 / EMAIL / 传真` (trừ 收货人 khi 收货人名称 = `TO ORDER`), nếu
+không thì báo `发货人联系方式未填写` / … . Extension chỉ điền được `电话` (từ
+`cabContacts[].phone`) — EMAIL và FAX luôn để trống — nên khi API **không** có
+`phone` cho một bên thì cả ba ô đều trống và site từ chối, trong khi báo cáo của
+extension **không** đánh dấu field này là bắt buộc (`REQUIRED_HEADER` không có
+`*_TE_STR`) ⇒ người dùng không biết vì sao form không submit được.
+
+Bản ghi thật `ONEYSHAGT1569600` có `phone` cho cả 3 bên nên không gặp lỗi này.
+Cần một task riêng để sửa (đưa `*_TE_STR` vào nhóm bắt buộc khi bên tương ứng
+không có bất kỳ thông tin liên hệ nào).
