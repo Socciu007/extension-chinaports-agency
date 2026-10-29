@@ -80,7 +80,7 @@ export async function addCargoRow(
     // Gửi `bill_no: ''` lên site ⇒ dòng hàng bị gắn vào bill khác/rác mà
     // không có bất kỳ lỗi nào báo ra ⇒ chặn ngay tại đây.
     throw new SiteApiError(
-      'bad_response',
+      'bad_request',
       'Cannot add a cargo row without a bill number — the site would attach the row to the wrong manifest.',
     )
   }

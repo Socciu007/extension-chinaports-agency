@@ -173,11 +173,16 @@ export interface SiteFetchOptions {
    *
    * Mặc định là `path` — nhưng endpoint tạo bill có `path` RỖNG, nên message
    * sẽ có hai dấu cách; endpoint đó truyền nhãn riêng.
+   *
+   * `loadSiteDicts` KHÔNG dùng nhãn này — nó tự gán nhãn riêng cho từng dict.
    */
   label?: string
   /**
    * Header thêm cho request — nhận được cả 3 dạng của `HeadersInit`
    * (object thuần, `Headers` instance, mảng cặp `[[name, value]]`).
+   *
+   * Thứ tự ưu tiên khi trùng tên: cookie `token` của site > `Content-Type`
+   * do tầng POST tự đặt > header của caller. `Accept` luôn do tầng này đặt.
    */
   headers?: HeadersInit
 }
@@ -191,6 +196,8 @@ export interface SiteFetchOptions {
  * - `network`      — request không hoàn tất (offline, DNS, CORS)
  * - `http`         — site đã trả lời nhưng status không phải 2xx
  * - `bad_response` — body không phải JSON, hoặc không phải envelope của site
+ * - `bad_request`  — extension KHÔNG gửi được request hợp lệ (body không
+ *   serialize được, thiếu mã bill) ⇒ site chưa hề bị gọi
  * - `timeout`      — site không trả lời trong thời gian chờ
  */
 export type SiteApiErrorKind =
@@ -199,6 +206,7 @@ export type SiteApiErrorKind =
   | 'network'
   | 'http'
   | 'bad_response'
+  | 'bad_request'
   | 'timeout'
 
 /** Lỗi từ API của site — luôn mang `kind` để tầng UI map sang thông báo. */
@@ -236,6 +244,8 @@ export function describeSiteError(error: unknown): string {
         return 'The site returned an error. Please try again in a moment.'
       case 'bad_response':
         return 'The site returned an unexpected response.'
+      case 'bad_request':
+        return 'The request was not sent to the site because the manifest data was incomplete or invalid.'
       case 'timeout':
         return 'The site did not respond in time. Please try again.'
     }
@@ -288,20 +298,6 @@ function assertSiteEnvelope(label: string, payload: unknown): void {
 }
 
 /**
- * Tên header dạng `Content-Type`.
- *
- * `Headers` chuẩn hoá tên header về chữ thường (`authorization`) — HTTP không
- * phân biệt hoa/thường nên vẫn đúng, nhưng giữ casing canonical giúp request
- * đọc giống hệt cách site nhìn thấy.
- */
-function canonicalHeaderName(name: string): string {
-  return name
-    .split('-')
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join('-')
-}
-
-/**
  * Gửi một request tới API của site và trả về envelope đã kiểm tra.
  *
  * Toàn bộ phần chung của GET và POST nằm ở đây: dựng URL (+ query), đọc
@@ -341,19 +337,16 @@ async function sendSiteJson(
   const query = params ? `?${new URLSearchParams(params).toString()}` : ''
   const url = `${base}/${path}${query}`
 
-  // `fetch` nhận object phẳng ⇒ đưa `Headers` về dạng đó (tên canonical).
-  const headerRecord: Record<string, string> = {}
-  headers.forEach((value, name) => {
-    headerRecord[canonicalHeaderName(name)] = value
-  })
-
   let res: JsonResponse
   try {
     res = await fetchJsonWithTimeout(
       url,
       {
         ...init,
-        headers: headerRecord,
+        // Đưa thẳng `Headers` instance cho `fetch` — chính `Headers` đã lo
+        // chuẩn hoá tên header và gộp header trùng tên (không phân biệt
+        // hoa/thường) ⇒ không thể gửi 2 header cùng tên.
+        headers,
         // API cùng origin của site ⇒ cookie phải đi kèm mọi request.
         credentials: 'include',
       },
@@ -417,13 +410,13 @@ export async function postSiteJson(
     // Body cyclic (hoặc có BigInt) ⇒ serialize lỗi. Không để `TypeError` thô
     // thoát ra ngoài — mọi lỗi của tầng này phải là `SiteApiError`.
     throw new SiteApiError(
-      'bad_response',
+      'bad_request',
       `The request body for ${options.label ?? path} could not be serialized as JSON: ${(e as Error).message}`,
     )
   }
   if (typeof serialized !== 'string') {
     throw new SiteApiError(
-      'bad_response',
+      'bad_request',
       `The request body for ${options.label ?? path} could not be serialized as JSON.`,
     )
   }
@@ -443,13 +436,17 @@ export async function loadSiteDicts(options: SiteFetchOptions = {}): Promise<Sit
   // 4 endpoint, đúng như site gọi (FACT 4). `getPackageCode/` **không** gọi:
   // sau C-2 thì PACKAGE_STR/PACKAGE_COD đều để trống ⇒ dict 包装 không có ai dùng.
   const [trustRaw, drRaw, cntrRaw, portRaw] = await Promise.all([
-    fetchSiteJson('getTrustCode/', options, { kw: '' }),
-    fetchSiteJson('getDrType/', options, { kw: '' }),
-    fetchSiteJson('getCntrCode/', options),
+    fetchSiteJson('getTrustCode/', { ...options, label: 'the trust code list' }, { kw: '' }),
+    fetchSiteJson('getDrType/', { ...options, label: 'the cargo type list' }, { kw: '' }),
+    fetchSiteJson('getCntrCode/', { ...options, label: 'the container type list' }),
     // `getPort/` chỉ là fallback: nó lọc theo tên cảng tiếng Trung nên có thể
     // lỗi mà không được làm hỏng phần còn lại của dict (tên cảng chính đến
     // từ API dadaex).
-    fetchSiteJson('getPort/', options, { kw: '', filter: 'E_PORT_NAM' }).catch(() => null),
+    fetchSiteJson(
+      'getPort/',
+      { ...options, label: 'the port list' },
+      { kw: '', filter: 'E_PORT_NAM' },
+    ).catch(() => null),
   ])
 
   return {

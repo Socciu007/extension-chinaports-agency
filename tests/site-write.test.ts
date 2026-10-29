@@ -13,7 +13,7 @@ import type { HeaderPayload } from '../src/core/payload'
 /** Phần `init` mà module đưa cho fetch — dùng để ghim shape của request. */
 interface CapturedInit {
   method?: string
-  headers?: Record<string, string>
+  headers?: HeadersInit
   credentials?: string
   body?: unknown
 }
@@ -62,6 +62,19 @@ function thrownOf(fn: () => unknown): SiteApiError {
   throw new Error('Expected the function to throw, but it did not')
 }
 
+/**
+ * Đọc header gửi đi theo shape THẬT của `init.headers`.
+ *
+ * KHÔNG dựng lại `Headers`: `Headers` gộp header trùng tên (không phân biệt
+ * hoa/thường) ⇒ một record hỏng chứa cả `authorization` và `Authorization` vẫn
+ * ra đúng 1 entry ⇒ test không bao giờ fail. Đọc shape thật mới bắt được.
+ */
+function sentHeaders(init: HeadersInit | undefined): [string, string][] {
+  if (init instanceof Headers) return Array.from(init.entries())
+  if (Array.isArray(init)) return init.map(([name, value]) => [String(name), String(value)])
+  return Object.entries((init ?? {}) as Record<string, string>)
+}
+
 /** Header mẫu — giống hình dạng `buildHeaderPayload` dựng ra. */
 function sampleHeader(): HeaderPayload {
   return {
@@ -100,8 +113,11 @@ describe('postSiteJson', () => {
     const init = calls[0]?.init
     expect(init?.method).toBe('POST')
     expect(init?.credentials).toBe('include')
-    expect(init?.headers?.['Content-Type']).toBe('application/json')
-    expect(init?.headers?.['Authorization']).toBe('JWT abc')
+    const entries = sentHeaders(init?.headers)
+    expect(entries.find(([name]) => name.toLowerCase() === 'content-type')?.[1]).toBe(
+      'application/json',
+    )
+    expect(entries.find(([name]) => name.toLowerCase() === 'authorization')?.[1]).toBe('JWT abc')
   })
 
   it('body là JSON string parse lại được và đúng object đã gửi', async () => {
@@ -120,9 +136,8 @@ describe('postSiteJson', () => {
 
     await postSiteJson('', {}, { ...OPTIONS, cookieString: '', fetchImpl })
 
-    const headers = calls[0]?.init.headers ?? {}
-    expect(headers['Authorization']).toBeUndefined()
-    expect('Authorization' in headers).toBe(false)
+    const entries = sentHeaders(calls[0]?.init.headers)
+    expect(entries.filter(([name]) => name.toLowerCase() === 'authorization')).toHaveLength(0)
   })
 
   it('trả về envelope đã kiểm tra, KHÔNG bóc data', async () => {
@@ -198,13 +213,23 @@ describe('postSiteJson', () => {
     expect(err.kind).toBe('timeout')
   })
 
-  it('body cyclic → SiteApiError bad_response, KHÔNG phải TypeError thô', async () => {
+  it('body cyclic → SiteApiError bad_request, KHÔNG phải TypeError thô', async () => {
     const { fetchImpl } = captureFetch(() => okResponse({ code: 2000, data: {} }))
     const cyclic: Record<string, unknown> = {}
     cyclic.self = cyclic
 
     const err = await rejectionOf(postSiteJson('', cyclic, { ...OPTIONS, fetchImpl }))
-    expect(err.kind).toBe('bad_response')
+    expect(err.kind).toBe('bad_request')
+  })
+
+  it('body undefined ⇒ SiteApiError bad_request, KHÔNG gửi POST rỗng', async () => {
+    const { fetchImpl, calls } = captureFetch(() => okResponse({ code: 2000, data: {} }))
+
+    const err = await rejectionOf(
+      postSiteJson('', undefined as unknown as Record<string, unknown>, { ...OPTIONS, fetchImpl }),
+    )
+    expect(err.kind).toBe('bad_request')
+    expect(calls).toHaveLength(0)
   })
 
   it('token trong cookie THẮNG Authorization của caller', async () => {
@@ -212,8 +237,12 @@ describe('postSiteJson', () => {
 
     await postSiteJson('', {}, { ...OPTIONS, fetchImpl, headers: { Authorization: 'caller-token' } })
 
-    const sent = new Headers(calls[0]?.init.headers)
-    expect(sent.get('authorization')).toBe('JWT abc')
+    const entries = sentHeaders(calls[0]?.init.headers)
+    const auth = entries.filter(([name]) => name.toLowerCase() === 'authorization')
+    expect(auth).toHaveLength(1)
+    expect(auth[0]?.[1]).toBe('JWT abc')
+    // Giá trị của caller KHÔNG được sót lại ở bất kỳ entry nào.
+    expect(entries.some(([, value]) => value.includes('caller-token'))).toBe(false)
   })
 
   it('không có token trong cookie ⇒ giữ Authorization của caller', async () => {
@@ -234,8 +263,10 @@ describe('postSiteJson', () => {
 
     await postSiteJson('', {}, { ...OPTIONS, fetchImpl, headers: { authorization: 'caller-token' } })
 
-    const entries = Array.from(new Headers(calls[0]?.init.headers))
-    expect(entries.filter(([name]) => name === 'authorization')).toHaveLength(1)
+    const entries = sentHeaders(calls[0]?.init.headers)
+    const auth = entries.filter(([name]) => name.toLowerCase() === 'authorization')
+    expect(auth).toHaveLength(1)
+    expect(auth[0]?.[1]).toBe('JWT abc')
   })
 
   it('header dạng mảng cặp KHÔNG bị drop', async () => {
@@ -290,8 +321,30 @@ describe('addCargoRow', () => {
     const { fetchImpl, calls } = captureFetch(() => okResponse({ code: 2000, data: {} }))
 
     const err = await rejectionOf(addCargoRow({ piece_num: 1 }, '', { ...OPTIONS, fetchImpl }))
-    expect(err.kind).toBe('bad_response')
+    expect(err.kind).toBe('bad_request')
     expect(calls).toHaveLength(0)
+  })
+
+  it('billNo chỉ có khoảng trắng ⇒ ném SiteApiError, KHÔNG gửi request', async () => {
+    const { fetchImpl, calls } = captureFetch(() => okResponse({ code: 2000, data: {} }))
+
+    const err = await rejectionOf(addCargoRow({ piece_num: 1 }, '   ', { ...OPTIONS, fetchImpl }))
+    expect(err.kind).toBe('bad_request')
+    expect(calls).toHaveLength(0)
+  })
+
+  it('key trong cargo được lowercase trước khi gửi lên site', async () => {
+    const { fetchImpl, calls } = captureFetch(() => okResponse({ code: 2000, data: {} }))
+
+    await addCargoRow(
+      { E_CARGO_NAM: 'SILENT DIESEL GENERATOR' } as Record<string, unknown>,
+      'B-1',
+      { ...OPTIONS, fetchImpl },
+    )
+
+    const body = JSON.parse(String(calls[0]?.init.body)) as Record<string, unknown>
+    expect(body.e_cargo_nam).toBe('SILENT DIESEL GENERATOR')
+    expect('E_CARGO_NAM' in body).toBe(false)
   })
 
   it('cargo chứa sẵn bill_no khác ⇒ tham số thắng', async () => {
@@ -424,6 +477,26 @@ describe('extractBillNo', () => {
 
   it('bill_no là số hữu lệ ⇒ trả String(value)', () => {
     expect(extractBillNo({ code: 2000, data: { bill_no: 12345 } })).toBe('12345')
+  })
+
+  it('data là mảng ⇒ lùi xuống envelope top-level', () => {
+    expect(extractBillNo({ code: 2000, data: [], bill_no: 'B-9' })).toBe('B-9')
+  })
+
+  it('bill_no là object/boolean ⇒ không phải mã bill ⇒ ném lỗi', () => {
+    expect(() => extractBillNo({ code: 2000, data: { bill_no: { id: 1 } } })).toThrow(SiteApiError)
+    expect(() => extractBillNo({ code: 2000, data: { bill_no: true } })).toThrow(SiteApiError)
+  })
+
+  it('bill_no là NaN/Infinity ⇒ không phải mã bill ⇒ ném lỗi', () => {
+    expect(() => extractBillNo({ code: 2000, data: { bill_no: Number.NaN } })).toThrow(SiteApiError)
+    expect(() =>
+      extractBillNo({ code: 2000, data: { bill_no: Number.POSITIVE_INFINITY } }),
+    ).toThrow(SiteApiError)
+  })
+
+  it('bill_no chỉ có khoảng trắng ⇒ không phải mã bill ⇒ ném lỗi', () => {
+    expect(() => extractBillNo({ code: 2000, data: { bill_no: '   ' } })).toThrow(SiteApiError)
   })
 })
 

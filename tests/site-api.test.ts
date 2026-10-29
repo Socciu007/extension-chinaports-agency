@@ -14,7 +14,7 @@ import {
 /** Phần `init` mà module đưa cho fetch — dùng để ghim shape của request. */
 interface CapturedInit {
   method?: string
-  headers?: Record<string, string>
+  headers?: HeadersInit
   credentials?: string
 }
 
@@ -197,7 +197,7 @@ describe('loadSiteDicts', () => {
     // Cookie của site phải được gửi kèm (API cùng origin của site).
     expect(inits.every((i) => i.credentials === 'include')).toBe(true)
     expect(inits.every((i) => i.method === 'GET')).toBe(true)
-    expect(inits.every((i) => i.headers?.Authorization === 'JWT abc')).toBe(true)
+    expect(inits.every((i) => new Headers(i.headers).get('authorization') === 'JWT abc')).toBe(true)
   })
 
   it('không gửi header Authorization khi không có token', async () => {
@@ -214,8 +214,7 @@ describe('loadSiteDicts', () => {
     })
 
     expect(inits).toHaveLength(4)
-    expect(inits.every((i) => i.headers?.Authorization === undefined)).toBe(true)
-    expect(inits.every((i) => !('Authorization' in (i.headers ?? {})))).toBe(true)
+    expect(inits.every((i) => new Headers(i.headers).get('authorization') === null)).toBe(true)
   })
 
   it('vẫn nạp được dict khác khi getPort lỗi', async () => {
@@ -390,6 +389,7 @@ describe('describeSiteError', () => {
       'network',
       'http',
       'bad_response',
+      'bad_request',
       'timeout',
     ]
     const sentences = kinds.map((kind) => describeSiteError(new SiteApiError(kind, 'raw detail')))
@@ -407,6 +407,11 @@ describe('describeSiteError', () => {
     const sentence = describeSiteError(new Error('boom'))
     expect(sentence).toMatch(/\S/)
     expect(sentence).not.toContain('boom')
+  })
+
+  it('bad_request ⇒ thông báo cho biết request chưa hề được gửi', () => {
+    const message = describeSiteError(new SiteApiError('bad_request', 'x'))
+    expect(message).toContain('was not sent to the site')
   })
 })
 
