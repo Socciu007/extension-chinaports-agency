@@ -17,9 +17,13 @@ export default defineManifest({
     default_popup: 'src/popup/index.html',
   },
   options_page: 'src/options/index.html',
-  background: {
-    service_worker: 'src/background/index.ts',
-  },
+  // KHÔNG khai báo `background.service_worker` — extension không có tác vụ
+  // chạy nền (popup gửi `MSG_FILL` thẳng cho content script, cả hai đều đọc
+  // `chrome.storage.sync` trực tiếp).
+  //
+  // Quan trọng: bản production vì vậy KHÔNG sinh `service-worker-loader.js`
+  // ⇒ Chrome không phải đăng ký service worker nào.
+  // Xem spec §13 và comment trong `vite.config.ts`.
   content_scripts: [
     {
       matches: ['https://www.chinaports-agency.com:8870/*'],

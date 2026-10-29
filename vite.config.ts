@@ -5,21 +5,24 @@ import manifest from './manifest.config'
 
 export default defineConfig(({ command }) => ({
   plugins: [vue(), crx({ manifest })],
-  // `npm run dev` (chế độ serve của crxjs) ghi manifest + service-worker-loader
-  // vào `build.outDir` — tức là CÙNG thư mục với production build. Nếu để
-  // chung, dev server sẽ ghi đè bản build production, và loader sinh ra sẽ là:
-  //
-  //     import 'http://localhost:<port>/src/background/index.ts';
-  //
-  // Service worker của MV3 bắt buộc cùng origin với extension ⇒ Chrome chặn
-  // import cross-origin này ⇒ "Service worker registration failed. Status
-  // code: 3" (hoặc lỗi CORS khi chạy dev server).
+  // `npm run dev` (chế độ serve của crxjs) ghi manifest + asset vào
+  // `build.outDir`. Nếu `outDir` của dev trùng với production, dev server sẽ
+  // ghi đè bản build production.
   //
   // Tách thư mục cho hai chế độ dùng song song:
   //   `dist/`      = production build (`npm run build`) — load unpacked để test
-  //                  thật trên site, không cần dev server.
-  //   `.crx/dev/`  = dev server (`npm run dev`) — cần companion extension
-  //                  "CRXJS" cài trong Chrome để HMR hoạt động.
+  //                  thật trên site. ĐÂY là bản dùng để chạy trong Chrome.
+  //   `.crx/dev/`  = dev server (`npm run dev`).
+  //
+  // LƯU Ý: bản dev KHÔNG load được trong Chrome. Ở chế độ serve, crxjs LUÔN tự
+  // thêm `background.service_worker` trỏ tới `service-worker-loader.js` — loader
+  // đó import cross-origin (`http://localhost:<port>/@vite/env` và
+  // `http://localhost:<port>/@crx/client-worker`), mà MV3 bắt buộc service
+  // worker cùng origin với extension ⇒ Chrome từ chối đăng ký ⇒ "Service
+  // worker registration failed. Status code: 3". Đây là hạn chế của crxjs
+  // beta.23, không phải của manifest của ta.
+  //
+  // ⇒ Muốn test thật trên site: luôn `npm run build` rồi Load unpacked `dist/`.
   build: { outDir: command === 'serve' ? '.crx/dev' : 'dist' },
-  server: { port: 5174, strictPort: true },
+  server: { port: 5173, strictPort: true },
 }))

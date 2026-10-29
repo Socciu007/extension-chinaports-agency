@@ -25,6 +25,17 @@ try {
   process.exit(1)
 }
 
+// Extension KHÔNG được có background service worker: loader của MV3 ở chế độ
+// dev import cross-origin ⇒ Chrome từ chối đăng ký ("Service worker registration
+// failed. Status code: 3"). Bản production vì vậy không được sinh
+// `service-worker-loader.js` ⇒ manifest build ra cũng không được có `background`.
+if (manifest.background) {
+  console.error(
+    '✗ dist/manifest.json có key `background` ⇒ Chrome sẽ đăng ký service worker.',
+  )
+  process.exit(1)
+}
+
 /** Gom mọi đường dẫn cục bộ mà manifest tham chiếu tới. */
 function collectPaths(manifest) {
   const paths = []
