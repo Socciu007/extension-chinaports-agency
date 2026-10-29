@@ -544,5 +544,43 @@ năng khác giữ nguyên.
 `background.service_worker` trỏ tới loader import cross-origin, kể cả khi
 manifest của ta không khai báo background (xem `renderCrxManifest` trong
 `node_modules/@crxjs/vite-plugin/dist/index.mjs`). Không có tuỳ chọn nào tắt
-được. ⇒ **Bản dev vẫn không load được trong Chrome; muốn test thật thì luôn
-`npm run build` rồi Load unpacked `dist/`.**
+được. ⇒ **Bản dev của beta.23 không load được trong Chrome; muốn test thật thì
+luôn `npm run build` rồi Load unpacked `dist/`.** (Đã hết hiệu lực: xem §14.)
+
+---
+
+## 14. Dev mode hoạt động lại (2026-10-29)
+
+**Quyết định:** nâng `@crxjs/vite-plugin` từ `2.0.0-beta.23` lên `^2.4.0`
+(cài `2.7.1`) và bật lại chế độ dev trong Chrome.
+
+**Vì sao beta.23 hỏng trên Chrome 130+.** Chrome 130 đổi `chrome.runtime.getURL()`
+trả về **GUID tạm** thay vì extension id ổn định. crxjs beta.23 so sánh
+`new URL(chrome.runtime.getURL("/")).origin` với origin của request ⇒ luôn lệch
+⇒ service worker không proxy được request của chính extension ⇒ các trang của
+extension rơi về placeholder "Vite Dev Mode" (không bao giờ ra app thật), còn
+HMR client trong worker thấy socket đóng không sạch thì gọi
+`chrome.runtime.reload()` ⇒ Chrome báo *"This extension reloaded itself too
+frequently"*. Trang placeholder cũng poll `fetch("http://localhost:5173")`
+cross-origin ⇒ dev server phải trả `Access-Control-Allow-Origin` cho origin
+`chrome-extension://`, nếu không request bị CORS chặn và thông báo *"Cannot
+connect to the Vite Dev Server"* đứng mãi.
+
+**Cách sửa (3 phần, xem `vite.config.ts`).**
+
+| Thay đổi | Tác dụng |
+|---|---|
+| `@crxjs/vite-plugin` → `^2.4.0` (2.7.1) | worker dùng `ownOrigin = chrome-extension://${chrome.runtime.id}` ⇒ proxy đúng ⇒ trang extension ra app thật |
+| `crx({ manifest, liveReload: false })` | worker **không** gọi `chrome.runtime.reload()` nữa ⇒ hết reload loop (file vẫn được build lại khi có thay đổi) |
+| `server.cors.origin: [/^chrome-extension:\/\//]` | request cross-origin từ trang extension không bị CORS chặn |
+
+**Bản production không đổi.** `manifest.config.ts` vẫn không khai báo
+`background` ⇒ `dist/manifest.json` không có `background`, không sinh
+`service-worker-loader.js`, không có trang placeholder ⇒ Chrome không đăng ký
+service worker nào (xem §13).
+
+**Lưu ý vận hành.** Ở chế độ dev, service worker là **bắt buộc**: đó là thứ
+proxy trang của extension sang dev server (Chrome đọc file trên đĩa là
+placeholder, worker mới trả app thật). Đừng xoá `background` ở bản dev.
+Ngoài ra `npm run dev` phải chạy **trong** thư mục extension, còn `npm run build`
+trong lúc dev server đang chạy sẽ xoá `.crx/dev` (output của dev build).
