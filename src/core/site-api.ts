@@ -275,9 +275,19 @@ function assertSiteEnvelope(path: string, payload: unknown): void {
   throw new SiteApiError('site', `The site rejected ${path} (code ${source.code}).`, source.code)
 }
 
-async function fetchSiteJson(
+/**
+ * Gửi một request tới API của site và trả về envelope đã kiểm tra.
+ *
+ * Toàn bộ phần chung của GET và POST nằm ở đây: dựng URL (+ query), đọc
+ * cookie `token`, header, timeout cứng, phân loại lỗi, kiểm tra envelope
+ * `{code, data, msg}`. Tách riêng để POST không phải copy-paste khối phân loại
+ * lỗi — hai đường phải báo lỗi giống hệt nhau, nếu không thì caller gặp
+ * lỗi "session" ở GET nhưng lại gặp lỗi chung chung ở POST.
+ */
+async function sendSiteJson(
   path: string,
-  options: SiteFetchOptions = {},
+  init: RequestInit,
+  options: SiteFetchOptions,
   params?: Record<string, string>,
 ): Promise<unknown> {
   const base = options.baseUrl ?? DEFAULT_SITE_API_BASE
@@ -287,7 +297,16 @@ async function fetchSiteJson(
     options.cookieString ?? (typeof document !== 'undefined' ? document.cookie : ''),
   )
 
+  // Header của caller (vd `Content-Type` của POST) được giữ lại; hai dạng
+  // `Headers`/mảng cặp không dùng ở đây nên bỏ qua.
   const headers: Record<string, string> = { Accept: 'application/json' }
+  const extra = init.headers
+  if (extra && !Array.isArray(extra) && !(extra instanceof Headers)) {
+    // Narrowing của TS ở đây là `Record<string, string>` — gán thẳng để
+    // compiler bắt được nếu mai đổi điều kiện và lọt header không phải chuỗi.
+    const merged: Record<string, string> = { ...extra }
+    Object.assign(headers, merged)
+  }
   if (token) headers.Authorization = `JWT ${token}`
 
   const query = params ? `?${new URLSearchParams(params).toString()}` : ''
@@ -298,8 +317,9 @@ async function fetchSiteJson(
     res = await fetchJsonWithTimeout(
       url,
       {
-        method: 'GET',
+        ...init,
         headers,
+        // API cùng origin của site ⇒ cookie phải đi kèm mọi request.
         credentials: 'include',
       },
       { fetchImpl: doFetch, timeoutMs: options.timeoutMs },
@@ -329,6 +349,41 @@ async function fetchSiteJson(
   const payload = res.data
   assertSiteEnvelope(path, payload)
   return payload
+}
+
+async function fetchSiteJson(
+  path: string,
+  options: SiteFetchOptions = {},
+  params?: Record<string, string>,
+): Promise<unknown> {
+  return sendSiteJson(path, { method: 'GET' }, options, params)
+}
+
+/**
+ * POST JSON tới API của site.
+ *
+ * Body phải có key **chữ thường** — site gọi helper `keyToLowercase` trước
+ * khi POST. Tầng gọi (`site-write.ts`) chịu trách nhiệm lowercase trước khi
+ * gọi hàm này.
+ *
+ * Trả về **envelope đã kiểm tra** `{code, data, msg}` — KHÔNG tự bóc `data`:
+ * mỗi endpoint trả về một shape khác nhau (bill, dòng hàng, kết quả lưu),
+ * caller tự quyết định lấy gì.
+ */
+export async function postSiteJson(
+  path: string,
+  body: unknown,
+  options: SiteFetchOptions = {},
+): Promise<unknown> {
+  return sendSiteJson(
+    path,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+    options,
+  )
 }
 
 export async function loadSiteDicts(options: SiteFetchOptions = {}): Promise<SiteDicts> {
