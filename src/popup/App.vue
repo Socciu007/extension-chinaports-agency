@@ -119,7 +119,22 @@ async function runFill(): Promise<void> {
 }
 
 async function openPage(): Promise<void> {
-  await chrome.tabs.create({ url: MANIFEST_URL })
+  // Điều hướng CHÍNH tab đang mở, không tạo tab mới.
+  //
+  // `chrome.tabs.update` thay URL của tab hiện tại ⇒ người dùng không phải
+  // chuyển qua lại giữa hai tab. Đổi lại: nếu đang ở site khác thì trang đó
+  // bị thay thế — đây là đánh đổi đã được chọn.
+  //
+  // Không cần thêm permission: `tabs` permission chỉ dùng để ĐỌC `tab.url`/
+  // `tab.title`; `tabs.update` để điều hướng thì không cần.
+  const tabId = await activeTabId()
+  if (tabId === undefined) {
+    // Không tìm thấy tab active (ví dụ cửa sổ không có tab nào) ⇒ tạo tab
+    // mới là lựa chọn duy nhất còn lại.
+    await chrome.tabs.create({ url: MANIFEST_URL })
+    return
+  }
+  await chrome.tabs.update(tabId, { url: MANIFEST_URL })
 }
 
 async function onToggleAutoSubmit(): Promise<void> {

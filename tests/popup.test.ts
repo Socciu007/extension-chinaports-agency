@@ -3,6 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import PopupApp from '../src/popup/App.vue'
 import { MSG_FILL } from '../src/core/protocol'
 import { DEFAULT_SETTINGS } from '../src/core/options'
+import { MANIFEST_URL } from '../src/core/site-url'
 
 /**
  * Test tầng WIRING của popup — không chỉ test primitive (`saveSettings`,
@@ -26,11 +27,17 @@ let sendMessage: SendMessage
 let sentTypes: string[]
 /** Ghi lại TOÀN BỘ message đã gửi đi — để assert payload (vd `autoSubmit`). */
 let sentMessages: SentMessage[]
+/** Ghi lại mọi lần ĐIỀU HƯỚNG tab — để assert tab nào bị đổi URL. */
+let tabUpdates: { tabId: number; url?: string }[]
+/** Ghi lại mọi lần TẠO tab mới — để assert không mở tab mới. */
+let createdTabs: (string | undefined)[]
 
 beforeEach(() => {
   for (const key of Object.keys(store)) delete store[key]
   sentTypes = []
   sentMessages = []
+  tabUpdates = []
+  createdTabs = []
   storageGet = async (defaults) => ({ ...defaults, ...store })
   storageSet = async (values) => {
     Object.assign(store, values)
@@ -53,7 +60,14 @@ beforeEach(() => {
         sentMessages.push({ ...message })
         return sendMessage(message)
       },
-      create: async () => undefined,
+      create: async (props: { url?: string }) => {
+        createdTabs.push(props.url)
+        return undefined
+      },
+      update: async (tabId: number, props: { url?: string }) => {
+        tabUpdates.push({ tabId, url: props.url })
+        return undefined
+      },
     },
   })
 })
@@ -483,5 +497,20 @@ describe('popup — hai khe lỗi tách biệt', () => {
     } finally {
       errorSpy.mockRestore()
     }
+  })
+})
+
+describe('popup — nút Open page', () => {
+  it('điều hướng CHÍNH tab đang mở sang trang khai báo, KHÔNG tạo tab mới', async () => {
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await buttonByText(wrapper, 'Open page').trigger('click')
+    await flushPromises()
+
+    // Tab active (id = 1 trong stub) phải bị đổi URL sang trang khai 预配舱单.
+    expect(tabUpdates).toEqual([{ tabId: 1, url: MANIFEST_URL }])
+    // KHÔNG được mở thêm tab mới — người dùng chọn điều hướng tab hiện tại.
+    expect(createdTabs).toEqual([])
   })
 })
