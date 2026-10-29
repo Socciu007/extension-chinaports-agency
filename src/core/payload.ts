@@ -12,8 +12,14 @@
  *   (`P`/`C`, `S`/`D`/`R`/`G`, `Y`/`N`), KHÔNG phải nhãn tiếng Trung như
  *   DOM path điền.
  */
-import { contactRole, deriveCargoKind, payWayOf } from './mapping'
-import type { MappingContext } from './mapping'
+import {
+  contactRole,
+  deriveCargoKind,
+  DANGER_FIELDS,
+  payWayOf,
+  TEMP_FIELDS,
+  type MappingContext,
+} from './field-meta'
 import type { ManifestCargo, ManifestContact, ManifestContainer, ManifestData } from './types'
 
 export interface HeaderPayload {
@@ -204,27 +210,6 @@ export function buildHeaderPayload(data: ManifestData, ctx: MappingContext): Hea
 
   return payload
 }
-
-/**
- * Field `dang_*` + `danger_*` — site xoá & disable trừ khi loại hàng là `D`/`G`.
- */
-const DANGER_FIELDS = [
-  'dang_class_nam',
-  'dang_page_no',
-  'dang_un_no',
-  'dang_lable_str',
-  'dang_flash_point',
-  'dang_ems_no',
-  'dang_mfag_no',
-  'dang_contactstr',
-  'danger_contact_nam',
-  'danger_te_str',
-  'danger_em_str',
-  'danger_fx_str',
-]
-
-/** Field nhiệt độ — site xoá trừ khi loại hàng là `R`/`G`. */
-const TEMP_FIELDS = ['temp_id', 'set_temp_num']
 
 /**
  * Dựng body thêm 1 dòng hàng.

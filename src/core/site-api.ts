@@ -1,5 +1,5 @@
 import { fetchJsonWithTimeout, HttpTimeoutError, type JsonResponse } from './http'
-import type { MappingContext } from './mapping'
+import type { MappingContext } from './field-meta'
 
 export const DEFAULT_SITE_API_BASE = '/api/booking/exportManifestDataMaintain'
 

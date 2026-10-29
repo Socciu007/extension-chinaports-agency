@@ -1,6 +1,7 @@
-import type { FillScope } from './fill'
-
 export const MSG_FILL = 'manifest-autofill:fill'
+
+/** Section mà một item thuộc về. */
+export type FillScope = 'header' | 'cargo' | 'container'
 
 /**
  * - `ok`    — điền thành công, đã xác minh lại giá trị trên form

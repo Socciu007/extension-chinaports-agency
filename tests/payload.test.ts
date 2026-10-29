@@ -5,7 +5,7 @@ import {
   buildHeaderPayload,
   lowerKeys,
 } from '../src/core/payload'
-import type { MappingContext } from '../src/core/mapping'
+import type { MappingContext } from '../src/core/field-meta'
 import type { ManifestCargo, ManifestContainer, ManifestData } from '../src/core/types'
 import fixture from './fixtures/manifest-ONEYSHAGT1569600.json'
 

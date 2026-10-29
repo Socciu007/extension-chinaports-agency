@@ -8,6 +8,7 @@
 import { nextFrame, sleep, waitFor } from './wait'
 import { readFieldValue, setFieldValue } from './dom'
 import { mapCargo, mapContainer, mapHeader, type FieldPlan, type MappingContext } from './mapping'
+import type { FillScope } from './protocol'
 import {
   countGoodsListRows,
   currentCargoDialog,
@@ -38,9 +39,6 @@ import type { ManifestCargo, ManifestContainer, ManifestData } from './types'
  * - `skip`  ⏭ không có dữ liệu nguồn nên cố ý để trống.
  */
 export type FillStatus = 'ok' | 'warn' | 'error' | 'skip'
-
-/** Section mà một item thuộc về. */
-export type FillScope = 'header' | 'cargo' | 'container'
 
 export interface FillItem {
   scope: FillScope
