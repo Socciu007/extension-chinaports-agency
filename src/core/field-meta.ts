@@ -180,3 +180,170 @@ export const DANGER_FIELDS: readonly string[] = [
 
 /** Field nhiệt độ — site xoá trừ khi loại hàng là `R`/`G`. */
 export const TEMP_FIELDS: readonly string[] = ['temp_id', 'set_temp_num']
+
+/**
+ * Nhãn hiển thị của field header — theo TÊN TIẾNG TRUNG của site.
+ *
+ * Key là TÊN FIELD VIẾT HOA của site (`prop`), tức `payload[key.toLowerCase()]`.
+ * Nhãn tiếng Trung giữ nguyên vì đó là thứ operator thấy trên site; phần
+ * chú thích tiếng Anh giúp tìm đúng ô khi site hiển thị tiếng Trung.
+ */
+export const HEADER_LABELS: Record<string, string> = {
+  BILL_NO: 'Site bill ID',
+  BILL_NBR: '提单号',
+  E_SHIP_NAM: '船名',
+  OUT_VOYAGE_NO: '航次',
+  TRUST_COD: 'Trust code',
+  PAY_WAY_ID: '付款方式',
+  DR_TYPE_STR: 'Cargo type',
+  SIGN_PLACE_COD: '提单签发地 (code)',
+  SIGN_PLACE_STR: '提单签发地',
+  START_PORT_COD: '装货港 (code)',
+  START_PORT_NAM: '装货港',
+  DISCHRG_PORT_COD: '卸货港 (code)',
+  DISCHRG_PORT_NAM: '卸货港',
+  DEST_PORT_COD: '交货地 (code)',
+  DEST_PORT_NAM: '交货地',
+  TRANS_PORT_COD: '中转港 (code)',
+  TRANS_PORT_NAM: '中转港',
+  E_SHIPPER_NAM: '发货人 (name)',
+  SHIPPER_ADD_STR: '发货人 (address)',
+  SHIPPER_COUNTRY_COD: '发货人 (country)',
+  SHIPPER_TE_STR: '发货人 (telephone)',
+  SHIPPER_EM_STR: '发货人 (email)',
+  SHIPPER_FX_STR: '发货人 (fax)',
+  SHIPPER_AEO: '发货人 (AEO)',
+  E_CONSIGNEE_NAM: '收货人 (name)',
+  CONSIGNEE_ADD_STR: '收货人 (address)',
+  CONSIGNEE_COUNTRY_COD: '收货人 (country)',
+  CONSIGNEE_TE_STR: '收货人 (telephone)',
+  CONSIGNEE_EM_STR: '收货人 (email)',
+  CONSIGNEE_FX_STR: '收货人 (fax)',
+  CONSIGNEE_AEO: '收货人 (AEO)',
+  E_NOTIFY_NAM: '通知人 (name)',
+  NOTIFY_ADD_STR: '通知人 (address)',
+  NOTIFY_COUNTRY_COD: '通知人 (country)',
+  NOTIFY_TE_STR: '通知人 (telephone)',
+  NOTIFY_EM_STR: '通知人 (email)',
+  NOTIFY_FX_STR: '通知人 (fax)',
+  NOTIFY_AEO: '通知人 (AEO)',
+  TOTAL_PIECE_NUM: 'Total pieces',
+  TOTAL_GWEIGHT_TON: 'Total gross weight (ton)',
+  TOTAL_GVOL_NUM: 'Total volume (m³)',
+  MANDATORY_CHECK: 'Mandatory check',
+  SOFT_CHECK: 'Soft check',
+  IS_ALL: 'Save mode',
+}
+
+/** Nhãn hiển thị của field dòng hàng — theo TÊN TIẾNG TRUNG của site. */
+export const CARGO_LABELS: Record<string, string> = {
+  BILL_NO: 'Site bill ID',
+  PIECE_NUM: '包装件数',
+  GWEIGHT_TON: '毛重 (ton)',
+  GVOL_NUM: '体积 (m³)',
+  NWEIGHT_TON: '净重 (ton)',
+  CARGO_KIND_COD: '货物标识',
+  CARGO_HS_COD: '海关编码',
+  PACKAGE_COD: '包装代码',
+  PACKAGE_STR: '包装类型',
+  MARK_STR: '唛头',
+  E_CARGO_NAM: '货物名称',
+  DANG_CLASS_NAM: '危险品类别',
+  DANG_PAGE_NO: '危险品页号',
+  DANG_UN_NO: 'UN 编号',
+  DANG_LABLE_STR: '危险品标签',
+  DANG_FLASH_POINT: '闪点',
+  DANG_EMS_NO: 'EMS',
+  DANG_MFAG_NO: 'MFAG',
+  DANG_CONTACTSTR: '危险品联系人',
+  DANGER_CONTACT_NAM: '危险品联系人 (name)',
+  DANGER_TE_STR: '危险品联系人 (telephone)',
+  DANGER_EM_STR: '危险品联系人 (email)',
+  DANGER_FX_STR: '危险品联系人 (fax)',
+  TEMP_ID: '温度设置 (id)',
+  SET_TEMP_NUM: '温度设置 (°C)',
+}
+
+/** Nhãn hiển thị của field container — theo TÊN TIẾNG TRUNG của site. */
+export const CONTAINER_LABELS: Record<string, string> = {
+  BILL_NO: 'Site bill ID',
+  CNTR_NO: '箱号',
+  CNTR_SIZE_COD: '尺寸',
+  CNTR_TYPE_COD: '箱型',
+  CNTR_EF_ID: '箱状态',
+  SEAL_NO: '铅封号',
+  PIECE_NUM: '箱内件数',
+  WEIGH_TON: '箱内毛重 (ton)',
+  VOLUME_NUM: '箱内体积 (m³)',
+  SOC_ID: '货主箱标志',
+}
+
+/**
+ * Note RIÊNG cho các field mà API không có dữ liệu.
+ *
+ * Key là TÊN FIELD VIẾT HOA của site. Note này thay cho note chung — vì
+ * operator cần biết VÌ SAO ô đó trống, không chỉ biết nó trống.
+ */
+export const BLANK_NOTES: Record<string, string> = {
+  SHIPPER_EM_STR: 'The API does not provide email addresses — fill this in by hand on the site.',
+  SHIPPER_FX_STR: 'The API does not provide fax numbers — fill this in by hand on the site.',
+  CONSIGNEE_EM_STR:
+    'The API does not provide email addresses — fill this in by hand on the site.',
+  CONSIGNEE_FX_STR: 'The API does not provide fax numbers — fill this in by hand on the site.',
+  NOTIFY_EM_STR: 'The API does not provide email addresses — fill this in by hand on the site.',
+  NOTIFY_FX_STR: 'The API does not provide fax numbers — fill this in by hand on the site.',
+  DANGER_EM_STR: 'The API does not provide email addresses — fill this in by hand on the site.',
+  DANGER_FX_STR: 'The API does not provide fax numbers — fill this in by hand on the site.',
+  SHIPPER_AEO:
+    'The API provides a business registration number (USCI/TIN), not an AEO code — leave this blank unless you know the AEO code.',
+  CONSIGNEE_AEO:
+    'The API provides a business registration number (USCI/TIN), not an AEO code — leave this blank unless you know the AEO code.',
+  NOTIFY_AEO:
+    'The API provides a business registration number (USCI/TIN), not an AEO code — leave this blank unless you know the AEO code.',
+  SIGN_PLACE_COD:
+    'The API does not provide the bill of lading issue place — fill this in by hand on the site.',
+  SIGN_PLACE_STR:
+    'The API does not provide the bill of lading issue place — fill this in by hand on the site.',
+  TRANS_PORT_COD:
+    'The API does not provide transit ports — fill this in by hand on the site.',
+  TRANS_PORT_NAM:
+    'The API does not provide transit ports — fill this in by hand on the site.',
+  DANG_PAGE_NO:
+    'The API does not provide the dangerous-goods page number — fill this in by hand on the site.',
+  DANG_EMS_NO: 'The API does not provide the EMS number — fill this in by hand on the site.',
+  DANG_MFAG_NO: 'The API does not provide the MFAG number — fill this in by hand on the site.',
+  PACKAGE_COD:
+    'The API does not provide the package type code — fill this in by hand on the site.',
+  PACKAGE_STR:
+    'The API does not provide the package type — fill this in by hand on the site.',
+  CNTR_SIZE_COD:
+    'The API returns a numeric container size code that does not match the site dictionary — fill this in by hand on the site.',
+  CNTR_TYPE_COD:
+    'The API returns a numeric container type code that does not match the site dictionary — fill this in by hand on the site.',
+  CNTR_EF_ID:
+    'The API does not provide the container status — fill this in by hand on the site.',
+  SOC_ID:
+    'The API does not say whether this container belongs to the cargo owner — fill this in by hand on the site.',
+  CARGO_HS_COD: 'The API does not provide the HS code — fill this in by hand on the site.',
+  NWEIGHT_TON: 'The API does not provide the net weight — fill this in by hand on the site.',
+  TEMP_ID: 'The API does not provide the temperature setting — fill this in by hand on the site.',
+  SET_TEMP_NUM: 'The API does not provide the temperature setting — fill this in by hand on the site.',
+}
+
+/**
+ * Note chung cho field BẮT BUỘC bị trống.
+ *
+ * Dùng khi `BLANK_NOTES` không có mục riêng cho field đó.
+ */
+export function requiredBlankNote(prop: string, label: string): string {
+  return `${label} (${prop}) is required by the site but the API does not provide it — fill it in by hand on the site.`
+}
+
+/**
+ * Note chung cho field TUỲ CHỌN bị trống.
+ *
+ * Dùng khi `BLANK_NOTES` không có mục riêng cho field đó.
+ */
+export function optionalBlankNote(prop: string, label: string): string {
+  return `${label} (${prop}) is not provided by the API — it was left blank on purpose.`
+}
