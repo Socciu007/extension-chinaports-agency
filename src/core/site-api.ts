@@ -230,12 +230,18 @@ export class SiteApiError extends Error {
  * Chuỗi hiển thị cho người dùng, theo từng `kind` — tiếng Anh.
  * Tầng UI phải map theo `kind`, KHÔNG hiển thị thẳng `error.message`
  * vì message là chi tiết kỹ thuật, không phải thông báo cho người dùng.
+ *
+ * Nhánh `session` có thêm gợi ý về cookie `HttpOnly`: extension xác thực bằng
+ * cookie `token` của site đọc qua `document.cookie` ⇒ nếu site đánh dấu cookie
+ * đó là `HttpOnly` thì extension KHÔNG BAO GIỜ đọc được, và operator sẽ bị
+ * bắt vòng lặp "đăng nhập lại" dù đã đăng nhập. Gợi ý được viết theo kiểu
+ * "có thể" vì không truyền được trạng thái đọc token xuống đây.
  */
 export function describeSiteError(error: unknown): string {
   if (error instanceof SiteApiError) {
     switch (error.kind) {
       case 'session':
-        return 'Your session on the site has expired — log in to the site and try again.'
+        return 'Your session on the site has expired — log in to the site and try again. If you are still signed in, the site\'s token cookie may be HttpOnly, which the extension cannot read.'
       case 'site':
         return 'The site rejected the request. Please try again in a moment.'
       case 'network':

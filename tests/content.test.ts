@@ -25,6 +25,14 @@ const DUPLICATE_MESSAGE =
 const OPT_IN_OFF_MESSAGE =
   'Creating the manifest on the site is turned off in the extension settings.'
 
+/** Message báo sai trang — nói đúng route thật để operator tự điều hướng. */
+const WRONG_PAGE_MESSAGE =
+  'Open the manifest page (#/exportBusinessOperations/maintenanceOfManifestData) and try again.'
+
+/** Message từ chối khi message từ popup sai hình dạng (thiếu `blNo`). */
+const INVALID_REQUEST_MESSAGE =
+  'The extension received an invalid request — reload the manifest page and try again.'
+
 let listener: Listener | undefined
 /** Mở chốt để `fetch` treo cho tới khi test kết thúc. */
 let release: (() => void) | undefined
@@ -243,9 +251,64 @@ describe('content script — chạy manifest qua API', () => {
     const result = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO })
 
     expect(result.ok).toBe(false)
-    expect(result.message).toBe(
-      'Open the manifest page (#/exportBusinessOperations/maintenanceOfManifestData) and try again.',
-    )
+    expect(result.message).toBe(WRONG_PAGE_MESSAGE)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('route GIỐNG TIỀN TỐ ⇒ KHÔNG phải trang manifest, KHÔNG gọi network', async () => {
+    // Route `…maintenanceOfManifestDataExtra` chỉ CHUNG TIỀN TỐ với route
+    // thật ⇒ khớp bằng `includes` sẽ nhận nhầm và điền manifest vào trang
+    // không có form ⇒ phải khớp CHÍNH XÁC.
+    location.hash = '#/exportBusinessOperations/maintenanceOfManifestDataExtra'
+
+    const result = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO })
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe(WRONG_PAGE_MESSAGE)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('route kèm QUERY ⇒ VẪN là trang manifest', async () => {
+    location.hash = '#/exportBusinessOperations/maintenanceOfManifestData?x=1'
+
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    const result = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, allowWrite: true })
+
+    expect(result.message).not.toBe(WRONG_PAGE_MESSAGE)
+    expect(result.ok).toBe(true)
+    expect(fake.calls.filter((call) => call.url.includes('/api/booking/')).length).toBeGreaterThan(0)
+  })
+
+  it('message sai hình dạng ⇒ từ chối NGAY, KHÔNG gọi network', async () => {
+    const respond = vi.fn()
+    const ret = listener?.({ type: MSG_CREATE_MANIFEST }, {}, respond)
+
+    // Từ chối NGAY: câu trả lời đã có TRƯỚC khi listener trả về ⇒ không mở
+    // lần gọi mạng nào, và không phải chờ promise nào.
+    expect(ret).toBe(false)
+    expect(respond).toHaveBeenCalledTimes(1)
+
+    const result = respond.mock.calls[0]?.[0] as CreateResult
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe(INVALID_REQUEST_MESSAGE)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('blNo RỖNG ⇒ từ chối NGAY, KHÔNG gọi network', async () => {
+    const result = await send({ type: MSG_CREATE_MANIFEST, blNo: '' })
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe(INVALID_REQUEST_MESSAGE)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('blNo chỉ có KHOẢNG TRẮNG ⇒ từ chối NGAY, KHÔNG gọi network', async () => {
+    const result = await send({ type: MSG_CREATE_MANIFEST, blNo: '   ' })
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe(INVALID_REQUEST_MESSAGE)
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -430,6 +493,39 @@ describe('content script — chạy manifest qua API', () => {
     expect(siteCalls.length).toBeGreaterThan(0)
     for (const call of siteCalls) {
       expect(headerValue(call, 'authorization')).toBe('JWT test-token')
+    }
+  })
+
+  it('token được đọc LẠI cho MỖI request', async () => {
+    // Cookie MUTABLE: site xoay token giữa hai lần gọi ⇒ extension phải dùng
+    // token MỚI, không phải ảnh chụp lúc bắt đầu lần chạy.
+    let token = 'token-1'
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => `token=${token}`,
+    })
+
+    const fake = fakeFetch()
+    let siteCallCount = 0
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      // Xoay token ngay sau lần gọi site ĐẦU TIÊN.
+      if (String(url).includes('/api/booking/')) {
+        siteCallCount += 1
+        if (siteCallCount === 1) token = 'token-2'
+      }
+      return fake.fetchImpl(url, init)
+    }) as unknown as typeof fetch
+    vi.stubGlobal('fetch', fetchImpl)
+
+    await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO })
+
+    const siteCalls = fake.calls.filter((call) => call.url.includes('/api/booking/'))
+    expect(siteCalls.length).toBeGreaterThan(1)
+
+    const authHeaders = siteCalls.map((call) => headerValue(call, 'authorization'))
+    expect(authHeaders[0]).toBe('JWT token-1')
+    for (const auth of authHeaders.slice(1)) {
+      expect(auth).toBe('JWT token-2')
     }
   })
 })

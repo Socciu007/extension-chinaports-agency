@@ -517,6 +517,9 @@ describe('runManifest — lỗi', () => {
     expect(result.message).toContain(
       'Your session on the site has expired — log in to the site and try again.',
     )
+    // Gợi ý HttpOnly phải có mặt — nếu không, operator đã đăng nhập vẫn bị
+    // bắt vòng lặp "đăng nhập lại" mà không biết vì sao.
+    expect(result.message).toContain("the site's token cookie may be HttpOnly")
   })
 
   it('hết hạn trước khi làm gì ⇒ không gọi mạng', async () => {

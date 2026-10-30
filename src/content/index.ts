@@ -17,8 +17,33 @@ import {
 } from '../core/protocol'
 import { MANIFEST_ROUTE } from '../core/site-url'
 
+/**
+ * Trang hiện tại có ĐÚNG là trang khai 预配舱单 không?
+ *
+ * So KHỚP CHÍNH XÁC, không dùng `includes`: route của site là tiền tố của
+ * route khác (`…maintenanceOfManifestDataExtra`) ⇒ `includes` sẽ nhận nhầm
+ * trang đó và extension điền manifest vào một trang không có form.
+ *
+ * Query string (`?x=1`) và fragment sau `#` không phải route ⇒ cắt bỏ
+ * chúng trước khi so.
+ */
 function isManifestPage(): boolean {
-  return location.hash.includes(MANIFEST_ROUTE)
+  const hash = location.hash.startsWith('#') ? location.hash.slice(1) : location.hash
+  const path = hash.split(/[?#]/)[0] ?? ''
+  return path === MANIFEST_ROUTE
+}
+
+/**
+ * Message có đúng hình dạng của một lệnh tạo manifest không?
+ *
+ * Cast (`message as CreateRequest`) chỉ là lời hứa của TypeScript, không có
+ * kiểm lúc chạy ⇒ message thiếu `blNo` sẽ đi thẳng vào `runManifest` với số
+ * bill rỗng rồi gọi API của site. Vì vậy phải kiểm TRƯỚC mọi lần gọi mạng.
+ */
+function isCreateRequest(message: unknown): message is CreateRequest {
+  if (typeof message !== 'object' || message === null) return false
+  const blNo = (message as { blNo?: unknown }).blNo
+  return typeof blNo === 'string' && blNo.trim() !== ''
 }
 
 /**
@@ -112,7 +137,7 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
   }
 
   const allowWrite = request.allowWrite === true
-  const blNo = normalizeBlNo(request.blNo ?? '')
+  const blNo = normalizeBlNo(request.blNo)
 
   // Site ĐÃ có manifest cho số bill này trong tab này ⇒ từ chối, KHÔNG chạy
   // gì thêm. Chặn TRƯỚC mọi lần gọi mạng.
@@ -137,11 +162,13 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
   const siteApiBase = request.siteApiBase ?? settings.siteApiBase
 
   const result = await runManifest({
-    blNo: request.blNo ?? '',
+    blNo: request.blNo,
     allowWrite,
     apiBase,
     siteApiBase,
-    cookieString: document.cookie,
+    // KHÔNG chụp cookie lúc bắt đầu: site có thể xoay token giữa hai lần
+    // gọi ⇒ đọc lại `document.cookie` ở MỖI request (mặc định của
+    // `sendSiteJson`) mới dùng đúng token mới nhất.
   })
 
   // Site ĐÃ xác nhận có bill ⇒ ghi nhớ, kể cả khi bước lưu chưa xong.
@@ -162,7 +189,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false
   }
 
-  const run: Promise<CreateResult> = handleCreate(message as CreateRequest)
+  // Message sai hình dạng ⇒ từ chối NGAY, trước mọi lần gọi mạng.
+  if (!isCreateRequest(message)) {
+    sendResponse(
+      errorResult(
+        'The extension received an invalid request — reload the manifest page and try again.',
+      ),
+    )
+    return false
+  }
+
+  const run: Promise<CreateResult> = handleCreate(message)
     .catch((e: unknown) => {
       // Chi tiết kỹ thuật chỉ nằm ở console; người dùng chỉ thấy câu ngắn.
       console.error('[manifest-autofill] unexpected error', e)
@@ -176,8 +213,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   void run.then((result) => {
     try {
       sendResponse(result)
-    } catch {
+    } catch (e) {
       // Tab đã điều hướng đi ⇒ port đã đóng ⇒ không còn ai nghe.
+      console.debug('[manifest-autofill] sendResponse failed — the tab probably navigated away', e)
     }
   })
   return true
