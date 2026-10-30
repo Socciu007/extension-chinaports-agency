@@ -186,11 +186,12 @@ function rawClick(button: { element: Element }): void {
  *
  * Mỗi số bill có một dòng riêng ⇒ không dùng `find('.bill-created')` (đó là
  * khối chứa TẤT CẢ các dòng).
+ *
+ * Ghép trên SỐ BILL THÔI — không ghép kèm dấu chấm câu — để câu của dòng
+ * bằng chứng có thể đổi (thêm câu "ghi hai lần") mà helper này không hỏng.
  */
 function evidenceLine(wrapper: ReturnType<typeof mount>, blNo: string) {
-  const line = wrapper
-    .findAll('.bill-created-line')
-    .find((el) => el.text().includes(`for ${blNo}.`))
+  const line = wrapper.findAll('.bill-created-line').find((el) => el.text().includes(blNo))
   if (!line) throw new Error(`could not find the evidence line for ${blNo}`)
   return line
 }
@@ -813,8 +814,61 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
     await flushPromises()
 
     // Không có lần chạy nào mới ⇒ kết quả đang hiện vẫn là kết quả HIỆN HÀNH.
-    expect(wrapper.find('.stale-result').exists()).toBe(false)
+    //
+    // Assert trên NỘI DUNG, không assert trên class: class đổi tên thì assert
+    // theo class vẫn xanh (⇒ test hỏng mà không báo), còn assert theo câu
+    // thì bắt được cả trường hợp banner không bao giờ hiện.
+    expect(wrapper.text()).not.toContain('Showing the previous result')
     expect(wrapper.find('.bill-status').exists()).toBe(true)
+  })
+
+  it('gõ bill KHÁC bill của report đang hiện ⇒ banner báo report thuộc bill KHÁC', async () => {
+    sendMessage = async () => successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+    await clickPreview(wrapper)
+
+    // Report của bill A đang hiện, ô nhập cũng là A ⇒ chưa có gì cũ.
+    expect(wrapper.text()).not.toContain('Showing the previous result')
+
+    // Operator gõ bill B ⇒ report trên màn hình là của A, không phải của B.
+    // Đây là lúc operator DỄ ĐỌC NHẦM nhất ("đã tạo manifest" của B?)
+    // ⇒ phải có dấu hiệu.
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569601')
+    await flushPromises()
+
+    expect(wrapper.find('.stale-result').exists()).toBe(true)
+    expect(wrapper.find('.stale-result').text()).toBe(
+      'Showing the previous result — it belongs to a different bill of lading number.',
+    )
+  })
+
+  it('lần chạy HỎNG ⇒ banner KHÔNG nói "đang có lần chạy"', async () => {
+    sendMessage = async () => successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+    await clickPreview(wrapper)
+
+    // Lần chạy sau HỎNG: content script không còn đó.
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569601')
+    sendMessage = async () => {
+      throw new Error('The message port closed before a response was received.')
+    }
+    await clickPreview(wrapper)
+
+    // Lần chạy đã hỏng ⇒ KHÔNG được nói "đang có lần chạy" (nút đã hết
+    // trạng thái busy) — operator không được đứng đợi một lần chạy đã chết.
+    expect(wrapper.text()).not.toContain('a new run is in progress')
+    // Report đang hiện là của bill KHÁC ⇒ banner nói đúng sự thật.
+    expect(wrapper.find('.stale-result').text()).toBe(
+      'Showing the previous result — it belongs to a different bill of lading number.',
+    )
   })
 })
 
@@ -866,6 +920,48 @@ describe('popup — hội tụ về giá trị ĐÃ LƯU trong storage', () => {
 
     expect(isChecked(wrapper)).toBe(true)
     expect(isDisabled(wrapper, 'Create draft on site')).toBe(false)
+  })
+
+  it('sự kiện của nơi khác tới GIỮA lúc đang lưu ⇒ checkbox KHÔNG bị tự bỏ tick', async () => {
+    // Opt-in tắt lúc đầu.
+    store.createOnSite = false
+
+    // Lần ghi của popup TREO ⇒ `saving` còn `true` ⇒ popup đang lưu.
+    let resolveSet: (() => void) | undefined
+    storageSet = (values) =>
+      new Promise((resolve) => {
+        resolveSet = () => {
+          Object.assign(store, values)
+          const changes: Record<string, { newValue?: unknown }> = {}
+          for (const [key, value] of Object.entries(values)) changes[key] = { newValue: value }
+          emitStorageChange(changes)
+          resolve(undefined)
+        }
+      })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await checkbox(wrapper).setValue(true)
+    await flushPromises()
+
+    expect(isChecked(wrapper)).toBe(true)
+
+    // Nơi khác đổi một setting KHÁC, đúng lúc popup đang lưu. Lúc này
+    // storage CHƯA có giá trị mới ⇒ nếu popup đọc lại storage thì nó thấy
+    // `createOnSite: false` ⇒ checkbox bị tự bỏ tick ⇒ mất lựa chọn của
+    // operator (dù lần ghi của popup sắp ghi đúng giá trị đó).
+    emitStorageChange({ apiBase: { newValue: 'https://other.test/' } })
+    await flushPromises()
+
+    expect(isChecked(wrapper)).toBe(true)
+
+    // Lần ghi của popup đến ⇒ giá trị cuối cùng trong storage là `true`.
+    resolveSet?.()
+    await flushPromises()
+
+    expect(store.createOnSite).toBe(true)
+    expect(isChecked(wrapper)).toBe(true)
   })
 })
 
@@ -945,6 +1041,10 @@ describe('popup — bằng chứng "bill đã có trên site"', () => {
       'A manifest bill was already created on the site for ONEYSHAGT1569600.',
     )
     expect(line.text()).not.toContain('Check the site and finish that manifest by hand.')
+    // Câu "ghi hai lần" phải Ở LẠI trong dòng bằng chứng: nó đang nằm ở
+    // `.bill-status` — khối bị lần chạy sau xoá mất — nên nếu chỉ dựa vào
+    // đó thì sau một lần preview bất kỳ operator mất hẳn cảnh báo.
+    expect(line.text()).toContain('Running it again would create a second manifest.')
   })
 
   it('ghi xong nhưng CÒN field bắt buộc bị trống ⇒ dòng bằng chứng vẫn kèm câu "điền tay"', async () => {
@@ -1012,6 +1112,30 @@ describe('popup — bằng chứng "bill đã có trên site"', () => {
 
     expect(evidenceLine(wrapper, 'BL-A').text()).toContain(
       'A manifest bill was already created on the site for BL-A.',
+    )
+  })
+
+  it('cùng một số bill, khác CHỮ HOA ⇒ CHỈ MỘT dòng bằng chứng', async () => {
+    store.createOnSite = true
+    sendMessage = async () => successResult({ billCreated: true, written: true })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('oneyshagt1569600')
+    await buttonByText(wrapper, 'Create draft on site').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+    await buttonByText(wrapper, 'Create draft on site').trigger('click')
+    await flushPromises()
+
+    // KEY của bằng chứng phải là số bill ĐÃ CHUẨN HOÁ — đúng cách content
+    // script chốt (`normalizeBlNo(request.blNo)`) — nếu hai bên lệch nhau thì
+    // site bị ghi manifest thứ hai cho cùng một số bill.
+    expect(wrapper.findAll('.bill-created-line')).toHaveLength(1)
+    expect(evidenceLine(wrapper, 'ONEYSHAGT1569600').text()).toContain(
+      'A manifest bill was already created on the site for ONEYSHAGT1569600.',
     )
   })
 })

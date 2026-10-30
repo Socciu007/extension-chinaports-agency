@@ -71,13 +71,45 @@ const saving = ref(false)
 const manifestBills = ref<Record<string, boolean>>({})
 
 /**
- * Kết quả đang hiện là của lần chạy TRƯỚC, không phải của lần đang chạy.
+ * Số bill mà lần chạy CUỐI tạo ra report đang hiện.
  *
- * Kết quả cũ được giữ lại (một lần chạy hỏng không được xoá thông tin đã
- * thấy) ⇒ nhưng phải ĐÁNH DẤU là cũ, nếu không operator có thể tưởng đó là
- * kết quả của số bill vừa gõ.
+ * Rỗng = chưa có lần chạy nào ⇒ chưa có report nào để gán nhầm.
  */
-const resultStale = ref(false)
+const resultBlNo = ref('')
+
+/**
+ * Report đang hiện có thuộc về bill KHÁC với bill trong ô nhập không?
+ *
+ * Đây là chỗ operator gán nhầm DỄ NHẤT: sau khi tạo bill A, report của A
+ * vẫn nằm trên màn hình lúc operator đang gõ bill B — không có dấu hiệu thì
+ * "đã tạo manifest" bị đọc là của B.
+ *
+ * - Đang chạy ⇒ report đang hiện là của lần chạy TRƯỚC.
+ * - Ô nhập rỗng ⇒ không có bill nào để gán nhầm ⇒ KHÔNG cũ: lần chạy bị
+ *   chặn vì ô rỗng phải để lại kết quả cũ như kết quả hiện hành.
+ * - Ô nhập gõ bill KHÁC bill của report ⇒ report là của bill khác.
+ */
+const resultStale = computed(() => {
+  if (result.value === null) return false
+  // Đang chạy ⇒ report đang hiện là của lần chạy TRƯỚC.
+  if (busy.value) return true
+  const typed = normalizeBlNo(blNo.value)
+  // Ô nhập rỗng ⇒ không có bill nào để gán nhầm ⇒ không cũ.
+  if (typed === '' || resultBlNo.value === '') return false
+  return typed !== resultBlNo.value
+})
+
+/**
+ * Câu của dấu hiệu "report này không thuộc về bill đang gõ".
+ *
+ * Có HAI lý do ⇒ hai câu khác nhau, và câu nào cũng phải ĐÚNG trong trạng
+ * thái của nó: banner không được nói "đang chạy" sau khi lần chạy đã hỏng.
+ */
+const staleMessage = computed(() => {
+  if (!resultStale.value) return ''
+  if (busy.value) return 'Showing the previous result — a new run is in progress.'
+  return 'Showing the previous result — it belongs to a different bill of lading number.'
+})
 
 /** Một dòng bằng chứng — một số bill đã có manifest trên site. */
 interface BillEvidence {
@@ -99,11 +131,17 @@ const billEvidence = computed<BillEvidence[]>(() =>
  *
  * Câu được dựng ở đây (không ghép trong template) để dấu chấm câu luôn có
  * mặt — kể cả khi không kèm câu "điền tay".
+ *
+ * Câu "Running it again would create a second manifest." LUÔN có mặt: nó
+ * đang nằm ở `.bill-status` (khối bị lần chạy sau xoá mất) ⇒ chỉ dựa vào
+ * đó thì sau một lần preview bất kỳ, operator mất hẳn cảnh báo ghi hai
+ * lần. Dùng ĐÚNG câu của `.double-write` để hai nơi nói như nhau.
  */
 function evidenceText(entry: BillEvidence): string {
   const base = `A manifest bill was already created on the site for ${entry.blNo}.`
-  if (!entry.needsFinishing) return base
-  return `${base} Check the site and finish that manifest by hand.`
+  const duplicate = 'Running it again would create a second manifest.'
+  if (!entry.needsFinishing) return `${base} ${duplicate}`
+  return `${base} Check the site and finish that manifest by hand. ${duplicate}`
 }
 
 const items = computed<ReportItem[]>(() => result.value?.items ?? [])
@@ -236,11 +274,10 @@ async function run(allowWrite: boolean): Promise<void> {
     return
   }
 
-  // Lần chạy thật sự BẮT ĐẦU ⇒ kết quả đang hiện (nếu có) là của lần trước
-  // ⇒ đánh dấu là cũ. Lần chạy bị chặn vì ô nhập rỗng thì KHÔNG đánh dấu:
-  // không có lần chạy nào mới, kết quả cũ vẫn là kết quả hiện hành.
-  resultStale.value = true
-
+  // Lần chạy thật sự BẮT ĐẦU ⇒ `busy` = true ⇒ `resultStale` tự động đánh
+  // dấu report đang hiện là của lần chạy TRƯỚC. Lần chạy bị chặn vì ô nhập
+  // rỗng thì `busy` không bao giờ lên true ⇒ kết quả cũ vẫn là kết quả
+  // hiện hành (không có lần chạy nào mới để gán nhầm).
   busy.value = true
   runningAction.value = allowWrite ? 'create' : 'preview'
   try {
@@ -261,7 +298,11 @@ async function run(allowWrite: boolean): Promise<void> {
     // Kết quả cũ chỉ bị thay khi kết quả MỚI đã về ⇒ bằng chứng "bill đã có
     // trên site" không bị xoá vô tình giữa chừng.
     result.value = res
-    resultStale.value = false
+    // Số bill ĐÃ CHUẨN HOÁ của lần chạy này — dùng làm KEY của bằng chứng
+    // (đúng cách content script chốt) và để biết report đang hiện thuộc về
+    // số bill nào.
+    const billKey = normalizeBlNo(value)
+    resultBlNo.value = billKey
 
     if (res.billCreated === true) {
       // Site ĐÃ có manifest cho số bill này ⇒ ghi nhớ, VÀO MỘT BẢNG RIÊNG
@@ -270,10 +311,9 @@ async function run(allowWrite: boolean): Promise<void> {
       //
       // Manifest còn DỞ khi: lưu hỏng (`written` = false) HOẶC còn field BẮT
       // BUỘC bị trống (`blocked` = true) ⇒ operator vẫn phải điền tay.
-      const blNo = normalizeBlNo(value)
       manifestBills.value = {
         ...manifestBills.value,
-        [blNo]: res.written !== true || res.blocked === true,
+        [billKey]: res.written !== true || res.blocked === true,
       }
     }
   } catch (e) {
@@ -395,6 +435,14 @@ onMounted(async () => {
   // dùng nó có thể khiến popup lệch với content script. Đọc lại thì
   // không bao giờ lệch.
   unsubscribe = subscribeSettingsChanges(() => {
+    // Đang lưu ⇒ bỏ qua sự kiện này.
+    //
+    // Lần lưu của popup sắp ghi giá trị mới; một sự kiện của nơi khác đến
+    // giữa lúc "đọc xong" và "ghi xong" sẽ làm lần đọc này khôi phục giá
+    // trị CŨ ⇒ checkbox bị tự bỏ tick. Bỏ qua KHÔNG mất thông tin: sau khi
+    // ghi xong có `await refreshFromStorage()` đọc lại lần cuối, và mọi sự
+    // kiện đến sau đó đều không bị bỏ qua.
+    if (saving.value) return
     void refreshFromStorage()
   })
   await refreshFromStorage()
@@ -465,8 +513,8 @@ onUnmounted(() => {
       operator tưởng đó là kết quả của số bill vừa gõ. Đặt NGAY TRÊN phần
       báo cáo để nó đọc như một lời cảnh báo cho cả khối bên dưới.
     -->
-    <p v-if="resultStale && result" class="hint stale-result">
-      Showing the previous result — a new run is in progress.
+    <p v-if="resultStale" class="hint stale-result">
+      {{ staleMessage }}
     </p>
 
     <div v-if="result && result.ok && result.blocked && result.message" class="blocked">

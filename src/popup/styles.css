@@ -71,6 +71,21 @@ button.busy {
   font-size: 11px;
 }
 
+/*
+  Cảnh báo "đang hiện kết quả cũ" — nổi hơn gợi ý nhạt.
+
+  Đặt SAU `.hint` (cả hai là class đơn ⇒ cái sau thắng) vì dấu hiệu này
+  cảnh báo operator có thể đang đọc report của bill KHÁC ⇒ không được
+  trông như một gợi ý thường.
+*/
+.stale-result {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #fff8c5;
+  color: #633c01;
+  font-weight: 600;
+}
+
 .error,
 .settings-error {
   margin-top: 8px;
@@ -178,6 +193,11 @@ button.busy {
   background: #fff8c5;
   color: #633c01;
   font-weight: 600;
+}
+
+/* Mỗi bill một dòng — không dính vào nhau. */
+.bill-created-line + .bill-created-line {
+  margin-top: 4px;
 }
 
 .summary {
