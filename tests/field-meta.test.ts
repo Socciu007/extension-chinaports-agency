@@ -9,8 +9,9 @@ import {
 /**
  * Ngữ cảnh giả lập — chỉ dùng để kiểm tra KIỂU của `MappingContext`.
  *
- * Sau khi bỏ đường DOM không còn hàm map nào đọc `ctx` ⇒ các hàm tra cứu
- * trả `undefined` hết, đúng như site không có dữ liệu từ điển.
+ * Đây là STUB: mọi hàm tra cứu trả `undefined` hết, giống hệt site không có
+ * dữ liệu từ điển. Code THẬT vẫn đọc `ctx` (trust code, loại hàng, tên cảng,
+ * kiểu/kích cước container) ⇒ `ctx` KHÔNG được xoá.
  */
 const ctx: MappingContext = {
   findTrustCode: () => undefined,
@@ -86,8 +87,11 @@ describe('payWayOf', () => {
 
 describe('MappingContext', () => {
   it('không còn cấu hình portNameField (site chỉ gợi ý tên Trung)', () => {
+    // Directive `@ts-expect-error` LÀ phần assert: nếu `portNameField` còn nằm
+    // trong `MappingContext` thì directive thành thừa ⇒ TypeScript báo TS2578
+    // ⇒ test đỏ. Biến chỉ tồn tại để kích hoạt lỗi đó.
     // @ts-expect-error — `portNameField` đã bị gỡ khỏi `MappingContext`.
     const legacyCtx: MappingContext = { ...ctx, portNameField: 'START_PORT_NAM' }
-    expect(legacyCtx).toBeTruthy()
+    void legacyCtx
   })
 })

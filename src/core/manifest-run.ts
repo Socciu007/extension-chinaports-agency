@@ -74,7 +74,14 @@ export interface ManifestRunOptions {
   fetchImpl?: typeof fetch
   /** `fetch` cho API site (test inject). */
   siteFetchImpl?: typeof fetch
-  /** Cookie của site (chứa `token` cho header `Authorization`). */
+  /**
+   * Cookie của site (chứa `token` cho header `Authorization`) — CHỈ dùng để
+   * inject trong test.
+   *
+   * Production CỐ TÌNH không truyền giá trị này ⇒ `sendSiteJson` đọc lại
+   * `document.cookie` ở MỖI request: site có thể xoay token giữa hai lần gọi
+   * ⇒ ảnh chụp cookie lúc bắt đầu sẽ gửi token CŨ. Đừng "dọn" option này đi.
+   */
   cookieString?: string
   /**
    * Timeout cho MỖI request (ms).

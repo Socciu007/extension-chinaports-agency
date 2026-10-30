@@ -492,7 +492,7 @@ export function createMappingContext(dicts: SiteDicts): MappingContext {
           pickString(o.raw, ['unCode', 'portCode', 'code']) === code,
       )
       if (!hit) return undefined
-      // Widget của site chỉ gợi ý tên cảng tiếng Trung → trả về tên.
+      // Dict `getPort()` của site lưu tên cảng tiếng Trung ⇒ trả về tên.
       return hit.name
     },
 

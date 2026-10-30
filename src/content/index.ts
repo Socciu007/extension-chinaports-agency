@@ -181,20 +181,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const type = (message as { type?: string } | undefined)?.type
   if (type !== MSG_CREATE_MANIFEST) return false
 
-  // Prevent running multiple manifests at the same time.
-  if (inFlight) {
-    sendResponse(
-      errorResult('A manifest run is already in progress — wait for it to finish.'),
-    )
-    return false
-  }
-
   // Message sai hình dạng ⇒ từ chối NGAY, trước mọi lần gọi mạng.
+  //
+  // Kiểm TRƯỚC chốt "đang chạy": message hỏng thì lý do đúng là "request
+  // không hợp lệ", không phải "đang có lần chạy" — báo sai lý do khiến
+  // operator tưởng phải chờ một lần chạy không hề tồn tại.
   if (!isCreateRequest(message)) {
     sendResponse(
       errorResult(
         'The extension received an invalid request — reload the manifest page and try again.',
       ),
+    )
+    return false
+  }
+
+  // Prevent running multiple manifests at the same time.
+  if (inFlight) {
+    sendResponse(
+      errorResult('A manifest run is already in progress — wait for it to finish.'),
     )
     return false
   }

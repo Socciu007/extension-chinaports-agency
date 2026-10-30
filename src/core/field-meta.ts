@@ -17,21 +17,20 @@ export function isBlank(value: unknown): boolean {
   return value === null || value === undefined || String(value).trim() === ''
 }
 
-export function text(value: unknown): string {
-  return isBlank(value) ? '' : String(value).trim()
-}
-
 export interface MappingContext {
   findTrustCode(supplyId?: number): string | undefined
   findDrType(code?: string): string | undefined
-  /** Tên cảng tiếng Trung — widget của site chỉ gợi ý tên Trung (filter `E_PORT_NAM`). */
+  /** Tên cảng tiếng Trung — dict `getPort()` của site lưu tên Trung ở `E_PORT_NAM`. */
   findPort(code?: string): string | undefined
   findCntrType(raw?: number | string | null): string | undefined
   findCntrSize(raw?: number | string | null): string | undefined
 }
 
 /**
- * 付款方式 của site: 预付='P', 到付='C', 免费='F'. Adapter click theo TEXT hiển thị.
+ * 付款方式 của site — site lưu MÃ, KHÔNG lưu nhãn hiển thị.
+ *
+ * Đường API chỉ có hai mã: 预付='P' và 到付='C' (không có 'F'/免费).
+ * `payWayOf` bên dưới ánh xạ `payType` của API sang đúng mã ấy.
  */
 const PAY_WAY_OPTIONS: Record<'P' | 'C', { label: string; code: string }> = {
   P: { label: '预付', code: 'P' },

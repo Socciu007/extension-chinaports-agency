@@ -168,8 +168,8 @@ export function buildHeaderPayload(data: ManifestData, ctx: MappingContext): Hea
     // `PortData.name` là tên Trung, `PortData.nameEn` là tên Anh ⇒ KHÔNG dùng
     // `nameEn` ở đây.
     //
-    // Ưu tiên tên từ API (luôn có) rồi mới tới dict `getPort()` — dict chỉ là
-    // nguồn dự phòng cho lúc API không có dữ liệu cảng.
+    // Ưu tiên tên từ API, rồi mới tới dict `getPort()` — dict là nguồn dự
+    // phòng cho lúc API không có dữ liệu cảng.
     start_port_cod: str(data.loadCode),
     start_port_nam: str(data.loadPortData?.name) || str(ctx.findPort(data.loadCode ?? undefined)),
     dischrg_port_cod: uploadCode,

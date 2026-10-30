@@ -24,9 +24,10 @@ export interface BlockingField {
  * Field KHÔNG bắt buộc (EMAIL, FAX, 中转港…) KHÔNG chặn ⇒ không có trong
  * danh sách này.
  *
- * Vì report CHỈ chứa field bị bỏ trống nên trạng thái KHÔNG quyết định có
- * chặn hay không — chỉ cờ `required` mới quyết định. `warn` và `skip` đều là
- * "ô này còn trống", chỉ khác ở chỗ site có bắt buộc hay không.
+ * Trạng thái của report được SUY RA từ cờ `required` (`manifest-run.ts` đặt
+ * `status = required ? 'warn' : 'skip'`) ⇒ `status === 'warn'` và
+ * `required === true` là CÙNG một tín hiệu, không phải hai tín hiệu độc lập:
+ * chỉ cờ `required` quyết định có chặn hay không.
  *
  * Lý do cụ thể nằm ở `note` của từng item (`warn` = site bắt buộc nhưng API
  * không có dữ liệu, `skip` = không bắt buộc nên để trống là đúng) ⇒ tầng UI

@@ -296,17 +296,31 @@ describe('content script — chạy manifest qua API', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('blNo RỖNG ⇒ từ chối NGAY, KHÔNG gọi network', async () => {
-    const result = await send({ type: MSG_CREATE_MANIFEST, blNo: '' })
+  it('blNo RỖNG ⇒ từ chối NGAY, KHÔNG gọi network', () => {
+    const respond = vi.fn()
+    const ret = listener?.({ type: MSG_CREATE_MANIFEST, blNo: '' }, {}, respond)
 
+    // Từ chối NGAY: câu trả lời đã có TRƯỚC khi listener trả về ⇒ không mở
+    // lần gọi mạng nào, và không phải chờ promise nào.
+    expect(ret).toBe(false)
+    expect(respond).toHaveBeenCalledTimes(1)
+
+    const result = respond.mock.calls[0]?.[0] as CreateResult
     expect(result.ok).toBe(false)
     expect(result.message).toBe(INVALID_REQUEST_MESSAGE)
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('blNo chỉ có KHOẢNG TRẮNG ⇒ từ chối NGAY, KHÔNG gọi network', async () => {
-    const result = await send({ type: MSG_CREATE_MANIFEST, blNo: '   ' })
+  it('blNo chỉ có KHOẢNG TRẮNG ⇒ từ chối NGAY, KHÔNG gọi network', () => {
+    const respond = vi.fn()
+    const ret = listener?.({ type: MSG_CREATE_MANIFEST, blNo: '   ' }, {}, respond)
 
+    // Từ chối NGAY: câu trả lời đã có TRƯỚC khi listener trả về ⇒ không mở
+    // lần gọi mạng nào, và không phải chờ promise nào.
+    expect(ret).toBe(false)
+    expect(respond).toHaveBeenCalledTimes(1)
+
+    const result = respond.mock.calls[0]?.[0] as CreateResult
     expect(result.ok).toBe(false)
     expect(result.message).toBe(INVALID_REQUEST_MESSAGE)
     expect(fetchMock).not.toHaveBeenCalled()

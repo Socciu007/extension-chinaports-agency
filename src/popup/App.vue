@@ -15,8 +15,16 @@ import {
   type ReportItem,
 } from '../core/protocol'
 import { blockingFields } from '../core/report'
-import { MANIFEST_URL } from '../core/site-url'
+import { MANIFEST_ROUTE, MANIFEST_URL } from '../core/site-url'
 import './styles.css'
+
+/**
+ * Origin của trang khai 预配舱单.
+ *
+ * Lấy từ `MANIFEST_URL` để không lặp lại chuỗi origin ở nhiều chỗ — content
+ * script chỉ được inject vào đúng origin này.
+ */
+const MANIFEST_ORIGIN = new URL(MANIFEST_URL).origin
 
 /**
  * Hạn chờ trong popup.
@@ -347,6 +355,34 @@ async function run(allowWrite: boolean): Promise<void> {
   }
 }
 
+/**
+ * URL của tab có trỏ ĐÚNG vào trang khai 预配舱单 không?
+ *
+ * So KHỚP CHÍNH XÁC, giống hệt content script (`src/content/index.ts`): route
+ * của site là tiền tố của route khác (`…maintenanceOfManifestDataExtra`) ⇒ so
+ * tiền tố sẽ nhận nhầm trang đó, reload xong content script vẫn từ chối ⇒
+ * operator không thoát ra được khỏi vòng lặp.
+ *
+ * Route nằm sau `#` của URL ⇒ lấy phần hash, bỏ `#` đầu, cắt ở `?`/`#` kế
+ * tiếp rồi so với `MANIFEST_ROUTE`.
+ *
+ * Origin cũng phải khớp: content script chỉ chạy trên origin của site ⇒ tab
+ * ở origin khác KHÔNG phải trang khai, dù route có giống.
+ */
+function isManifestUrl(url: string | undefined): boolean {
+  if (url === undefined) return false
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return false
+  }
+  if (parsed.origin !== MANIFEST_ORIGIN) return false
+  const hash = parsed.hash.startsWith('#') ? parsed.hash.slice(1) : parsed.hash
+  const route = hash.split(/[?#]/)[0] ?? ''
+  return route === MANIFEST_ROUTE
+}
+
 async function openPage(): Promise<void> {
   const tabId = await activeTabId()
   if (tabId === undefined) {
@@ -355,7 +391,7 @@ async function openPage(): Promise<void> {
   }
   const tab = await chrome.tabs.get(tabId)
 
-  if (tab.url?.startsWith(MANIFEST_URL)) {
+  if (isManifestUrl(tab.url)) {
     await chrome.tabs.reload(tabId)
   } else {
     await chrome.tabs.update(tabId, {
