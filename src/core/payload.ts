@@ -9,8 +9,7 @@
  * - thiếu dữ liệu ⇒ `""` (KHÔNG `null`, KHÔNG `undefined`, KHÔNG bỏ hẳn key —
  *   site cần đủ key trong body);
  * - các field loại (付款方式, 货物标识, 货主箱标志) là **MÃ** của site
- *   (`P`/`C`, `S`/`D`/`R`/`G`, `Y`/`N`), KHÔNG phải nhãn tiếng Trung như
- *   DOM path điền.
+ *   (`P`/`C`, `S`/`D`/`R`/`G`, `Y`/`N`), KHÔNG phải nhãn tiếng Trung.
  */
 import {
   contactRole,
@@ -158,19 +157,19 @@ export function buildHeaderPayload(data: ManifestData, ctx: MappingContext): Hea
     e_ship_nam: str(data.shipName),
     out_voyage_no: str(data.voyage),
     trust_cod: str(ctx.findTrustCode(data.sea_order?.sea_order_bind?.supplyId)),
-    // 付款方式: site lưu MÃ (预付='P', 到付='C') — DOM path ghi nhãn tiếng Trung.
+    // 付款方式: site lưu MÃ (预付='P', 到付='C'), KHÔNG phải nhãn tiếng Trung.
     pay_way_id: payWayOf(data.payType)?.code ?? '',
     dr_type_str: str(ctx.findDrType(data.transportTerms ?? undefined)),
     // 提单签发地 — API không có dữ liệu.
     sign_place_cod: '',
     sign_place_str: '',
     // Tên cảng: site lưu TÊN TIẾNG TRUNG — dict `getPort()` của site chỉ có tên
-    // Trung (`E_PORT_NAM`) và widget autocomplete chỉ gợi ý tên Trung.
+    // Trung (`E_PORT_NAM`).
     // `PortData.name` là tên Trung, `PortData.nameEn` là tên Anh ⇒ KHÔNG dùng
     // `nameEn` ở đây.
     //
-    // Ưu tiên tên từ API (luôn có) rồi mới tới dict `getPort()` — cùng thứ tự
-    // với DOM path (`mapping.ts`).
+    // Ưu tiên tên từ API (luôn có) rồi mới tới dict `getPort()` — dict chỉ là
+    // nguồn dự phòng cho lúc API không có dữ liệu cảng.
     start_port_cod: str(data.loadCode),
     start_port_nam: str(data.loadPortData?.name) || str(ctx.findPort(data.loadCode ?? undefined)),
     dischrg_port_cod: uploadCode,

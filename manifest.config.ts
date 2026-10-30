@@ -18,8 +18,8 @@ export default defineManifest({
   },
   options_page: 'src/options/index.html',
   // KHÔNG khai báo `background.service_worker` — extension không có tác vụ
-  // chạy nền (popup gửi `MSG_FILL` thẳng cho content script, cả hai đều đọc
-  // `chrome.storage.sync` trực tiếp).
+  // chạy nền (popup gửi `MSG_CREATE_MANIFEST` thẳng cho content script, cả hai
+  // đều đọc `chrome.storage.sync` trực tiếp).
   //
   // Quan trọng: bản production vì vậy KHÔNG sinh `service-worker-loader.js`
   // ⇒ Chrome không phải đăng ký service worker nào.

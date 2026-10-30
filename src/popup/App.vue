@@ -127,7 +127,7 @@ interface BillEvidence {
 /** Các dòng bằng chứng — sắp xếp theo số bill cho ổn định. */
 const billEvidence = computed<BillEvidence[]>(() =>
   Object.entries(manifestBills.value)
-    .map(([blNo, needsFinishing]) => ({ blNo, needsFinishing }))
+    .map(([billKey, needsFinishing]) => ({ blNo: billKey, needsFinishing }))
     .sort((a, b) => a.blNo.localeCompare(b.blNo)),
 )
 
@@ -200,9 +200,7 @@ const counts = computed(() => {
 
 /** Mỗi icon ứng với đúng một trạng thái — không trùng lẫn. */
 function icon(item: ReportItem): string {
-  if (item.status === 'ok') return '✅'
   if (item.status === 'warn') return '⚠️'
-  if (item.status === 'error') return '❌'
   return '⏭'
 }
 

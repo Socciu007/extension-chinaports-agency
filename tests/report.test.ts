@@ -8,7 +8,7 @@ function item(overrides: Partial<ReportItem> = {}): ReportItem {
     scope: 'header',
     prop: 'PAY_WAY_ID',
     label: '付款方式',
-    status: 'ok',
+    status: 'warn',
     ...overrides,
   }
 }
@@ -25,14 +25,6 @@ describe('blockingFields', () => {
     expect(blockingFields([item({ status: 'warn', required: true })])).toHaveLength(1)
   })
 
-  it('field BẮT BUỘC bị error ⇒ chặn', () => {
-    expect(blockingFields([item({ status: 'error', required: true })])).toHaveLength(1)
-  })
-
-  it('field BẮT BUỘC đã điền ok ⇒ KHÔNG chặn', () => {
-    expect(blockingFields([item({ status: 'ok', required: true })])).toHaveLength(0)
-  })
-
   it('field KHÔNG bắt buộc bị skip ⇒ KHÔNG chặn (case quan trọng nhất)', () => {
     // EMAIL/FAX/中转港… API không có dữ liệu và cố ý để trống ⇒ vẫn submit được.
     const blocking = blockingFields([item({ status: 'skip', required: false })])
@@ -41,6 +33,13 @@ describe('blockingFields', () => {
 
   it('field KHÔNG bắt buộc (required undefined) bị skip ⇒ KHÔNG chặn', () => {
     expect(blockingFields([item({ status: 'skip' })])).toHaveLength(0)
+  })
+
+  it('chỉ cờ `required` quyết định có chặn hay không, KHÔNG phải trạng thái', () => {
+    // Report chỉ liệt kê ô BỊ BỎ TRỐNG ⇒ `warn` và `skip` đều là "còn trống",
+    // khác nhau ở chỗ site có bắt buộc hay không ⇒ cả hai đều chặn khi bắt buộc.
+    expect(blockingFields([item({ status: 'warn', required: true })])).toHaveLength(1)
+    expect(blockingFields([item({ status: 'skip', required: true })])).toHaveLength(1)
   })
 
   it('giữ lại prop/scope/row/note của field bị chặn', () => {
@@ -72,7 +71,7 @@ describe('blockingFields', () => {
     const items = [
       item({ prop: 'A', status: 'skip', required: true }),
       item({ prop: 'B', status: 'warn', required: true }),
-      item({ prop: 'C', status: 'error', required: true }),
+      item({ prop: 'C', status: 'skip', required: true }),
     ]
     expect(blockingFields(items).map((f) => f.prop)).toEqual(['A', 'B', 'C'])
   })

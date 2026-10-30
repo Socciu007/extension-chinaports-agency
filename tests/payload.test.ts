@@ -177,7 +177,7 @@ describe('buildHeaderPayload', () => {
     }
     const withDest = buildHeaderPayload(data, ctx)
     expect(withDest.dest_port_cod).toBe('IDSUB')
-    // Tên lấy từ API trước, dict `getPort()` sau — cùng thứ tự với DOM path.
+    // Tên lấy từ API trước, dict `getPort()` sau — dict chỉ là nguồn dự phòng.
     expect(withDest.dest_port_nam).toBe('泗水')
   })
 

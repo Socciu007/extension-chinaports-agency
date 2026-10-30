@@ -26,11 +26,10 @@ export type FillScope = 'header' | 'cargo' | 'container'
  *             operator phải điền tay trên site;
  * - `skip` — field KHÔNG bắt buộc và API không cung cấp ⇒ để trống là đúng.
  *
- * `ok` và `error` KHÔNG còn do đường API sinh ra. Chúng vẫn nằm trong union vì
- * module DOM cũ (`src/core/fill.ts`) còn gán chúng — module đó bị xoá ở task
- * sau, và lúc đó union sẽ được thu hẹp lại còn `warn | skip`.
+ * `ok` và `error` thuộc về đường DOM đã bị gỡ ⇒ chúng KHÔNG còn tồn tại.
+ * Union hẹp lại còn `warn | skip` vì đó là đúng những gì đường API sinh ra.
  */
-export type ReportStatus = 'ok' | 'skip' | 'warn' | 'error'
+export type ReportStatus = 'warn' | 'skip'
 
 export interface ReportItem {
   scope: FillScope

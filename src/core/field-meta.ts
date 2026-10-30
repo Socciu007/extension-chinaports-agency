@@ -1,15 +1,15 @@
 /**
- * Metadata về các field của site — dùng CHUNG cho DOM path và API path.
+ * Metadata về các field của site — nguồn sự thật DUY NHẤT của đường API.
  *
- * Tách ra module riêng vì hai đường đi của extension cần cùng một nguồn sự
- * thật: site BẮT BUỘC field nào, loại hàng nào thì site xoá field nào, tra
- * cảng bằng tên nào, và map dữ liệu của bên ngoài sang field nào.
+ * Module này trả lời bốn câu hỏi mà cả `payload.ts` (dựng body) và
+ * `manifest-run.ts` (dựng report) đều cần, và phải trả lời GIỐNG NHAU:
+ * - site BẮT BUỘC field nào, và field nào chỉ bắt buộc với loại hàng nào;
+ * - loại hàng nào thì site xoá & disable field nào;
+ * - mỗi field tên gì (nhãn hiển thị lấy theo tên tiếng Trung của site);
+ * - vì sao một ô bị bỏ trống (note để operator biết phải làm gì).
  *
- * - DOM path (`mapping.ts`) đọc để dựng plan điền form.
- * - API path (`payload.ts`, `manifest-run.ts`) đọc để dựng body gửi lên site.
- *
- * DOM path sẽ bị bỏ ở task sau ⇒ module này KHÔNG được import từ
- * `mapping.ts` (import ngược lại tạo vòng).
+ * Không được import từ `protocol.ts` (`protocol.ts` → `manifest-run.ts` →
+ * `field-meta.ts`) ⇒ import kiểu ngược lại sẽ tạo vòng.
  */
 import type { ManifestCargo, ManifestContact } from './types'
 
@@ -82,26 +82,12 @@ export function deriveCargoKind(goods: ManifestCargo): CargoKind {
 }
 
 /**
- * Nhãn hiển thị của loại hàng trên site.
- *
- * `el-select` của site khớp option theo **TEXT hiển thị** ⇒ plan phải chứa
- * nhãn (`普货`), mã (`S`) chỉ nằm trong `note` để người dùng đối chiếu.
- */
-export const CARGO_KIND_LABELS: Record<CargoKind, string> = {
-  S: '普货',
-  D: '危险品',
-  R: '冷藏品',
-  G: '危险品+冷藏品',
-}
-
-/**
  * Field BẮT BUỘC của site ở form đầu (FACT 1 của plan live-site-alignment).
  *
- * `START_PORT_COD`/`DISCHRG_PORT_COD` KHÔNG có plan riêng: site cascade chúng
- * khi suggestion của `*_PORT_NAM` được click, và `fill.ts` verify lại ngay sau
- * đó ⇒ không cascade được thì báo `warn`, mà `warn` thì `ok` đã là false.
- *
- * Site vẫn BẮT BUỘC cả hai field mã cảng ⇒ chúng nằm trong danh sách này.
+ * `START_PORT_COD`/`DISCHRG_PORT_COD` cũng BẮT BUỘC, và ở đường API chúng
+ * được điền thẳng bởi `buildHeaderPayload` (mã cảng lấy từ `loadCode`/
+ * `uploadCode`) ⇒ cần nằm trong danh sách này để report báo "còn trống" khi
+ * API không có mã cảng.
  *
  * `SHIPPER_COUNTRY_COD` và toàn bộ field 通知人 KHÔNG nằm trong danh sách này:
  * site không bắt buộc chúng.
