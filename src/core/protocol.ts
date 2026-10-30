@@ -45,7 +45,7 @@ export interface ReportItem {
 }
 
 export interface FillRequest {
-  type: typeof MSG_FILL
+  type: typeof MSG_CREATE_MANIFEST
   blNo: string
   autoSubmit?: boolean
   apiBase?: string

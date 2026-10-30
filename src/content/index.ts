@@ -1,13 +1,11 @@
 /**
- * Content script — điền manifest cho trang khai 预配舱单.
+ * Content script — fill manifest.
  *
- * ĐƯỜNG CHÍNH: API.
+ * MAIN ROUTE: API.
  *
- *   popup → `MSG_CREATE_MANIFEST` → `runManifest` (đọc manifest từ API bên
- *   ngoài → đọc dict của site → dựng payload → (tuỳ chọn) ghi lên site).
+ *  popup → `MSG_CREATE_MANIFEST` → `runManifest` (read manifest from API outside → read site dicts → build payload → (optional) write to site).
  *
- * `runManifest` KHÔNG reject ⇒ mọi lỗi thành `CreateResult` có `ok: false` +
- * `message` tiếng Anh.
+ * `runManifest` does not reject ⇒ any error becomes `CreateResult` with `ok: false` + `message` in English.
  */
 import { runManifest } from '../core/manifest-run'
 import { readSettings } from '../core/options'
@@ -23,9 +21,7 @@ function isManifestPage(): boolean {
 }
 
 /**
- * Kết quả lỗi — phải có ĐỦ field của `CreateResult`.
- *
- * `preview` rỗng vẫn hợp lệ: `HeaderPayload` là `{[key: string]: string}`.
+ * Handle error result.
  */
 function errorResult(message: string): CreateResult {
   return {
@@ -42,45 +38,43 @@ function errorResult(message: string): CreateResult {
   }
 }
 
-/** Lần chạy đang chạy — dùng để chặn hai lần chạy chồng nhau. */
+/** Running manifest — used to prevent running multiple manifests at the same time. */
 let inFlight: Promise<CreateResult> | null = null
 
 /**
- * Chạy manifest theo yêu cầu của popup.
- *
- * Sai trang ⇒ trả lỗi NGAY, KHÔNG gọi network.
- */
+ * Run manifest according to the request from the popup.
+**/
 async function handleCreate(request: CreateRequest): Promise<CreateResult> {
+  // If not on the manifest page, return an error.
   if (!isManifestPage()) {
     return errorResult(
-      'Open the 预配舱单申报平台 page (#/exportBusinessOperations/maintenanceOfManifestData) and try again.',
+      'Open the manifest page (#/exportBusinessOperations/maintenanceOfManifestData) and try again.',
     )
   }
 
   const settings = await readSettings()
+  console.log('settings', settings)
+  console.log('request', request)
   const apiBase = request.apiBase ?? settings.apiBase
   const siteApiBase = request.siteApiBase ?? settings.siteApiBase
-  // So sánh CHẶT: bất kỳ giá trị nào khác `true` (kể cả `'true'` hay `1`)
-  // ⇒ chỉ preview, KHÔNG gửi POST nào lên site.
   const allowWrite = request.allowWrite === true
+
 
   return runManifest({
     blNo: request.blNo ?? '',
     allowWrite,
     apiBase,
     siteApiBase,
-    // Site lưu token trong cookie `token` ⇒ `site-api` tự biến nó thành
-    // header `Authorization: JWT <token>`
     cookieString: document.cookie,
   })
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const type = (message as { type?: string } | undefined)?.type
+  console.log('type', type)
   if (type !== MSG_CREATE_MANIFEST) return false
 
-  // Chống chạy chồng: hai lần chạy cùng lúc sẽ tạo bill hai lần ⇒ dòng hàng
-  // TRÙNG trong manifest thật.
+  // Prevent running multiple manifests at the same time.
   if (inFlight) {
     sendResponse(
       errorResult('A manifest run is already in progress — wait for it to finish.'),

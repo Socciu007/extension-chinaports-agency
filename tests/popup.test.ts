@@ -31,6 +31,10 @@ let sentMessages: SentMessage[]
 let tabUpdates: { tabId: number; url?: string }[]
 /** Ghi lại mọi lần TẠO tab mới — để assert không mở tab mới. */
 let createdTabs: (string | undefined)[]
+/** Ghi lại mọi lần TẢI LẠI tab — để assert tab đang ở trang khai báo được reload. */
+let tabReloads: number[]
+/** URL của tab active trong stub — đổi được để test cả nhánh "đã ở trang khai báo". */
+let activeTabUrl: string
 
 beforeEach(() => {
   for (const key of Object.keys(store)) delete store[key]
@@ -38,6 +42,8 @@ beforeEach(() => {
   sentMessages = []
   tabUpdates = []
   createdTabs = []
+  tabReloads = []
+  activeTabUrl = 'https://example.test/'
   storageGet = async (defaults) => ({ ...defaults, ...store })
   storageSet = async (values) => {
     Object.assign(store, values)
@@ -53,6 +59,11 @@ beforeEach(() => {
     },
     tabs: {
       query: async () => [{ id: 1 }],
+      get: async (tabId: number) => ({ id: tabId, url: activeTabUrl }),
+      reload: async (tabId: number) => {
+        tabReloads.push(tabId)
+        return undefined
+      },
       sendMessage: (_tabId: number, message: SentMessage) => {
         sentTypes.push(message.type)
         // Copy chứ không giữ tham chiếu — để assert không bị ảnh hưởng nếu
@@ -511,6 +522,22 @@ describe('popup — nút Open page', () => {
     // Tab active (id = 1 trong stub) phải bị đổi URL sang trang khai 预配舱单.
     expect(tabUpdates).toEqual([{ tabId: 1, url: MANIFEST_URL }])
     // KHÔNG được mở thêm tab mới — người dùng chọn điều hướng tab hiện tại.
+    expect(createdTabs).toEqual([])
+    // Tab KHÔNG đang ở trang khai báo ⇒ không reload.
+    expect(tabReloads).toEqual([])
+  })
+
+  it('tab ĐANG ở trang khai báo ⇒ tải lại tab, KHÔNG điều hướng', async () => {
+    activeTabUrl = MANIFEST_URL
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await buttonByText(wrapper, 'Open page').trigger('click')
+    await flushPromises()
+
+    // Đã ở đúng trang ⇒ reload để thấy dữ liệu mới, KHÔNG điều hướng lại.
+    expect(tabReloads).toEqual([1])
+    expect(tabUpdates).toEqual([])
     expect(createdTabs).toEqual([])
   })
 })

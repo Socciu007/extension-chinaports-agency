@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { DeadlineError, withDeadline } from '../core/http'
 import { readSettingsResult, saveSettings } from '../core/options'
 import {
-  MSG_FILL,
+  MSG_CREATE_MANIFEST,
   type FillRequest,
   type FillResult,
   type ReportItem,
@@ -72,8 +72,6 @@ async function activeTabId(): Promise<number | undefined> {
 }
 
 async function runFill(): Promise<void> {
-  // Nút bị disable khi `busy`, nhưng phím Enter trên ô nhập KHÔNG bị disable
-  // ⇒ phải chặn ở đây, nếu không sẽ có hai lần điền chạy chồng nhau.
   if (busy.value) return
 
   pageError.value = ''
@@ -88,13 +86,8 @@ async function runFill(): Promise<void> {
   try {
     const tabId = await activeTabId()
     if (tabId === undefined) throw new Error('no active tab')
-    const request: FillRequest = { type: MSG_FILL, blNo: value }
-    // CHỈ gửi `autoSubmit` khi đã đọc xong setting.
-    //
-    // Gửi `false` placeholder sẽ bị content script dùng (vì
-    // `request.autoSubmit ?? settings.autoSubmit` coi `false` là CÓ giá trị)
-    // ⇒ opt-in đã lưu bị bỏ qua trong im lặng. Bỏ trống key ⇒ content script
-    // tự đọc setting đã lưu.
+    const request: FillRequest = { type: MSG_CREATE_MANIFEST, blNo: value }
+    console.log('tabId', tabId)
     if (settingsLoaded.value) request.autoSubmit = autoSubmit.value
 
     const res = (await withDeadline(
@@ -102,10 +95,9 @@ async function runFill(): Promise<void> {
       FILL_DEADLINE_MS,
       'The manifest fill',
     )) as FillResult
+    console.log('res', res)
     result.value = res
     if (!res?.ok) {
-      // `res.message` chỉ có khi content script dừng sớm; nếu không thì phải
-      // tự dựng câu từ danh sách field bị chặn.
       pageError.value = describeIncompleteFill(res?.items ?? [], res?.message)
     }
   } catch (e) {
@@ -119,22 +111,21 @@ async function runFill(): Promise<void> {
 }
 
 async function openPage(): Promise<void> {
-  // Điều hướng CHÍNH tab đang mở, không tạo tab mới.
-  //
-  // `chrome.tabs.update` thay URL của tab hiện tại ⇒ người dùng không phải
-  // chuyển qua lại giữa hai tab. Đổi lại: nếu đang ở site khác thì trang đó
-  // bị thay thế — đây là đánh đổi đã được chọn.
-  //
-  // Không cần thêm permission: `tabs` permission chỉ dùng để ĐỌC `tab.url`/
-  // `tab.title`; `tabs.update` để điều hướng thì không cần.
   const tabId = await activeTabId()
   if (tabId === undefined) {
-    // Không tìm thấy tab active (ví dụ cửa sổ không có tab nào) ⇒ tạo tab
-    // mới là lựa chọn duy nhất còn lại.
     await chrome.tabs.create({ url: MANIFEST_URL })
     return
   }
-  await chrome.tabs.update(tabId, { url: MANIFEST_URL })
+  const tab = await chrome.tabs.get(tabId)
+
+  if (tab.url?.startsWith(MANIFEST_URL)) {
+    await chrome.tabs.reload(tabId)
+  } else {
+    await chrome.tabs.update(tabId, {
+      url: MANIFEST_URL,
+      active: true,
+    })
+  }
 }
 
 async function onToggleAutoSubmit(): Promise<void> {

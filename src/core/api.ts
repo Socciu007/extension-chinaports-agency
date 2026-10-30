@@ -97,7 +97,6 @@ export function parseEnvelope(json: unknown): ManifestData {
 export interface FetchManifestOptions {
   baseUrl?: string
   fetchImpl?: typeof fetch
-  /** Thời gian chờ tối đa (ms) — hết giờ thì báo lỗi `timeout`. */
   timeoutMs?: number
 }
 
