@@ -1428,4 +1428,37 @@ describe('popup — nút Open page', () => {
     expect(tabUpdates).toEqual([])
     expect(createdTabs).toEqual([])
   })
+
+  it('tab ở route ANH EM (…maintenanceOfManifestDataExtra) ⇒ điều hướng, KHÔNG reload', async () => {
+    // Route của site là TIỀN TỐ của route này ⇒ so tiền tố sẽ nhận nhầm:
+    // reload xong content script vẫn từ chối ⇒ operator mắc vòng lặp
+    // không thoát ra được. Đây là chốt hộ cho đúng lỗi đó.
+    activeTabUrl =
+      'https://www.chinaports-agency.com:8870/#/exportBusinessOperations/maintenanceOfManifestDataExtra'
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await buttonByText(wrapper, 'Open page').trigger('click')
+    await flushPromises()
+
+    // KHÔNG phải trang khai báo ⇒ phải điều hướng tab, KHÔNG reload.
+    expect(tabUpdates).toEqual([{ tabId: 1, url: MANIFEST_URL }])
+    expect(tabReloads).toEqual([])
+    expect(createdTabs).toEqual([])
+  })
+
+  it('tab cùng origin nhưng route KHÁC ⇒ điều hướng, KHÔNG reload', async () => {
+    // Cùng origin nhưng route khác ⇒ KHÔNG phải trang khai báo — cái quyết
+    // định là ROUTE, không phải origin.
+    activeTabUrl = 'https://www.chinaports-agency.com:8870/#/someOtherRoute'
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await buttonByText(wrapper, 'Open page').trigger('click')
+    await flushPromises()
+
+    expect(tabUpdates).toEqual([{ tabId: 1, url: MANIFEST_URL }])
+    expect(tabReloads).toEqual([])
+    expect(createdTabs).toEqual([])
+  })
 })

@@ -15,7 +15,7 @@ import {
   type ReportItem,
 } from '../core/protocol'
 import { blockingFields } from '../core/report'
-import { MANIFEST_ROUTE, MANIFEST_URL } from '../core/site-url'
+import { MANIFEST_ROUTE, MANIFEST_URL, routeOfHash } from '../core/site-url'
 import './styles.css'
 
 /**
@@ -358,13 +358,14 @@ async function run(allowWrite: boolean): Promise<void> {
 /**
  * URL của tab có trỏ ĐÚNG vào trang khai 预配舱单 không?
  *
- * So KHỚP CHÍNH XÁC, giống hệt content script (`src/content/index.ts`): route
- * của site là tiền tố của route khác (`…maintenanceOfManifestDataExtra`) ⇒ so
- * tiền tố sẽ nhận nhầm trang đó, reload xong content script vẫn từ chối ⇒
+ * Luật lấy route nằm trong `routeOfHash` (`src/core/site-url.ts`) — CHUNG với
+ * content script (`src/content/index.ts`) để hai bên không thể lệch nhau về
+ * "trang khai 预配舱单" là gì. Trước đây popup so tiền tố nên nhận nhầm route
+ * `…maintenanceOfManifestDataExtra`, reload xong content script vẫn từ chối ⇒
  * operator không thoát ra được khỏi vòng lặp.
  *
- * Route nằm sau `#` của URL ⇒ lấy phần hash, bỏ `#` đầu, cắt ở `?`/`#` kế
- * tiếp rồi so với `MANIFEST_ROUTE`.
+ * So KHỚP CHÍNH XÁC (`===`), không so tiền tố: route của site là tiền tố của
+ * một route khác có thật (`…maintenanceOfManifestDataExtra`).
  *
  * Origin cũng phải khớp: content script chỉ chạy trên origin của site ⇒ tab
  * ở origin khác KHÔNG phải trang khai, dù route có giống.
@@ -378,9 +379,7 @@ function isManifestUrl(url: string | undefined): boolean {
     return false
   }
   if (parsed.origin !== MANIFEST_ORIGIN) return false
-  const hash = parsed.hash.startsWith('#') ? parsed.hash.slice(1) : parsed.hash
-  const route = hash.split(/[?#]/)[0] ?? ''
-  return route === MANIFEST_ROUTE
+  return routeOfHash(parsed.hash) === MANIFEST_ROUTE
 }
 
 async function openPage(): Promise<void> {

@@ -15,7 +15,7 @@ import {
   type CreateRequest,
   type CreateResult,
 } from '../core/protocol'
-import { MANIFEST_ROUTE } from '../core/site-url'
+import { MANIFEST_ROUTE, routeOfHash } from '../core/site-url'
 
 /**
  * Trang hiện tại có ĐÚNG là trang khai 预配舱单 không?
@@ -24,13 +24,13 @@ import { MANIFEST_ROUTE } from '../core/site-url'
  * route khác (`…maintenanceOfManifestDataExtra`) ⇒ `includes` sẽ nhận nhầm
  * trang đó và extension điền manifest vào một trang không có form.
  *
- * Query string (`?x=1`) và fragment sau `#` không phải route ⇒ cắt bỏ
- * chúng trước khi so.
+ * Luật lấy route nằm trong `routeOfHash` (`src/core/site-url.ts`) — dùng
+ * CHUNG với popup để hai bên không thể lệch nhau về "trang khai 预配舱单" là
+ * gì (lệch nhau thì popup reload một tab mà content script từ chối ⇒
+ * operator mắc vòng lặp).
  */
 function isManifestPage(): boolean {
-  const hash = location.hash.startsWith('#') ? location.hash.slice(1) : location.hash
-  const path = hash.split(/[?#]/)[0] ?? ''
-  return path === MANIFEST_ROUTE
+  return routeOfHash(location.hash) === MANIFEST_ROUTE
 }
 
 /**
