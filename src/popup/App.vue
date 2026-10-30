@@ -147,11 +147,19 @@ const billEvidence = computed<BillEvidence[]>(() =>
  * manifest for the same bill") ⇒ nói vậy là nói sai, và còn trái với điều
  * operator vừa được báo. Cảnh báo đúng là "đừng tạo manifest khác cho số
  * bill này" — đúng trong tab này lẫn tab khác.
+ *
+ * Khi manifest ĐÃ lưu thành nháp (暂存) mà không còn field bắt buộc bị trống
+ * thì dòng này vẫn phải nói rõ operator phải TỰ submit trên site: extension
+ * chỉ lưu nháp, KHÔNG BAO GIỜ submit, và câu "saved as a draft (暂存)" chỉ
+ * nằm ở `.bill-status` — khối bị lần chạy sau xoá mất ⇒ không nói ở đây thì
+ * sau một lần preview bất kỳ operator tưởng đã xong.
  */
 function evidenceText(entry: BillEvidence): string {
   const base = `A manifest bill was already created on the site for ${entry.blNo}.`
   const duplicate = 'Do not create another manifest for this bill number.'
-  if (!entry.needsFinishing) return `${base} ${duplicate}`
+  if (!entry.needsFinishing) {
+    return `${base} The manifest was saved as a draft (暂存) and still has to be submitted on the site. ${duplicate}`
+  }
   return `${base} Check the site and finish that manifest by hand. ${duplicate}`
 }
 
@@ -386,17 +394,24 @@ async function onToggleCreateOnSite(): Promise<void> {
       await refreshFromStorage()
       return
     }
-    // Lưu thất bại ⇒ ĐỌC LẠI storage trước.
+    // Lưu thất bại ⇒ báo lỗi NGAY, rồi ĐỌC LẠI storage.
     //
     // Sự kiện storage đến LÚC đang lưu đã bị `if (saving.value) return` bỏ qua
-    // ⇒ không có đường nào bù lại nếu không đọc lại ở đây. Đọc lại xong mới
-    // báo lỗi, vì `refreshFromStorage()` XOÁ `settingsError` khi đọc thành
-    // công.
-    await refreshFromStorage()
-    // Đưa checkbox về giá trị ĐÃ LƯU THẬT (sau lần đọc lại ⇒ đúng với
-    // storage) và BÁO cho người dùng. Không được im lặng mất setting.
-    createOnSite.value = savedCreateOnSite.value
+    // ⇒ không có đường nào bù lại nếu không đọc lại ở đây.
+    //
+    // Báo lỗi TRƯỚC khi đọc lại: lần đọc có thể treo ⇒ nếu chờ nó xong mới
+    // báo thì operator thấy một checkbox bị khoá mà KHÔNG thấy lỗi nào, và
+    // `saving` kẹt vĩnh viễn ⇒ lần lưu hỏng không bao giờ được báo.
     settingsError.value = outcome.error
+    const read = await refreshFromStorage()
+    // Đưa checkbox về giá trị ĐÃ XÁC NHẬN (sau lần đọc lại ⇒ đúng với
+    // storage) và BÁO cho người dùng. Không được im lặng mất setting.
+    //
+    // Lần đọc lại XOÁ `settingsError` khi thành công ⇒ phải báo lại lỗi lưu
+    // sau khi đọc xong. Lần đọc HỎNG thì phải báo CẢ HAI lỗi: mỗi lỗi là
+    // một nguyên nhân khác nhau, và lỗi này không được giấu lỗi kia.
+    createOnSite.value = savedCreateOnSite.value
+    settingsError.value = read.ok ? outcome.error : `${outcome.error} ${read.error}`
   } finally {
     saving.value = false
   }
@@ -413,33 +428,54 @@ async function onToggleCreateOnSite(): Promise<void> {
 let refreshSeq = 0
 
 /**
+ * Kết quả của một lần đọc lại — lần đọc có XÁC NHẬN được trạng thái hay không.
+ *
+ * Người gọi cần biết để không báo "một lỗi" khi thực ra có HAI lỗi (lưu hỏng
+ * + đọc hỏng): mỗi lỗi là một nguyên nhân khác nhau mà operator phải thấy.
+ */
+interface RefreshOutcome {
+  /** lần đọc có xác nhận được trạng thái trong storage hay không */
+  ok: boolean
+  /** lỗi của lần đọc (rỗng khi đọc thành công) */
+  error: string
+}
+
+/**
  * Đọc lại setting từ storage và đồng bộ MỌI state của popup theo sự thật đó.
  *
  * Popup phải HƯỚNG VỀ storage thay vì giữ một bản sao riêng: lần đọc đầu
  * có thể đến muộn hơn một thay đổi đã xảy ra, và một thay đổi đến giữa lúc
  * đang lưu sẽ bị bỏ qua. Đọc lại sau mỗi lần lưu là cách duy nhất chắc chắn
  * ai ghi cuối cùng thì thắng.
+ *
+ * TRẢ VỀ để người gọi biết state đang hiển thị là đã xác nhận hay chưa.
  */
-async function refreshFromStorage(): Promise<void> {
+async function refreshFromStorage(): Promise<RefreshOutcome> {
   const seq = ++refreshSeq
   const outcome = await readSettingsResult()
   // Một lần đọc MỚI HƠN đã bắt đầu ⇒ kết quả của lần này đã cũ ⇒ bỏ qua,
-  // không được ghi đè giá trị mới hơn.
-  if (seq !== refreshSeq) return
+  // không được ghi đè giá trị mới hơn. Lần đọc cũ không xác nhận gì ⇒ coi
+  // như không có lỗi, và KHÔNG đụng `settingsError` (lần đọc mới hơn mới
+  // là người quyết định trạng thái hiển thị).
+  if (seq !== refreshSeq) return { ok: true, error: '' }
   if (!outcome.ok) {
     // Đọc hỏng ⇒ KHÔNG được coi là "setting = false".
     //
     // Nếu coi như vậy thì opt-in đã lưu (đúng `true` trong storage) bị bỏ
-    // qua trong im lặng. Giữ control ẩn + báo lỗi; nút "Create draft on site"
-    // cũng ở trạng thái tắt ⇒ không có cách nào ghi lên site khi ta không
-    // biết ý chí của operator.
+    // qua trong im lặng. Lần đọc hỏng KHÔNG đụng `settingsLoaded` ⇒ control
+    // chỉ ẩn ở lần ĐẦU (chưa biết setting là gì thì không được hiện ra một
+    // checkbox "tắt" bịa đặt, và nút create cũng phải tắt); lần đọc hỏng sau
+    // đó thì control VẪN hiện, mang giá trị ĐÃ XÁC NHẬN lần trước. Giữ
+    // nguyên giá trị đó + báo lỗi ⇒ operator thấy đúng việc ta chưa xác
+    // nhận được trạng thái mới, chứ không phải trạng thái vừa đọc được.
     settingsError.value = outcome.error
-    return
+    return { ok: false, error: outcome.error }
   }
   createOnSite.value = outcome.settings.createOnSite
   savedCreateOnSite.value = outcome.settings.createOnSite
   settingsLoaded.value = true
   settingsError.value = ''
+  return { ok: true, error: '' }
 }
 
 /** Huỷ đăng ký `storage.onChanged` — phải gọi khi unmount. */

@@ -187,15 +187,21 @@ function rawClick(button: { element: Element }): void {
  * Mỗi số bill có một dòng riêng ⇒ không dùng `find('.bill-created')` (đó là
  * khối chứa TẤT CẢ các dòng).
  *
- * Ghép trên `for {số bill}.` — phần ĐỊNH DANH của câu — chứ không phải số
- * bill thôi: `for XB.` không nằm trong `for AXB.` ⇒ không bao giờ match
- * nhầm dòng của một số bill khác. Phần SAU dấu chấm câu thì tự do đổi
+ * Khoá theo ĐẦU câu + số bill + dấu chấm câu, rồi đòi ký tự ngay sau dấu
+ * chấm là KHOẢNG TRẮNG. Chỉ `includes('for BL-A.')` thì `BL-A` vẫn khớp
+ * dòng của `BL-A.1` (chuỗi `BL-A.` là tiền tố của `BL-A.1.`) ⇒ assert có
+ * thể xanh NHẦM cho một số bill khác. Phần SAU dấu chấm câu thì tự do đổi
  * (câu "đừng tạo manifest khác" có thể thêm/bớt) mà helper này không hỏng.
  */
 function evidenceLine(wrapper: ReturnType<typeof mount>, blNo: string) {
-  const line = wrapper
-    .findAll('.bill-created-line')
-    .find((el) => el.text().includes(`for ${blNo}.`))
+  const prefix = 'A manifest bill was already created on the site for '
+  const line = wrapper.findAll('.bill-created-line').find((el) => {
+    const text = el.text()
+    if (!text.startsWith(`${prefix}${blNo}.`)) return false
+    // Sau dấu chấm câu phải là KHOẢNG TRẮNG ⇒ `BL-A` không khớp dòng của
+    // `BL-A.1` (sau `BL-A.` là `1`, không phải khoảng trắng).
+    return text.charAt(prefix.length + blNo.length + 1) === ' '
+  })
   if (!line) throw new Error(`could not find the evidence line for ${blNo}`)
   return line
 }
@@ -736,6 +742,84 @@ describe('popup — lưu setting thất bại', () => {
       // storage nói "bật" ⇒ nút create bị khoá oan.
       expect(isChecked(wrapper)).toBe(true)
       expect(isDisabled(wrapper, 'Create draft on site')).toBe(false)
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('lưu lỗi VÀ lần đọc bù cũng lỗi ⇒ báo CẢ HAI lỗi, không lỗi nào giấu lỗi nào', async () => {
+    // Opt-in đã lưu là `false` ⇒ đây là giá trị ĐÃ XÁC NHẬN của popup.
+    store.createOnSite = false
+    storageSet = async () => {
+      throw new Error('storage disabled')
+    }
+    // Lần đọc ĐẦU (lúc mount) thành công ⇒ control hiện và có giá trị đã
+    // xác nhận; mọi lần đọc SAU đó hỏng ⇒ lần đọc bù hỏng theo.
+    let getCalls = 0
+    storageGet = async () => {
+      getCalls += 1
+      if (getCalls === 1) return { ...store }
+      throw new Error('storage disabled')
+    }
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      const wrapper = mount(PopupApp)
+      await flushPromises()
+
+      expect(checkbox(wrapper).exists()).toBe(true)
+      expect(isChecked(wrapper)).toBe(false)
+
+      await checkbox(wrapper).setValue(true)
+      await flushPromises()
+
+      // HAI nguyên nhân khác nhau (lưu hỏng + đọc hỏng) ⇒ operator phải thấy
+      // CẢ HAI: lỗi đọc không được bị lỗi lưu giấu mất (và ngược lại).
+      const error = wrapper.find('.settings-error').text()
+      expect(error).toContain('Could not save the settings. Please try again.')
+      expect(error).toContain('Could not read the settings.')
+      // Checkbox về giá trị ĐÃ XÁC NHẬN (fail-closed) — không giữ tick của
+      // lựa chọn chưa lưu được, và không bịa ra một trạng thái lưu mà ta
+      // không xác nhận được.
+      expect(isChecked(wrapper)).toBe(false)
+    } finally {
+      errorSpy.mockRestore()
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('lưu THẤT BẠI mà nơi khác đã TẮT setting trong lúc đang lưu ⇒ popup theo storage và VẪN báo lỗi', async () => {
+    // Opt-in tắt lúc đầu.
+    store.createOnSite = false
+
+    // Lần ghi của popup THẤT BẠI — và đúng lúc đó nơi khác TẮT opt-in.
+    // Sự kiện của nơi khác tới lúc đang lưu ⇒ bị bỏ qua ⇒ lần đọc lại ở
+    // nhánh thất bại là đường bù DUY NHẤT.
+    storageSet = async () => {
+      store.createOnSite = false
+      emitStorageChange({ createOnSite: { newValue: false } })
+      throw new Error('storage disabled')
+    }
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      const wrapper = mount(PopupApp)
+      await flushPromises()
+
+      // Operator muốn BẬT opt-in.
+      await checkbox(wrapper).setValue(true)
+      await flushPromises()
+
+      // Storage đang TẮT ⇒ popup phải theo storage: không tick, nút create
+      // khoá (không được hứa "đã bật" khi storage đang tắt).
+      expect(isChecked(wrapper)).toBe(false)
+      expect(isDisabled(wrapper, 'Create draft on site')).toBe(true)
+      // Lỗi lưu VẪN phải được báo — lần đọc bù xoá `settingsError` nên nhánh
+      // thất bại phải báo lại sau khi đọc xong.
+      expect(wrapper.find('.settings-error').text()).toBe(
+        'Could not save the settings. Please try again.',
+      )
     } finally {
       errorSpy.mockRestore()
     }
