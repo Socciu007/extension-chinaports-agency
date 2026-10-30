@@ -22,7 +22,7 @@ import './styles.css'
 const FILL_DEADLINE_MS = 300_000
 
 const blNo = ref('')
-const autoSubmit = ref(false)
+const createOnSite = ref(false)
 const busy = ref(false)
 /** Lỗi khi làm việc với trang (đọc 提单号, điền form). */
 const pageError = ref('')
@@ -30,11 +30,11 @@ const pageError = ref('')
 const settingsError = ref('')
 const result = ref<FillResult | null>(null)
 /**
- * Đã đọc xong setting chưa — trước lúc đó KHÔNG hiện control của autoSubmit.
+ * Đã đọc xong setting chưa — trước lúc đó KHÔNG hiện control của createOnSite.
  *
  * Lý do: nếu hiện control trước khi đọc xong thì (a) một setting đã lưu là
  * `true` sẽ hiện ra là CHƯA tick trong suốt lúc đọc ⇒ người dùng tưởng
- * auto-submit đang tắt trong khi thực tế nó vẫn bật; và (b) nếu người dùng
+ * create-on-site đang tắt trong khi thực tế nó vẫn bật; và (b) nếu người dùng
  * tick sớm thì lần đọc trả về sau sẽ ĐÈ LÊN lựa chọn của họ. Giấu control
  * cho tới khi đọc xong ⇒ không cần cờ "userTouched" nào cả.
  *
@@ -42,9 +42,9 @@ const result = ref<FillResult | null>(null)
  * gì, nên không được hiện ra một control "tắt" bịa đặt.
  */
 const settingsLoaded = ref(false)
-/** Giá trị autoSubmit đã lưu THẬT — dùng để rollback khi lưu thất bại. */
-const savedAutoSubmit = ref(false)
-/** Đang lưu setting auto-submit — khoá control để không có 2 lần ghi chồng nhau. */
+/** Giá trị createOnSite đã lưu THẬT — dùng để rollback khi lưu thất bại. */
+const savedCreateOnSite = ref(false)
+/** Đang lưu setting create-on-site — khoá control để không có 2 lần ghi chồng nhau. */
 const saving = ref(false)
 
 const items = computed<ReportItem[]>(() => result.value?.items ?? [])
@@ -88,7 +88,9 @@ async function runFill(): Promise<void> {
     if (tabId === undefined) throw new Error('no active tab')
     const request: FillRequest = { type: MSG_CREATE_MANIFEST, blNo: value }
     console.log('tabId', tabId)
-    if (settingsLoaded.value) request.autoSubmit = autoSubmit.value
+    // Field của protocol vẫn tên `autoSubmit` (protocol.ts chưa đổi) — giữ
+    // nguyên message sending cho tới khi popup được nối lại với luồng create.
+    if (settingsLoaded.value) request.autoSubmit = createOnSite.value
 
     const res = (await withDeadline(
       chrome.tabs.sendMessage(tabId, request),
@@ -128,34 +130,41 @@ async function openPage(): Promise<void> {
   }
 }
 
-async function onToggleAutoSubmit(): Promise<void> {
+/**
+ * Bật/tắt opt-in create-on-site.
+ *
+ * CẦU NỐI TẠM: checkbox này chỉ là cầu nối cho setting `createOnSite` — popup
+ * sẽ được nối lại thành luồng hai nút (Preview / Create) ở task sau, nên
+ * đừng gắn thêm hành vi nào vào đây.
+ */
+async function onToggleCreateOnSite(): Promise<void> {
   // Đang lưu ⇒ bỏ qua lần click này và đưa checkbox về giá trị đã lưu thật.
   //
   // Checkbox đã bị disable trong lúc lưu, nhưng DOM chưa kịp render lần
   // disable đó nếu người dùng double-click rất nhanh ⇒ vẫn cần chặn ở đây.
   if (saving.value) {
-    autoSubmit.value = savedAutoSubmit.value
+    createOnSite.value = savedCreateOnSite.value
     return
   }
-  const next = autoSubmit.value
+  const next = createOnSite.value
   saving.value = true
   try {
-    const outcome = await saveSettings({ autoSubmit: next })
+    const outcome = await saveSettings({ createOnSite: next })
     if (outcome.ok) {
-      // `outcome.settings.autoSubmit` là giá trị store thực sự giữ sau khi
+      // `outcome.settings.createOnSite` là giá trị store thực sự giữ sau khi
       // ép kiểu ⇒ uy tín hơn `next`.
-      savedAutoSubmit.value = outcome.settings.autoSubmit
+      savedCreateOnSite.value = outcome.settings.createOnSite
       // Đồng bộ control với giá trị ĐÃ LƯU. Bình thường thì bằng `next` nên
       // không đổi gì; nhưng khi một lần tick bị bỏ qua (guard ở trên) thì
       // đây là chỗ duy nhất đưa control về đúng giá trị trong storage —
       // nếu không, UI và storage sẽ lệch nhau.
-      autoSubmit.value = outcome.settings.autoSubmit
+      createOnSite.value = outcome.settings.createOnSite
       settingsError.value = ''
       return
     }
     // Lưu thất bại ⇒ đưa checkbox về giá trị đã lưu thật và BÁO cho người
     // dùng. Không được im lặng mất setting.
-    autoSubmit.value = savedAutoSubmit.value
+    createOnSite.value = savedCreateOnSite.value
     settingsError.value = outcome.error
   } finally {
     saving.value = false
@@ -167,15 +176,15 @@ onMounted(async () => {
   if (!outcome.ok) {
     // Đọc hỏng ⇒ KHÔNG được coi là "setting = false".
     //
-    // Content script coi `false` là CÓ giá trị (`request.autoSubmit ??
-    // settings.autoSubmit`) ⇒ gửi `false` đi là đè lên opt-in đã lưu trong
-    // im lặng. Giữ control ẩn + báo lỗi; payload lúc điền sẽ không kèm
-    // `autoSubmit` ⇒ content script tự đọc setting (lần đọc MỚI của nó).
+    // Content script coi `false` là CÓ giá trị (`request.autoSubmit ?? …`) ⇒
+    // gửi `false` đi là đè lên opt-in đã lưu trong im lặng. Giữ control ẩn +
+    // báo lỗi; payload lúc điền sẽ không kèm `autoSubmit` ⇒ content script tự
+    // đọc setting (lần đọc MỚI của nó).
     settingsError.value = outcome.error
     return
   }
-  autoSubmit.value = outcome.settings.autoSubmit
-  savedAutoSubmit.value = outcome.settings.autoSubmit
+  createOnSite.value = outcome.settings.createOnSite
+  savedCreateOnSite.value = outcome.settings.createOnSite
   settingsLoaded.value = true
   settingsError.value = ''
 })
@@ -199,12 +208,12 @@ onMounted(async () => {
       <button type="button" @click="openPage">Open page</button>
       <label v-if="settingsLoaded">
         <input
-          v-model="autoSubmit"
+          v-model="createOnSite"
           type="checkbox"
           :disabled="saving"
-          @change="onToggleAutoSubmit"
+          @change="onToggleCreateOnSite"
         />
-        Auto-click 确定 after filling
+        Create the manifest on the site
       </label>
     </div>
 

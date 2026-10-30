@@ -12,13 +12,13 @@ import './styles.css'
 
 const apiBase = ref('')
 const siteApiBase = ref('')
-const autoSubmit = ref(false)
+const createOnSite = ref(false)
 
 /**
  * Ảnh chụp giá trị ĐÃ LƯU — cơ sở để biết người dùng đã sửa gì.
  *
  * CHỈ những key khác với ảnh chụp này mới được ghi. Lý do: trang này có thể
- * mở lâu hơn một chỗ khác ghi storage (ví dụ popup bật auto-submit) ⇒ ghi cả
+ * mở lâu hơn một chỗ khác ghi storage (ví dụ popup bật create-on-site) ⇒ ghi cả
  * bộ setting sẽ XOÁ opt-in của người dùng trong im lặng, trong khi trang vẫn
  * hiện "Saved.".
  */
@@ -78,7 +78,7 @@ function clearStatus(): void {
 
 // Badge phải tắt ngay khi người dùng sửa ô — trang không được nói "Saved."
 // trong khi form đang chứa thay đổi CHƯA lưu.
-watch([apiBase, siteApiBase, autoSubmit], clearStatus)
+watch([apiBase, siteApiBase, createOnSite], clearStatus)
 
 /**
  * Gán một key của `ExtensionSettings` mà vẫn giữ đúng kiểu của key đó.
@@ -129,7 +129,7 @@ async function load(): Promise<void> {
     }
     apiBase.value = outcome.settings.apiBase
     siteApiBase.value = outcome.settings.siteApiBase
-    autoSubmit.value = outcome.settings.autoSubmit
+    createOnSite.value = outcome.settings.createOnSite
     loaded.value = outcome.settings
     settingsLoaded.value = true
   } finally {
@@ -138,7 +138,7 @@ async function load(): Promise<void> {
 }
 
 /**
- * Storage đổi từ nơi khác (ví dụ popup ghi `autoSubmit`).
+ * Storage đổi từ nơi khác (ví dụ popup ghi `createOnSite`).
  *
  * Quy tắc: ô nào người dùng CHƯA sửa (giá trị trong form == ảnh chụp) thì
  * đồng bộ cả form lẫn ảnh chụp; ô nào người dùng ĐÃ sửa thì CHỈ cập nhật
@@ -158,10 +158,10 @@ function applyExternalChange(changes: SettingsChange): void {
     if (siteApiBase.value === snapshot.siteApiBase) siteApiBase.value = newSiteApiBase
     assignSetting(snapshot, 'siteApiBase', newSiteApiBase)
   }
-  const newAutoSubmit = changes.autoSubmit
-  if (newAutoSubmit !== undefined) {
-    if (autoSubmit.value === snapshot.autoSubmit) autoSubmit.value = newAutoSubmit
-    assignSetting(snapshot, 'autoSubmit', newAutoSubmit)
+  const newCreateOnSite = changes.createOnSite
+  if (newCreateOnSite !== undefined) {
+    if (createOnSite.value === snapshot.createOnSite) createOnSite.value = newCreateOnSite
+    assignSetting(snapshot, 'createOnSite', newCreateOnSite)
   }
 }
 
@@ -192,7 +192,7 @@ async function save(): Promise<void> {
     const patch: Partial<ExtensionSettings> = {}
     if (nextApiBase !== snapshot.apiBase) patch.apiBase = nextApiBase
     if (nextSiteApiBase !== snapshot.siteApiBase) patch.siteApiBase = nextSiteApiBase
-    if (autoSubmit.value !== snapshot.autoSubmit) patch.autoSubmit = autoSubmit.value
+    if (createOnSite.value !== snapshot.createOnSite) patch.createOnSite = createOnSite.value
 
     if (Object.keys(patch).length === 0) {
       // Form đã khớp storage ⇒ không có gì để ghi ⇒ không được ghi cho có.
@@ -287,13 +287,13 @@ onUnmounted(() => {
       </p>
 
       <label>
-        <input v-model="autoSubmit" type="checkbox" />
-        Automatically click 确定 on the header form after filling
+        <input v-model="createOnSite" type="checkbox" />
+        Create the manifest on the site
       </label>
       <p class="hint">
-        Off by default. When enabled, the extension saves the 舱单 record exactly as a manual entry
-        would. The change is applied when you press Save. The extension never disseminates on its
-        own (上传船代 / send).
+        Off by default. When enabled, the extension creates the manifest on the site through the
+        site's own API and saves it as a draft (暂存). The extension never disseminates on its own
+        (上传船代 / send). The change is applied when you press Save.
       </p>
     </div>
 

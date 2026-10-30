@@ -104,7 +104,7 @@ describe('options — đọc setting thành công', () => {
   it('điền form bằng giá trị ĐÃ LƯU, không phải giá trị mặc định', async () => {
     store.apiBase = 'https://custom.example/api'
     store.siteApiBase = '/api/custom'
-    store.autoSubmit = true
+    store.createOnSite = true
 
     const wrapper = mount(OptionsApp)
     await flushPromises()
@@ -133,7 +133,7 @@ describe('options — đọc setting chưa xong', () => {
     expect(wrapper.find('#api-base').exists()).toBe(false)
     expect(isDisabled(wrapper)).toBe(true)
 
-    resolveGet?.({ ...DEFAULT_SETTINGS, autoSubmit: true })
+    resolveGet?.({ ...DEFAULT_SETTINGS, createOnSite: true })
     await flushPromises()
 
     // Đọc xong ⇒ form hiện, Save bấm được, và opt-in đã lưu phải hiện ĐÃ tick
@@ -225,14 +225,14 @@ describe('options — lưu setting', () => {
 
     expect(store.apiBase).toBe('https://custom.example/api')
     expect(store.siteApiBase).toBe('/api/custom')
-    expect(store.autoSubmit).toBe(true)
+    expect(store.createOnSite).toBe(true)
 
     // Payload ghi đi phải chứa đúng ba key của setting.
     expect(setCalls).toHaveLength(1)
     expect(setCalls[0]).toEqual({
       apiBase: 'https://custom.example/api',
       siteApiBase: '/api/custom',
-      autoSubmit: true,
+      createOnSite: true,
     })
   })
 
@@ -280,19 +280,19 @@ describe('options — chỉ ghi những key người dùng ĐÃ sửa', () => {
     const wrapper = mount(OptionsApp)
     await flushPromises()
 
-    // Popup (tab khác) vừa bật auto-submit ⇒ storage đổi NGOÀI tầm hiểu của
+    // Popup (tab khác) vừa bật create-on-site ⇒ storage đổi NGOÀI tầm hiểu của
     // trang này.
-    store.autoSubmit = true
+    store.createOnSite = true
 
     await wrapper.find('#api-base').setValue('https://new.example/api')
     await saveButton(wrapper).trigger('click')
     await flushPromises()
 
     // Người dùng chỉ sửa `apiBase` ⇒ payload KHÔNG được mang theo
-    // `autoSubmit`, nếu không thì opt-in của popup bị XOÁ trong im lặng.
+    // `createOnSite`, nếu không thì opt-in của popup bị XOÁ trong im lặng.
     expect(setCalls).toHaveLength(1)
-    expect(setCalls[0]).not.toHaveProperty('autoSubmit')
-    expect(store.autoSubmit).toBe(true)
+    expect(setCalls[0]).not.toHaveProperty('createOnSite')
+    expect(store.createOnSite).toBe(true)
     expect(store.apiBase).toBe('https://new.example/api')
   })
 
@@ -590,12 +590,47 @@ describe('options — base rỗng ⇒ lưu giá trị mặc định', () => {
   })
 })
 
-describe('options — auto-submit là opt-in', () => {
+describe('options — create-on-site là opt-in', () => {
   it('checkbox không tick khi chưa lưu gì', async () => {
     const wrapper = mount(OptionsApp)
     await flushPromises()
 
     expect(isChecked(wrapper)).toBe(false)
+  })
+
+  it('nhãn của checkbox nói rõ là tạo manifest TRÊN SITE', async () => {
+    const wrapper = mount(OptionsApp)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Create the manifest on the site')
+  })
+
+  it('hint nói rõ: mặc định tắt, lưu nháp, không tự upload, áp dụng khi bấm Save', async () => {
+    const wrapper = mount(OptionsApp)
+    await flushPromises()
+
+    // Lấy đúng đoạn hint nằm dưới checkbox.
+    const hints = wrapper.findAll('.hint').map((h) => h.text())
+    const createOnSiteHint = hints.find((text) => text.includes('Off by default')) ?? ''
+
+    expect(createOnSiteHint).not.toBe('')
+    expect(createOnSiteHint).toContain('Off by default')
+    expect(createOnSiteHint).toContain('draft')
+    expect(createOnSiteHint).toContain('暂存')
+    expect(createOnSiteHint).toContain('never disseminates on its own')
+    expect(createOnSiteHint).toContain('Save')
+  })
+
+  it('tick checkbox ⇒ lưu `createOnSite`', async () => {
+    const wrapper = mount(OptionsApp)
+    await flushPromises()
+
+    await checkbox(wrapper).setValue(true)
+    await saveButton(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(store.createOnSite).toBe(true)
+    expect(setCalls[0]).toEqual({ createOnSite: true })
   })
 })
 

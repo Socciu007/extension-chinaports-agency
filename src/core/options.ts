@@ -6,15 +6,27 @@ export interface ExtensionSettings {
   apiBase: string
   /** base path của API dict của chính site */
   siteApiBase: string
-  /** có tự bấm 确定 ở form đầu sau khi điền xong hay không */
-  autoSubmit: boolean
+  /** có tạo manifest TRÊN SITE hay không (mặc định: KHÔNG) */
+  createOnSite: boolean
 }
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   apiBase: DEFAULT_API_BASE,
   siteApiBase: DEFAULT_SITE_API_BASE,
-  autoSubmit: false,
+  createOnSite: false,
 }
+
+/**
+ * Key CŨ của setting — thời DOM: "sau khi điền form thì tự bấm 确定".
+ *
+ * Setting đã được đổi tên thành `createOnSite` (tạo manifest TRÊN SITE), nhưng
+ * người dùng đời cũ đã bật opt-in thì KHÔNG được mất lựa chọn đó trong im lặng
+ * ⇒ khi đọc, key legacy này được dùng làm fallback.
+ */
+const LEGACY_AUTO_SUBMIT_KEY = 'autoSubmit'
+
+/** Object thô của storage: đúng những key người dùng đã lưu. */
+type RawStoredSettings = Record<string, unknown>
 
 function hasChromeStorage(): boolean {
   return typeof chrome !== 'undefined' && !!chrome.storage?.sync
@@ -32,17 +44,65 @@ function withDefaults(stored: Partial<ExtensionSettings>): ExtensionSettings {
     ...stored,
     apiBase: stored.apiBase?.trim() || DEFAULT_SETTINGS.apiBase,
     siteApiBase: stored.siteApiBase?.trim() || DEFAULT_SETTINGS.siteApiBase,
-    // `autoSubmit` phải là boolean THẬT: storage có thể bị sửa tay, và UI
+    // `createOnSite` phải là boolean THẬT: storage có thể bị sửa tay, và UI
     // rollback về giá trị đã lưu ⇒ giá trị đó phải đúng kiểu.
-    autoSubmit: stored.autoSubmit === true,
+    createOnSite: stored.createOnSite === true,
   }
+}
+
+/**
+ * Object thô có phải "bản đã gộp sẵn mặc định" của lần đọc CŨ không?
+ *
+ * Lần đọc CŨ dùng `get(DEFAULT_SETTINGS)` ⇒ kết quả có ĐÚNG key của mặc định
+ * với giá trị mặc định, cộng thêm key người dùng đã lưu. Object dạng đó KHÔNG
+ * phải object thô của storage ⇒ `createOnSite: false` bên trong là MẶC ĐỊNH
+ * bị điền vào, KHÔNG phải lựa chọn của người dùng ⇒ khi đó key legacy mới là
+ * thứ nói lên ý định.
+ */
+function isMergedWithDefaults(raw: RawStoredSettings): boolean {
+  const keys = Object.keys(DEFAULT_SETTINGS) as (keyof ExtensionSettings)[]
+  return keys.every((key) => raw[key] === DEFAULT_SETTINGS[key])
+}
+
+/**
+ * Tính giá trị của `createOnSite` từ object THÔ của storage.
+ *
+ * Quy tắc, theo thứ tự:
+ * - Có key `createOnSite` ⇒ người dùng ĐÃ chọn trong UI mới ⇒ thắng, kể cả khi
+ *   giá trị là `false`.
+ * - Chỉ khi `createOnSite` VẮNG MẶT thì key legacy `autoSubmit === true` mới
+ *   bật nó lên (opt-in cũ không được mất trong im lặng).
+ *
+ * `undefined` = "chưa có lựa chọn nào" ⇒ `withDefaults` dùng mặc định.
+ */
+function resolveCreateOnSite(raw: RawStoredSettings): boolean | undefined {
+  const hasNewKey = 'createOnSite' in raw && !isMergedWithDefaults(raw)
+  if (hasNewKey) return raw.createOnSite === true
+  if (raw[LEGACY_AUTO_SUBMIT_KEY] === true) return true
+  return undefined
+}
+
+/**
+ * Lấy phần setting ĐÃ LƯU ra khỏi object thô của storage.
+ *
+ * Chỉ nhận key có đúng kiểu: storage có thể bị sửa tay ⇒ `apiBase` không phải
+ * chuỗi thì bỏ qua (để `withDefaults` dùng mặc định), thay vì để `.trim()`
+ * ném lỗi.
+ */
+function toStoredSettings(raw: RawStoredSettings): Partial<ExtensionSettings> {
+  const stored: Partial<ExtensionSettings> = {}
+  if (typeof raw.apiBase === 'string') stored.apiBase = raw.apiBase
+  if (typeof raw.siteApiBase === 'string') stored.siteApiBase = raw.siteApiBase
+  const createOnSite = resolveCreateOnSite(raw)
+  if (createOnSite !== undefined) stored.createOnSite = createOnSite
+  return stored
 }
 
 /**
  * Kết quả đọc setting — KHÔNG ném lỗi, và nói rõ đọc CÓ thành công hay không.
  *
  * Phân biệt "chưa lưu gì" với "đọc hỏng" là điều kiện tiên quyết: `false` là
- * một giá trị HỢP LỆ của `autoSubmit`, nên nếu lần đọc hỏng bị đóng băng thành
+ * một giá trị HỢP LỆ của `createOnSite`, nên nếu lần đọc hỏng bị đóng băng thành
  * `false` thì opt-in đã lưu sẽ bị ghi đè trong im lặng.
  */
 export type ReadSettingsResult =
@@ -58,8 +118,10 @@ export type ReadSettingsResult =
 export async function readSettingsResult(): Promise<ReadSettingsResult> {
   if (!hasChromeStorage()) return { ok: true, settings: { ...DEFAULT_SETTINGS } }
   try {
-    const stored = (await chrome.storage.sync.get(DEFAULT_SETTINGS)) as Partial<ExtensionSettings>
-    return { ok: true, settings: withDefaults(stored) }
+    // `get(null)` ⇒ CHỈ key người dùng thật sự đã lưu ⇒ phân biệt được
+    // "chưa có lựa chọn nào" với "đã chọn `false`" (và thấy được key legacy).
+    const raw = (await chrome.storage.sync.get(null)) as RawStoredSettings
+    return { ok: true, settings: withDefaults(toStoredSettings(raw)) }
   } catch (e) {
     // Storage bị chặn (policy) hoặc lỗi quota. Vẫn cảnh báo ra console: không
     // có dấu vết thì không ai hiểu vì sao extension lại không đọc được setting.
@@ -172,11 +234,11 @@ export async function saveSettings(
   }
 }
 
-/** Thay đổi của setting từ nơi khác (ví dụ popup ghi `autoSubmit`). */
+/** Thay đổi của setting từ nơi khác (ví dụ popup ghi `createOnSite`). */
 export interface SettingsChange {
   apiBase?: string
   siteApiBase?: string
-  autoSubmit?: boolean
+  createOnSite?: boolean
 }
 
 /**
@@ -184,7 +246,7 @@ export interface SettingsChange {
  *
  * Tầng UI KHÔNG được tự đụng `chrome.storage` ⇒ việc đăng ký listener nằm ở
  * đây. Giá trị báo ra đã qua `withDefaults` nên khớp với một lần đọc: base
- * rỗng ⇒ mặc định, `autoSubmit` không phải boolean ⇒ false.
+ * rỗng ⇒ mặc định, `createOnSite` không phải boolean ⇒ false.
  *
  * Trả về hàm HUỶ đăng ký — component phải gọi nó khi unmount, nếu không
  * listener sẽ giữ closure của component đã rời khỏi DOM.
@@ -209,7 +271,7 @@ export function subscribeSettingsChanges(
       if (!(key in changes)) continue
       const raw = changes[key]?.newValue
       // Giá trị thiếu (key bị xoá) hoặc sai kiểu ⇒ để `withDefaults` quyết
-      // định: base rỗng ⇒ mặc định, `autoSubmit` không phải boolean ⇒ false.
+      // định: base rỗng ⇒ mặc định, `createOnSite` không phải boolean ⇒ false.
       if (typeof raw === 'string' || typeof raw === 'boolean') {
         assign(stored, key, raw as ExtensionSettings[typeof key])
       }
