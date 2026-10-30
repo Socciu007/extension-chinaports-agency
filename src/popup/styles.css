@@ -77,12 +77,16 @@ button.busy {
   Đặt SAU `.hint` (cả hai là class đơn ⇒ cái sau thắng) vì dấu hiệu này
   cảnh báo operator có thể đang đọc report của bill KHÁC ⇒ không được
   trông như một gợi ý thường.
+
+  Cỡ chữ 12px (thay vì 11px của `.hint`): cảnh báo không được NHỎ HƠN nội
+  dung mà nó cảnh báo — bảng report bên dưới cũng 12px.
 */
 .stale-result {
   padding: 6px 8px;
   border-radius: 6px;
   background: #fff8c5;
   color: #633c01;
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -173,7 +177,7 @@ button.busy {
   margin-top: 4px;
 }
 
-/* Cảnh báo ghi hai lần — nổi hơn phần trạng thái bill. */
+/* Cảnh báo "đừng tạo manifest khác cho số bill này" — nổi hơn phần trạng thái bill. */
 .double-write {
   margin: 6px 0 0;
   padding-top: 6px;

@@ -73,9 +73,14 @@ const manifestBills = ref<Record<string, boolean>>({})
 /**
  * Số bill mà lần chạy CUỐI tạo ra report đang hiện.
  *
+ * Đây là SỐ BILL CỦA OPERATOR (số ô nhập đã chuẩn hoá) — KHÔNG phải
+ * `result.billNo` (mã bill do SITE cấp, xem `manifest-run.ts`). Hai thứ tên
+ * gần giống nhau nhưng nghĩa khác hẳn: so sán nhầm thì MỌI report bị coi
+ * là của bill khác.
+ *
  * Rỗng = chưa có lần chạy nào ⇒ chưa có report nào để gán nhầm.
  */
-const resultBlNo = ref('')
+const resultInputBlNo = ref('')
 
 /**
  * Report đang hiện có thuộc về bill KHÁC với bill trong ô nhập không?
@@ -95,8 +100,8 @@ const resultStale = computed(() => {
   if (busy.value) return true
   const typed = normalizeBlNo(blNo.value)
   // Ô nhập rỗng ⇒ không có bill nào để gán nhầm ⇒ không cũ.
-  if (typed === '' || resultBlNo.value === '') return false
-  return typed !== resultBlNo.value
+  if (typed === '' || resultInputBlNo.value === '') return false
+  return typed !== resultInputBlNo.value
 })
 
 /**
@@ -132,14 +137,20 @@ const billEvidence = computed<BillEvidence[]>(() =>
  * Câu được dựng ở đây (không ghép trong template) để dấu chấm câu luôn có
  * mặt — kể cả khi không kèm câu "điền tay".
  *
- * Câu "Running it again would create a second manifest." LUÔN có mặt: nó
- * đang nằm ở `.bill-status` (khối bị lần chạy sau xoá mất) ⇒ chỉ dựa vào
- * đó thì sau một lần preview bất kỳ, operator mất hẳn cảnh báo ghi hai
- * lần. Dùng ĐÚNG câu của `.double-write` để hai nơi nói như nhau.
+ * Câu "Do not create another manifest for this bill number." LUÔN có mặt:
+ * nó đang nằm ở `.bill-status` (khối bị lần chạy sau xoá mất) ⇒ chỉ dựa
+ * vào đó thì sau một lần preview bất kỳ, operator mất hẳn lời nhắc. Dùng
+ * ĐÚNG câu của `.double-write` để hai nơi nói như nhau.
+ *
+ * Câu này KHÔNG nói "chạy lại sẽ tạo manifest thứ hai": trong CHÍNH tab đó
+ * thì content script đã chặn rồi ("the extension does not create a second
+ * manifest for the same bill") ⇒ nói vậy là nói sai, và còn trái với điều
+ * operator vừa được báo. Cảnh báo đúng là "đừng tạo manifest khác cho số
+ * bill này" — đúng trong tab này lẫn tab khác.
  */
 function evidenceText(entry: BillEvidence): string {
   const base = `A manifest bill was already created on the site for ${entry.blNo}.`
-  const duplicate = 'Running it again would create a second manifest.'
+  const duplicate = 'Do not create another manifest for this bill number.'
   if (!entry.needsFinishing) return `${base} ${duplicate}`
   return `${base} Check the site and finish that manifest by hand. ${duplicate}`
 }
@@ -300,9 +311,9 @@ async function run(allowWrite: boolean): Promise<void> {
     result.value = res
     // Số bill ĐÃ CHUẨN HOÁ của lần chạy này — dùng làm KEY của bằng chứng
     // (đúng cách content script chốt) và để biết report đang hiện thuộc về
-    // số bill nào.
+    // số bill nào (`resultInputBlNo`).
     const billKey = normalizeBlNo(value)
-    resultBlNo.value = billKey
+    resultInputBlNo.value = billKey
 
     if (res.billCreated === true) {
       // Site ĐÃ có manifest cho số bill này ⇒ ghi nhớ, VÀO MỘT BẢNG RIÊNG
@@ -375,8 +386,15 @@ async function onToggleCreateOnSite(): Promise<void> {
       await refreshFromStorage()
       return
     }
-    // Lưu thất bại ⇒ đưa checkbox về giá trị đã lưu thật và BÁO cho người
-    // dùng. Không được im lặng mất setting.
+    // Lưu thất bại ⇒ ĐỌC LẠI storage trước.
+    //
+    // Sự kiện storage đến LÚC đang lưu đã bị `if (saving.value) return` bỏ qua
+    // ⇒ không có đường nào bù lại nếu không đọc lại ở đây. Đọc lại xong mới
+    // báo lỗi, vì `refreshFromStorage()` XOÁ `settingsError` khi đọc thành
+    // công.
+    await refreshFromStorage()
+    // Đưa checkbox về giá trị ĐÃ LƯU THẬT (sau lần đọc lại ⇒ đúng với
+    // storage) và BÁO cho người dùng. Không được im lặng mất setting.
     createOnSite.value = savedCreateOnSite.value
     settingsError.value = outcome.error
   } finally {
@@ -551,8 +569,8 @@ onUnmounted(() => {
       </p>
       <p v-if="result.billNo" class="bill-line">Bill number: {{ result.billNo }}</p>
       <p v-if="result.written" class="double-write">
-        A draft was created on the site for this bill of lading number. Running it again would
-        create a second manifest.
+        A draft was created on the site for this bill of lading number. Do not create another
+        manifest for this bill number.
       </p>
     </div>
 
