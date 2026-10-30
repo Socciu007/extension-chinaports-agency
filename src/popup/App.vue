@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { CARGO_LABELS, CONTAINER_LABELS, HEADER_LABELS } from '../core/field-meta'
+import { normalizeBlNo } from '../core/api'
+import { isBlankPayloadValue, labelOf } from '../core/field-meta'
 import { DeadlineError, withDeadline } from '../core/http'
 import {
   readSettingsResult,
@@ -58,6 +59,17 @@ const settingsLoaded = ref(false)
 const savedCreateOnSite = ref(false)
 /** Đang lưu setting create-on-site — khoá control để không có 2 lần ghi chồng nhau. */
 const saving = ref(false)
+/**
+ * Số bill mà site ĐÃ tạo manifest — bằng chứng KHÔNG được mất.
+ *
+ * Kết quả của lần chạy có thể bị thay thế bởi lần chạy sau (một lần preview
+ * chẳng hạn) ⇒ nếu chỉ dựa vào `result` thì bằng chứng "bill đã có trên site"
+ * biến mất và operator sẽ tạo manifest thứ hai cho cùng một số bill.
+ *
+ * Chỉ bị xoá khi operator tạo manifest cho một số bill KHÁC, hoặc khi
+ * manifest của chính số bill này đã lưu xong.
+ */
+const billCreatedBlNo = ref('')
 
 const items = computed<ReportItem[]>(() => result.value?.items ?? [])
 
@@ -74,10 +86,15 @@ const blocking = computed(() => blockingFields(items.value))
 /**
  * Operator đã opt-in "Create the manifest on the site" chưa.
  *
+ * Dùng GIÁ TRỊ ĐÃ LƯU (`savedCreateOnSite`), KHÔNG dùng checkbox
+ * (`createOnSite`): content script kiểm tra setting ĐÃ LƯU, nên nếu nút bật
+ * theo checkbox thì operator có thể bấm "create" trước khi lần lưu kịp
+ * xong ⇒ content script từ chối mà popup không hiện được lý do.
+ *
  * Phải có cả `settingsLoaded` (đọc setting hỏng ⇒ ta KHÔNG biết ý chí của
- * operator ⇒ không được cho ghi) lẫn checkbox đang tick.
+ * operator ⇒ không được cho ghi).
  */
-const createOptIn = computed(() => settingsLoaded.value && createOnSite.value === true)
+const createOptIn = computed(() => settingsLoaded.value && savedCreateOnSite.value === true)
 
 const counts = computed(() => {
   let required = 0
@@ -110,31 +127,16 @@ interface PreviewRow {
 }
 
 /**
- * Nhãn của một key payload.
- *
- * `HEADER_LABELS`/`CARGO_LABELS`/`CONTAINER_LABELS` được key theo TÊN FIELD
- * VIẾT HOA, còn key của payload thì CHỮ THƯỜNG ⇒ phải uppercase trước khi
- * tra. Không có nhãn ⇒ hiện luôn chính key đó.
- */
-function labelFor(scope: 'header' | 'cargo' | 'container', key: string): string {
-  const prop = key.toUpperCase()
-  if (scope === 'header') return HEADER_LABELS[prop] ?? key
-  if (scope === 'cargo') return CARGO_LABELS[prop] ?? key
-  return CONTAINER_LABELS[prop] ?? key
-}
-
-/**
  * Giá trị để hiển thị — field trống hiện `(blank)`.
  *
- * Quy tắc "trống" GIỐNG HỆT `isBlankValue` của `manifest-run.ts` (chuỗi
- * rỗng sau trim, `null`/`undefined`, số `0`) ⇒ preview KHÔNG trái với report
- * (report liệt kê đúng những field đã hiện `(blank)` ở đây).
+ * Quy tắc "trống" là quy tắc CỦA PAYLOAD (`isBlankPayloadValue`) — cùng quy
+ * tắc với report của `manifest-run.ts` ⇒ preview KHÔNG trái với report (report
+ * liệt kê đúng những field đã hiện `(blank)` ở đây).
  */
 function displayValue(value: unknown): string {
-  if (value === undefined || value === null) return '(blank)'
-  if (typeof value === 'string') return value.trim() === '' ? '(blank)' : value
-  if (typeof value === 'number') return value === 0 ? '(blank)' : String(value)
-  if (typeof value === 'boolean') return String(value)
+  if (isBlankPayloadValue(value)) return '(blank)'
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   try {
     return JSON.stringify(value) ?? '(blank)'
   } catch {
@@ -146,7 +148,8 @@ const headerRows = computed<PreviewRow[]>(() => {
   const header = result.value?.preview?.header ?? {}
   return Object.entries(header).map(([key, value]) => ({
     field: key,
-    label: labelFor('header', key),
+    // Key của payload là CHỮ THƯỜNG, còn bảng nhãn key theo TÊN FIELD VIẾT HOA.
+    label: labelOf('header', key.toUpperCase()),
     value: displayValue(value),
   }))
 })
@@ -156,7 +159,7 @@ const cargoRows = computed<PreviewRow[]>(() =>
     Object.entries(row).map(([key, value]) => ({
       row: index + 1,
       field: key,
-      label: labelFor('cargo', key),
+      label: labelOf('cargo', key.toUpperCase()),
       value: displayValue(value),
     })),
   ),
@@ -167,7 +170,7 @@ const containerRows = computed<PreviewRow[]>(() =>
     Object.entries(row).map(([key, value]) => ({
       row: index + 1,
       field: key,
-      label: labelFor('container', key),
+      label: labelOf('container', key.toUpperCase()),
       value: displayValue(value),
     })),
   ),
@@ -192,11 +195,20 @@ async function run(allowWrite: boolean): Promise<void> {
   if (allowWrite && !createOptIn.value) return
 
   runError.value = ''
-  result.value = null
   const value = blNo.value.trim()
   if (!value) {
     runError.value = 'Enter a bill of lading number first.'
     return
+  }
+
+  // Chạy create cho một số bill KHÁC ⇒ bằng chứng của số bill cũ không còn
+  // liên quan ⇒ bỏ đi (nếu không operator tưởng nhầm là còn bill đó).
+  if (
+    allowWrite &&
+    billCreatedBlNo.value !== '' &&
+    normalizeBlNo(value) !== normalizeBlNo(billCreatedBlNo.value)
+  ) {
+    billCreatedBlNo.value = ''
   }
 
   busy.value = true
@@ -216,7 +228,18 @@ async function run(allowWrite: boolean): Promise<void> {
       RUN_DEADLINE_MS,
       'The manifest run',
     )) as CreateResult
+    // Kết quả cũ chỉ bị thay khi kết quả MỚI đã về ⇒ bằng chứng "bill đã có
+    // trên site" không bị xoá vô tình giữa chừng.
     result.value = res
+
+    if (res.written === true) {
+      // Manifest của chính số bill này đã lưu xong ⇒ cảnh báo "điền tay" không
+      // còn đúng nữa.
+      billCreatedBlNo.value = ''
+    } else if (res.billCreated === true) {
+      // Site ĐÃ tạo bill (dù chưa lưu xong) ⇒ ghi nhớ số bill.
+      billCreatedBlNo.value = value
+    }
   } catch (e) {
     // Chi tiết kỹ thuật (vd "The message port closed before a response was
     // received.") chỉ nằm ở console — người dùng chỉ thấy câu ngắn.
@@ -253,7 +276,7 @@ async function openPage(): Promise<void> {
  * Bật/tắt opt-in create-on-site.
  *
  * Checkbox này là opt-in DUY NHẤT cho hành động ghi lên site: nút "Create
- * draft on site" chỉ bật khi nó đang tick, và chính popup gửi `allowWrite`.
+ * draft on site" chỉ bật khi opt-in đã LƯU, và chính popup gửi `allowWrite`.
  */
 async function onToggleCreateOnSite(): Promise<void> {
   // Đang lưu ⇒ bỏ qua lần click này và đưa checkbox về giá trị đã lưu thật.
@@ -269,15 +292,11 @@ async function onToggleCreateOnSite(): Promise<void> {
   try {
     const outcome = await saveSettings({ createOnSite: next })
     if (outcome.ok) {
-      // `outcome.settings.createOnSite` là giá trị store thực sự giữ sau khi
-      // ép kiểu ⇒ uy tín hơn `next`.
-      savedCreateOnSite.value = outcome.settings.createOnSite
-      // Đồng bộ control với giá trị ĐÃ LƯU. Bình thường thì bằng `next` nên
-      // không đổi gì; nhưng khi một lần tick bị bỏ qua (guard ở trên) thì
-      // đây là chỗ duy nhất đưa control về đúng giá trị trong storage —
-      // nếu không, UI và storage sẽ lệch nhau.
-      createOnSite.value = outcome.settings.createOnSite
-      settingsError.value = ''
+      // Đọc LẠI storage thay vì tin `outcome.settings`: giá trị đó là kết quả
+      // của PATCH, không phải kết quả của một lần đọc ⇒ nó không biết ai
+      // ghi sau mình. Đọc lại là cách duy nhất chắc chắn "ai ghi cuối cùng thì
+      // thắng" — kể cả khi có thay đổi tới trong lúc đang lưu.
+      await refreshFromStorage()
       return
     }
     // Lưu thất bại ⇒ đưa checkbox về giá trị đã lưu thật và BÁO cho người
@@ -290,27 +309,25 @@ async function onToggleCreateOnSite(): Promise<void> {
 }
 
 /**
- * Setting đổi từ nơi khác (trang options) ⇒ cập nhật control ngay.
+ * Giá trị MỚI NHẤT mà `storage.onChanged` báo cho `createOnSite`.
  *
- * KHÔNG đụng vào trạng thái lưu của popup (`saving`): lần lưu đang chạy là
- * ý chí của operator, trạng thái đó phải giữ nguyên. Giá trị đã lưu mới
- * (`savedCreateOnSite`) thì cập nhật theo — đó là sự thật mới nhất trong
- * storage, và rollback phải dựa vào nó.
+ * `undefined` = chưa có thay đổi nào tới. Giữ lại (kể cả khi đang lưu) vì
+ * một lần đọc storage là một ẢNH CHỤP: nếu có thay đổi tới trong lúc đang
+ * đọc thì ảnh chụp đó có thể CŨ hơn thay đổi ⇒ không được dùng nó để đè lên
+ * giá trị mới nhất.
  */
-function applyExternalChange(changes: SettingsChange): void {
-  const next = changes.createOnSite
-  if (next === undefined) return
-  if (saving.value) return
-  createOnSite.value = next
-  savedCreateOnSite.value = next
-}
+let latestExternal: { createOnSite: boolean } | undefined
 
-/** Huỷ đăng ký `storage.onChanged` — phải gọi khi unmount. */
-let unsubscribe: (() => void) | undefined
-
-onMounted(async () => {
-  unsubscribe = subscribeSettingsChanges(applyExternalChange)
-
+/**
+ * Đọc lại setting từ storage và đồng bộ MỌI state của popup theo sự thật đó.
+ *
+ * Popup phải HƯỚNG VỀ storage thay vì giữ một bản sao riêng: lần đọc đầu
+ * có thể đến muộn hơn một thay đổi đã xảy ra, và một thay đổi đến giữa lúc
+ * đang lưu sẽ bị bỏ qua. Đọc lại sau mỗi lần lưu là cách duy nhất chắc chắn
+ * ai ghi cuối cùng thì thắng.
+ */
+async function refreshFromStorage(): Promise<void> {
+  const before = latestExternal
   const outcome = await readSettingsResult()
   if (!outcome.ok) {
     // Đọc hỏng ⇒ KHÔNG được coi là "setting = false".
@@ -322,10 +339,49 @@ onMounted(async () => {
     settingsError.value = outcome.error
     return
   }
+  if (latestExternal !== before) {
+    // Có thay đổi tới TRONG LÚC đang đọc ⇒ ảnh chụp có thể cũ ⇒ lấy giá
+    // trị mới nhất do `onChanged` báo thay vì ảnh chụp.
+    const next = latestExternal?.createOnSite
+    if (next !== undefined) {
+      createOnSite.value = next
+      savedCreateOnSite.value = next
+    }
+    settingsLoaded.value = true
+    settingsError.value = ''
+    return
+  }
   createOnSite.value = outcome.settings.createOnSite
   savedCreateOnSite.value = outcome.settings.createOnSite
   settingsLoaded.value = true
   settingsError.value = ''
+}
+
+/**
+ * Setting đổi từ nơi khác (trang options) ⇒ cập nhật control ngay.
+ *
+ * Khi `saving` là `true` thì KHÔNG đụng vào control: lần đọc lại sau khi lưu
+ * (`refreshFromStorage`) sẽ lấy đúng sự thật. Cố "vá" lại trong lúc đang
+ * lưu chỉ làm trạng thái lệch thêm — nhưng giá trị mới vẫn được GHI LẠI ở
+ * `latestExternal` để lần đọc đó không bị đè bởi ảnh chụp cũ.
+ */
+function applyExternalChange(changes: SettingsChange): void {
+  const next = changes.createOnSite
+  if (next === undefined) return
+  latestExternal = { createOnSite: next }
+  if (saving.value) return
+  createOnSite.value = next
+  savedCreateOnSite.value = next
+}
+
+/** Huỷ đăng ký `storage.onChanged` — phải gọi khi unmount. */
+let unsubscribe: (() => void) | undefined
+
+onMounted(async () => {
+  // Đăng ký NGHE TRƯỚC rồi mới đọc: một thay đổi tới trong lúc đang đọc thì
+  // phải được nghe thấy, không được bị lần đọc sau đè mất.
+  unsubscribe = subscribeSettingsChanges(applyExternalChange)
+  await refreshFromStorage()
 })
 
 onUnmounted(() => {
@@ -345,12 +401,19 @@ onUnmounted(() => {
     </div>
 
     <div class="row">
-      <button type="button" class="primary" :disabled="busy" @click="run(false)">
+      <button
+        type="button"
+        class="primary"
+        :class="{ busy }"
+        :disabled="busy"
+        @click="run(false)"
+      >
         {{ runningAction === 'preview' ? 'Running…' : 'Preview data' }}
       </button>
       <button
         type="button"
         class="secondary"
+        :class="{ busy }"
         :disabled="busy || !createOptIn"
         @click="run(true)"
       >
@@ -371,7 +434,7 @@ onUnmounted(() => {
       </label>
     </div>
 
-    <p v-if="!createOptIn" class="hint">
+    <p v-if="settingsLoaded && !createOptIn" class="hint">
       Creating a draft on the site is off until you tick "Create the manifest on the site".
     </p>
 
@@ -419,6 +482,16 @@ onUnmounted(() => {
         create a second manifest.
       </p>
     </div>
+
+    <!--
+      Bằng chứng "bill đã có trên site" — SỐNG LÂU, không bị run sau xoá mất.
+      Nằm NGOÀI khối `bill-status` vì khối đó bám vào `result` (kết quả mới thay
+      thế kết quả cũ) ⇒ một lần preview là mất cảnh báo.
+    -->
+    <p v-if="billCreatedBlNo" class="bill-created">
+      A manifest bill was already created on the site for {{ billCreatedBlNo }}. Check the site and
+      finish that manifest by hand.
+    </p>
 
     <div v-if="result" class="summary">
       cargo: {{ cargoRowCount }} · containers: {{ containerRowCount }} · blank fields: {{

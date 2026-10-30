@@ -24,11 +24,10 @@ import { describeApiError, fetchManifest, ManifestApiError } from './api'
 import { HTTP_TIMEOUT_MS } from './http'
 import {
   BLANK_NOTES,
-  CARGO_LABELS,
-  CONTAINER_LABELS,
   DANGER_FIELDS,
   deriveCargoKind,
-  HEADER_LABELS,
+  isBlankPayloadValue,
+  labelOf,
   optionalBlankNote,
   REQUIRED_BY_KIND,
   REQUIRED_CONTAINER,
@@ -201,27 +200,6 @@ function byDesignBlanks(kind: CargoKind): ReadonlySet<string> {
 }
 
 /**
- * Giá trị này có bị bỏ trống không?
- *
- * - chuỗi rỗng (sau trim) ⇒ trống;
- * - số `0` ⇒ trống (`buildCargoPayload`/`buildContainerPayload` dùng `0` cho
- *   "API không có giá trị", còn 0 kiện / 0 tấn / 0 m³ thì vô nghĩa);
- * - còn lại ⇒ có giá trị.
- */
-function isBlankValue(value: unknown): boolean {
-  if (typeof value === 'string') return value.trim() === ''
-  if (typeof value === 'number') return value === 0
-  return false
-}
-
-/** Nhãn hiển thị của field — fallback về chính tên field. */
-function labelOf(scope: FillScope, prop: string): string {
-  if (scope === 'header') return HEADER_LABELS[prop] ?? prop
-  if (scope === 'cargo') return CARGO_LABELS[prop] ?? prop
-  return CONTAINER_LABELS[prop] ?? prop
-}
-
-/**
  * Dựng một item của report cho field bị bỏ trống.
  *
  * `note` LUÔN có: note riêng (`BLANK_NOTES`) nếu có, nếu không thì note
@@ -272,7 +250,7 @@ function reportRow(spec: ReportRowSpec): ReportItem[] {
     if (IGNORED_PROPS.has(prop)) continue
     // Field site xoá theo loại hàng ⇒ để trống là ĐÚNG ⇒ không báo.
     if (spec.skipped?.has(key)) continue
-    if (!isBlankValue(value)) continue
+    if (!isBlankPayloadValue(value)) continue
     items.push(blankItem(spec.scope, prop, spec.required(prop), spec.row))
   }
   return items

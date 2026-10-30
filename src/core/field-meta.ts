@@ -347,3 +347,47 @@ export function requiredBlankNote(prop: string, label: string): string {
 export function optionalBlankNote(prop: string, label: string): string {
   return `${label} (${prop}) is not provided by the API — it was left blank on purpose.`
 }
+
+/**
+ * Giá trị trong PAYLOAD có bị bỏ trống không?
+ *
+ * KHÁC `isBlank` ở trên, và khác CÓ CHỦ ĐÍCH:
+ * - `isBlank` đọc DỮ LIỆU THÔ của API ⇒ số `0` là một giá trị THẬT
+ *   (vd `dangerClass = 0` ⇒ không phải hàng nguy hiểm);
+ * - hàm này đọc PAYLOAD đã dựng ⇒ số `0` là cách `buildCargoPayload` /
+ *   `buildContainerPayload` ghi "API không có giá trị này" (0 kiện / 0 tấn /
+ *   0 m³ thì vô nghĩa).
+ *
+ * Vì vậy HAI quy tắc KHÔNG được gộp làm một. Dùng nhầm quy tắc nào cũng
+ * làm sai: gộp vào `isBlank` thì hàng có `dangerClass = 0` bị coi là hàng
+ * nguy hiểm; dùng `isBlank` ở đây thì field số `0` không bao giờ được báo là
+ * trống.
+ *
+ * `null`/`undefined` cũng là trống — payload không bao giờ chứa chúng, nhưng
+ * nếu có thì field đó rõ ràng là chưa có giá trị.
+ */
+export function isBlankPayloadValue(value: unknown): boolean {
+  if (value === null || value === undefined) return true
+  if (typeof value === 'string') return value.trim() === ''
+  if (typeof value === 'number') return value === 0
+  return false
+}
+
+/**
+ * Nhãn hiển thị của field — fallback về chính tên field.
+ *
+ * `prop` là TÊN FIELD VIẾT HOA (giống `prop` trong report). Key của PAYLOAD thì
+ * là CHỮ THƯỜNG ⇒ caller phải uppercase trước khi gọi.
+ *
+ * Scope dùng union viết TAY chứ KHÔNG import `FillScope` từ `protocol.ts`:
+ * `protocol.ts` → `manifest-run.ts` → `field-meta.ts` ⇒ import kiểu sẽ tạo
+ * vòng.
+ */
+export function labelOf(
+  scope: 'header' | 'cargo' | 'container',
+  prop: string,
+): string {
+  if (scope === 'header') return HEADER_LABELS[prop] ?? prop
+  if (scope === 'cargo') return CARGO_LABELS[prop] ?? prop
+  return CONTAINER_LABELS[prop] ?? prop
+}

@@ -43,17 +43,62 @@ function errorResult(message: string): CreateResult {
 let inFlight: Promise<CreateResult> | null = null
 
 /**
- * Số bill ĐÃ ghi thành công lên site trong TAB NÀY.
+ * Key lưu tập số bill đã tạo trong tab này (trong `sessionStorage`).
  *
- * Chốt ghi hai lần: mỗi lần ghi tạo MỘT bill mới trên site ⇒ chạy lại
- * cùng một số bill sẽ sinh ra hai manifest trùng nhau. Cờ này nằm ở
- * CONTENT SCRIPT (không phải popup) nên nó còn đúng kể cả khi operator
- * đóng popup rồi mở lại.
- *
- * Lưu SỐ BILL CỦA OPERATOR (đã chuẩn hoá) — KHÔNG phải `result.billNo`
- * (đó là mã bill NỘI BỘ do site gán).
+ * Có namespace để không đụng dữ liệu của site trên cùng origin.
  */
-let writtenBlNo: string | undefined
+const CREATED_BILL_NOS_KEY = 'manifest-autofill:created-bill-nos'
+
+/**
+ * Tập số bill đã tạo trên site — bộ nhớ TRONG RAM của content script.
+ *
+ * Lưu thêm vào `sessionStorage` (xem `rememberCreatedBillNo`) ⇒ chốt còn
+ * đúng sau khi operator reload trang. Bộ nhớ trong RAM giữ chốt hoạt động
+ * ngay cả khi `sessionStorage` bị chặn.
+ */
+const createdBillNos = new Set<string>()
+
+/**
+ * Đọc tập số bill đã tạo — hợp nhất bộ nhớ trong RAM với `sessionStorage`.
+ *
+ * `sessionStorage` là nơi duy nhất sống sót qua lần reload trang, nên nó
+ * mới là nguồn sự thật; bộ nhớ trong RAM chỉ bổ sung cho lúc nó bị chặn.
+ */
+function loadCreatedBillNos(): Set<string> {
+  const billNos = new Set<string>(createdBillNos)
+  try {
+    const raw = sessionStorage.getItem(CREATED_BILL_NOS_KEY)
+    if (!raw) return billNos
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return billNos
+    for (const value of parsed) {
+      if (typeof value === 'string' && value !== '') billNos.add(value)
+    }
+  } catch {
+    // `sessionStorage` bị chặn (policy riêng tư, sandbox) ⇒ dùng bộ nhớ RAM.
+  }
+  return billNos
+}
+
+/**
+ * Ghi nhớ một số bill ĐÃ có manifest trên site.
+ *
+ * Ghi khi site ĐÃ XÁC NHẬN tạo bill (`billCreated`), KHÔNG chỉ khi lưu xong
+ * (`written`): nếu bước gắn dòng hàng hỏng, site vẫn còn bill đó ⇒ chạy lại
+ * sẽ tạo bill THỨ HAI cho cùng một số bill.
+ *
+ * Số bill rỗng KHÔNG được ghi — không có số bill thì không chặn được gì.
+ */
+function rememberCreatedBillNo(blNo: string): void {
+  if (blNo === '') return
+  createdBillNos.add(blNo)
+  try {
+    sessionStorage.setItem(CREATED_BILL_NOS_KEY, JSON.stringify([...loadCreatedBillNos()]))
+  } catch {
+    // Không ghi được thì chốt vẫn còn trong RAM của content script.
+    console.warn('[manifest-autofill] could not persist the created bill number', blNo)
+  }
+}
 
 /**
  * Run manifest according to the request from the popup.
@@ -69,14 +114,25 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
   const allowWrite = request.allowWrite === true
   const blNo = normalizeBlNo(request.blNo ?? '')
 
-  // Đã ghi số bill này trong tab này rồi ⇒ từ chối, KHÔNG chạy gì thêm.
-  if (allowWrite && writtenBlNo !== undefined && blNo === writtenBlNo) {
+  // Site ĐÃ có manifest cho số bill này trong tab này ⇒ từ chối, KHÔNG chạy
+  // gì thêm. Chặn TRƯỚC mọi lần gọi mạng.
+  if (allowWrite && loadCreatedBillNos().has(blNo)) {
     return errorResult(
-      'A manifest was already created on the site for this bill of lading number in this tab. Reload the page first if you really need to create another one.',
+      'A manifest was already created on the site for this bill of lading number. Check the site and finish that manifest by hand — the extension does not create a second manifest for the same bill.',
     )
   }
 
   const settings = await readSettings()
+
+  // Chốt ghi lên site: popup KHÔNG phải nguồn sự thật — setting ĐÃ LƯU mới
+  // là. `readSettings()` trả `DEFAULT_SETTINGS` khi đọc hỏng ⇒ `createOnSite`
+  // = `false` ⇒ fail closed.
+  if (allowWrite && settings.createOnSite !== true) {
+    return errorResult(
+      'Creating the manifest on the site is turned off in the extension settings.',
+    )
+  }
+
   const apiBase = request.apiBase ?? settings.apiBase
   const siteApiBase = request.siteApiBase ?? settings.siteApiBase
 
@@ -88,9 +144,8 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
     cookieString: document.cookie,
   })
 
-  // CHỈ ghi nhớ sau một lần chạy ĐÃ ghi thành công — run lỗi thì không
-  // chặn lần sau (người dùng cần chạy lại được).
-  if (result.written === true) writtenBlNo = blNo
+  // Site ĐÃ xác nhận có bill ⇒ ghi nhớ, kể cả khi bước lưu chưa xong.
+  if (result.billCreated === true) rememberCreatedBillNo(blNo)
 
   return result
 }

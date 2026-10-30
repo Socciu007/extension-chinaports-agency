@@ -12,10 +12,30 @@ type Listener = (
 const MANIFEST_HASH = '#/exportBusinessOperations/maintenanceOfManifestData'
 const BL_NO = 'ONEYSHAGT1569600'
 
+/**
+ * Message từ chối khi site ĐÃ có manifest cho số bill này (FIX 1).
+ *
+ * Không còn "reload trang" trong message: chốt nằm trong `sessionStorage` nên
+ * SỐNG SÓT qua reload ⇒ đường thoát đó không còn đúng.
+ */
+const DUPLICATE_MESSAGE =
+  'A manifest was already created on the site for this bill of lading number. Check the site and finish that manifest by hand — the extension does not create a second manifest for the same bill.'
+
+/** Message từ chối khi opt-in ĐÃ LƯU đang tắt (FIX 2). */
+const OPT_IN_OFF_MESSAGE =
+  'Creating the manifest on the site is turned off in the extension settings.'
+
 let listener: Listener | undefined
 /** Mở chốt để `fetch` treo cho tới khi test kết thúc. */
 let release: (() => void) | undefined
 let fetchMock: ReturnType<typeof vi.fn>
+/**
+ * Setting trong storage của extension.
+ *
+ * Mặc định `createOnSite: true` ⇒ các test ghi lên site đi qua. Test cần
+ * tắt thì sửa biến này trước khi gửi message.
+ */
+let settings: Record<string, unknown>
 
 /** Một lần gọi fetch đã bắt. */
 interface RecordedCall {
@@ -53,11 +73,17 @@ const jsonResponse = (body: unknown) =>
  * - GET `getDrType/`   ⇒ `{code:'1', name:'FOB'}`;
  * - GET còn lại         ⇒ rỗng;
  * - POST `cargo/add/`   ⇒ dòng hàng;
- * - POST endpoint bill  ⇒ lần đầu TẠO bill (`bill_no`), sau đó LƯU bill.
+ * - POST endpoint bill  ⇒ TẠO bill (`is_all` = "0") hoặc LƯU bill (`is_all` = "1").
+ *
+ * Mỗi lần TẠO bill nhận một mã bill KHÁC nhau ⇒ test phân biệt được "bill thứ
+ * hai cho cùng một số bill" chỉ bằng cách đếm POST.
  */
-function fakeFetch(): { fetchImpl: typeof fetch; calls: RecordedCall[] } {
+function fakeFetch(options: { failSave?: boolean } = {}): {
+  fetchImpl: typeof fetch
+  calls: RecordedCall[]
+} {
   const calls: RecordedCall[] = []
-  let billPostCount = 0
+  let createCount = 0
 
   const fetchImpl = (async (url: string, init?: RequestInit) => {
     const target = String(url)
@@ -83,11 +109,20 @@ function fakeFetch(): { fetchImpl: typeof fetch; calls: RecordedCall[] } {
       return jsonResponse({ code: 2000, data: {} })
     }
 
-    // Endpoint bill: lần đầu TẠO bill, những lần sau LƯU bill.
-    const index = billPostCount
-    billPostCount += 1
-    if (index === 0) return jsonResponse({ code: 2000, data: { bill_no: 'BILL-1' } })
-    return jsonResponse({ code: 2000, data: {} })
+    // Endpoint bill: `is_all` = "1" là bước LƯU, còn lại là bước TẠO.
+    const body = typeof init?.body === 'string' ? init.body : ''
+    if (body.includes('"is_all":"1"')) {
+      if (options.failSave) {
+        // Site từ chối ⇒ bill ĐÃ tạo nhưng KHÔNG lưu được (trạng thái nguy
+        // hiểm nhất: site có bill, extension không có bằng chứng lưu).
+        return jsonResponse({ code: 5000, data: null, msg: 'save failed' })
+      }
+      return jsonResponse({ code: 2000, data: {} })
+    }
+
+    // Bước TẠO bill — mã bill do server gán.
+    createCount += 1
+    return jsonResponse({ code: 2000, data: { bill_no: `BILL-${createCount}` } })
   }) as unknown as typeof fetch
 
   return { fetchImpl, calls }
@@ -106,6 +141,12 @@ beforeEach(async () => {
   vi.resetModules()
   listener = undefined
   release = undefined
+  // Chốt "bill đã tạo" nằm trong `sessionStorage` ⇒ nó SỐNG SÓT qua test ⇒
+  // phải xoá, nếu không test sau thừa hưởng chốt của test trước.
+  sessionStorage.clear()
+
+  // Opt-in ĐÃ LƯU mặc định là bật — các test ghi lên site cần nó.
+  settings = { createOnSite: true }
 
   // `fetch` treo mãi ⇒ lần chạy đầu vẫn đang chạy ⇒ lần chạy thứ hai phải
   // bị chặn. Hết test thì mở chốt để chuỗi promise settle và timer timeout
@@ -123,6 +164,11 @@ beforeEach(async () => {
         addListener: (fn: Listener) => {
           listener = fn
         },
+      },
+    },
+    storage: {
+      sync: {
+        get: async () => ({ ...settings }),
       },
     },
   })
@@ -272,15 +318,99 @@ describe('content script — chạy manifest qua API', () => {
     })
 
     expect(second.ok).toBe(false)
-    expect(second.message).toBe(
-      'A manifest was already created on the site for this bill of lading number in this tab. Reload the page first if you really need to create another one.',
-    )
+    expect(second.message).toBe(DUPLICATE_MESSAGE)
     expect(second.billCreated).toBe(false)
     expect(second.written).toBe(false)
 
     // KHÔNG có POST nào nữa tới site — lần hai phải bị chặn TRƯỚC khi chạm
     // network, nếu không thì site bị tạo bill hai lần.
     expect(fake.calls.filter((call) => call.method === 'POST')).toHaveLength(postsAfterFirst)
+  })
+
+  it('A → B → A ⇒ lần thứ ba bị từ chối, KHÔNG tạo bill thứ hai cho A', async () => {
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-A', allowWrite: true })
+    expect(first.ok).toBe(true)
+    expect(first.written).toBe(true)
+
+    // Bill KHÁC ghi đè bill trước đó — chốt phải nhớ TẤT CẢ, không chỉ bill
+    // cuối cùng, nếu không lần chạy lại cho A sẽ lọt.
+    const second = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-B', allowWrite: true })
+    expect(second.ok).toBe(true)
+    expect(second.written).toBe(true)
+
+    const postsBeforeThird = fake.calls.filter((call) => call.method === 'POST').length
+
+    const third = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-A', allowWrite: true })
+    expect(third.ok).toBe(false)
+    expect(third.message).toBe(DUPLICATE_MESSAGE)
+    expect(third.billCreated).toBe(false)
+    expect(third.written).toBe(false)
+
+    // KHÔNG POST thêm — lần ba phải bị chặn TRƯỚC khi chạm network.
+    expect(fake.calls.filter((call) => call.method === 'POST')).toHaveLength(postsBeforeThird)
+  })
+
+  it('bill ĐÃ tạo nhưng lưu hỏng ⇒ lần chạy lại bị từ chối, KHÔNG tạo bill thứ hai', async () => {
+    const fake = fakeFetch({ failSave: true })
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-C', allowWrite: true })
+    // Site ĐÃ tạo bill nhưng bước lưu hỏng ⇒ `billCreated` mà CHƯA `written`.
+    expect(first.billCreated).toBe(true)
+    expect(first.written).toBe(false)
+    expect(first.ok).toBe(false)
+
+    const postsAfterFirst = fake.calls.filter((call) => call.method === 'POST').length
+
+    // Chốt phải ghi nhớ khi bill ĐÃ có trên site, không chờ tới khi lưu xong.
+    const second = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-C', allowWrite: true })
+    expect(second.ok).toBe(false)
+    expect(second.message).toBe(DUPLICATE_MESSAGE)
+    expect(second.billCreated).toBe(false)
+    expect(second.written).toBe(false)
+
+    // KHÔNG có bill thứ hai cho cùng một số bill.
+    expect(fake.calls.filter((call) => call.method === 'POST')).toHaveLength(postsAfterFirst)
+  })
+
+  it('chốt SỐNG SÓT qua lần reload trang (module content script nạp lại)', async () => {
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-D', allowWrite: true })
+    expect(first.written).toBe(true)
+
+    // Nạp lại module content script — giống reload trang.
+    vi.resetModules()
+    await import('../src/content/index')
+
+    const second = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-D', allowWrite: true })
+    expect(second.ok).toBe(false)
+    expect(second.message).toBe(DUPLICATE_MESSAGE)
+    expect(second.billCreated).toBe(false)
+    expect(second.written).toBe(false)
+  })
+
+  it('opt-in ĐÃ LƯU đang tắt ⇒ từ chối, KHÔNG chạm network', async () => {
+    settings.createOnSite = false
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    const result = await send({
+      type: MSG_CREATE_MANIFEST,
+      blNo: BL_NO,
+      allowWrite: true,
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe(OPT_IN_OFF_MESSAGE)
+    expect(result.billCreated).toBe(false)
+    expect(result.written).toBe(false)
+    // Chặn phải xảy ra TRƯỚC mọi lần gọi mạng — kể cả lúc đọc dữ liệu.
+    expect(fake.calls).toHaveLength(0)
   })
 
   it('cookie của site ⇒ header Authorization: JWT <token>', async () => {

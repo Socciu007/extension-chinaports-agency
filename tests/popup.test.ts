@@ -59,6 +59,11 @@ beforeEach(() => {
   storageGet = async (defaults) => ({ ...(defaults ?? {}), ...store })
   storageSet = async (values) => {
     Object.assign(store, values)
+    // Trình duyệt thật BÁO thay đổi sau khi ghi ⇒ stub phải làm vậy, nếu
+    // không nhánh "thay đổi tới trong lúc đang lưu" không bao giờ chạy.
+    const changes: Record<string, { newValue?: unknown }> = {}
+    for (const [key, value] of Object.entries(values)) changes[key] = { newValue: value }
+    emitStorageChange(changes)
   }
   sendMessage = async () => successResult()
 
@@ -234,6 +239,31 @@ describe('popup — chạy manifest qua API', () => {
     // Nở chốt để lần chạy kết thúc ⇒ không rò timer ra ngoài test.
     resolveSend?.(successResult())
     await flushPromises()
+  })
+
+  it('nút đang chạy ⇒ mang class `busy` (con trỏ "đang xử lý")', async () => {
+    let resolveSend: ((value: unknown) => void) | undefined
+    sendMessage = async () =>
+      new Promise((resolve) => {
+        resolveSend = resolve
+      })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+
+    const button = buttonByText(wrapper, 'Preview data')
+    expect(button.classes()).not.toContain('busy')
+
+    await button.trigger('click')
+    await flushPromises()
+
+    expect(button.classes()).toContain('busy')
+
+    resolveSend?.(successResult())
+    await flushPromises()
+
+    expect(button.classes()).not.toContain('busy')
   })
 
   it('"Preview data" ⇒ message có allowWrite === false', async () => {
@@ -524,6 +554,9 @@ describe('popup — đọc setting thất bại', () => {
 
       // Control phải ẨN — không được hiện ra một checkbox "tắt" bịa đặt.
       expect(checkbox(wrapper).exists()).toBe(false)
+      // Cảnh báo "opt-in đang tắt" cũng KHÔNG được hiện — ta không biết
+      // opt-in là gì thì không được khẳng định là nó đang tắt.
+      expect(wrapper.find('.hint').exists()).toBe(false)
       // Lỗi đọc phải nằm ở khe lỗi của setting, không phải khe lỗi chạy.
       expect(wrapper.find('.settings-error').text()).toBe('Could not read the settings.')
       expect(wrapper.find('.error').exists()).toBe(false)
@@ -583,6 +616,17 @@ describe('popup — checkbox create-on-site chỉ hiện SAU khi đọc setting 
 
     expect(isChecked(wrapper)).toBe(true)
     expect(isDisabled(wrapper, 'Create draft on site')).toBe(false)
+  })
+
+  it('đọc được setting và opt-in ĐANG TẮT ⇒ hiện cảnh báo "đang tắt"', async () => {
+    store.createOnSite = false
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    const hint = wrapper.find('.hint')
+    expect(hint.exists()).toBe(true)
+    expect(hint.text()).toContain('Creating a draft on the site is off')
   })
 })
 
@@ -661,6 +705,109 @@ describe('popup — lưu setting thành công', () => {
   })
 })
 
+describe('popup — hội tụ về storage sau khi lưu', () => {
+  it('thay đổi tới TỪ NGOÀI trong lúc đang lưu ⇒ popup theo giá trị CUỐI CÙNG trong storage', async () => {
+    // Opt-in tắt lúc đầu.
+    store.createOnSite = false
+
+    // Trong lúc popup đang lưu thì nơi khác ghi đè ⇒ giá trị CUỐI CÙNG
+    // trong storage là `false` (ai ghi cuối cùng thì thắng).
+    storageSet = async (values) => {
+      Object.assign(store, values)
+      Object.assign(store, { createOnSite: false })
+      emitStorageChange({ createOnSite: { newValue: values.createOnSite } })
+      emitStorageChange({ createOnSite: { newValue: false } })
+    }
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await checkbox(wrapper).setValue(true)
+    await flushPromises()
+
+    expect(store.createOnSite).toBe(false)
+    // Popup KHÔNG được tin giá trị trả về của lần ghi (vẫn là `true`) — nó
+    // phải đọc lại storage ⇒ thấy `false` ⇒ không tick. Nếu tin giá trị
+    // patch thì popup và storage LỆCH nhau ⇒ content script từ chối ghi mà
+    // operator không hiểu vì sao.
+    expect(isChecked(wrapper)).toBe(false)
+    expect(wrapper.find('.settings-error').exists()).toBe(false)
+  })
+})
+
+describe('popup — bằng chứng "bill đã có trên site"', () => {
+  it('bill ĐÃ tạo nhưng lưu chưa xong ⇒ dòng cảnh báo SỐNG LÂU qua lần preview sau', async () => {
+    sendMessage = async () => successResult({ billCreated: true, written: false })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+    await clickPreview(wrapper)
+
+    const evidence = wrapper.find('.bill-created')
+    expect(evidence.exists()).toBe(true)
+    expect(evidence.text()).toContain(
+      'A manifest bill was already created on the site for ONEYSHAGT1569600.',
+    )
+    expect(evidence.text()).toContain('Check the site and finish that manifest by hand.')
+
+    // Lần preview SAU: kết quả mới KHÔNG có billCreated ⇒ khối `bill-status`
+    // biến mất, nhưng bằng chứng thì phải CÒN — nếu không operator tưởng
+    // site chưa có bill và tạo manifest thứ hai.
+    sendMessage = async () => successResult()
+    await clickPreview(wrapper)
+
+    expect(wrapper.find('.bill-created').exists()).toBe(true)
+  })
+
+  it('lần chạy bị chặn vì ô nhập rỗng ⇒ kết quả CŨ không bị xoá', async () => {
+    sendMessage = async () => successResult({ billCreated: true, written: false })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+    await clickPreview(wrapper)
+    expect(wrapper.text()).toContain(
+      'The manifest bill was created on the site, but saving it did not finish.',
+    )
+
+    // Xoá số bill ⇒ lần chạy bị chặn NGAY, không gửi message nào — nhưng
+    // kết quả cũ phải CÒN, nếu không cảnh báo biến mất lúc operator đang
+    // cố chạy lại.
+    await wrapper.find('input[type="text"]').setValue('')
+    await wrapper.find('input[type="text"]').trigger('keyup.enter')
+    await flushPromises()
+
+    expect(wrapper.find('.error').text()).toBe('Enter a bill of lading number first.')
+    expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(1)
+    expect(wrapper.text()).toContain(
+      'The manifest bill was created on the site, but saving it did not finish.',
+    )
+    expect(wrapper.find('.bill-created').exists()).toBe(true)
+  })
+
+  it('ghi xong cho CHÍNH số bill đó ⇒ dòng cảnh báo biến mất', async () => {
+    store.createOnSite = true
+    sendMessage = async () => successResult({ billCreated: true, written: false })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+    await clickPreview(wrapper)
+    expect(wrapper.find('.bill-created').exists()).toBe(true)
+
+    // Lần create này lưu THÀNH CÔNG ⇒ cảnh báo "điền tay" không còn đúng.
+    sendMessage = async () => successResult({ billCreated: true, written: true })
+    await buttonByText(wrapper, 'Create draft on site').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.bill-created').exists()).toBe(false)
+  })
+})
+
 describe('popup — lưu setting bị chặn khi đang chạy', () => {
   it('tick lần hai trong lúc lần đầu còn treo ⇒ KHÔNG ghi thêm', async () => {
     let setCalls = 0
@@ -690,6 +837,35 @@ describe('popup — lưu setting bị chặn khi đang chạy', () => {
     // KHÔNG được lệch với storage.
     expect(store.createOnSite).toBe(true)
     expect(isChecked(wrapper)).toBe(true)
+  })
+
+  it('tick xong mà lần lưu CHƯA xong ⇒ nút create vẫn TẮT', async () => {
+    // Lần lưu treo ⇒ setting chưa vào storage.
+    let resolveSet: (() => void) | undefined
+    storageSet = async (values) => {
+      await new Promise<void>((resolve) => {
+        resolveSet = resolve
+      })
+      Object.assign(store, values)
+    }
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await checkbox(wrapper).setValue(true)
+    await flushPromises()
+
+    // Checkbox đã tick, nhưng setting CHƯA lưu xong ⇒ nút create phải TẮT.
+    // Nếu bật, operator bấm là content script từ chối (nó kiểm tra setting
+    // ĐÃ LƯU) mà popup không hiện được lý do.
+    expect(isChecked(wrapper)).toBe(true)
+    expect(isDisabled(wrapper, 'Create draft on site')).toBe(true)
+
+    resolveSet?.()
+    await flushPromises()
+
+    // Lần lưu xong ⇒ nút create bật.
+    expect(isDisabled(wrapper, 'Create draft on site')).toBe(false)
   })
 })
 

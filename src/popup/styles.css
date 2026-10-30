@@ -19,6 +19,8 @@ body {
   display: flex;
   gap: 6px;
   align-items: center;
+  /* Ba nút không vừa 360px ⇒ cho phép xuống hàng thay vì chữ vỡ trong nút. */
+  flex-wrap: wrap;
 }
 
 .row + .row {
@@ -41,6 +43,8 @@ button {
   background: #f6f8fa;
   font: inherit;
   cursor: pointer;
+  /* Nhãn nút KHÔNG được xuống dòng — hàng nút xuống hàng thay vì vỡ chữ. */
+  white-space: nowrap;
 }
 
 button.primary {
@@ -51,6 +55,13 @@ button.primary {
 
 button:disabled {
   opacity: 0.6;
+  /* Nút bị khoá vì lý do KHÔNG tạm thời (ví dụ opt-in chưa bật) thì con
+     trỏ phải nói "không được phép", không phải "đang tải". */
+  cursor: not-allowed;
+}
+
+/* Nút đang chạy một lần run ⇒ con trỏ "đang xử lý". */
+button.busy {
   cursor: progress;
 }
 
@@ -152,6 +163,20 @@ button:disabled {
   margin: 6px 0 0;
   padding-top: 6px;
   border-top: 1px solid #0a522733;
+  font-weight: 600;
+}
+
+/*
+  Bằng chứng "bill đã có trên site" — dòng đứng riêng, SỐNG LÂU.
+  Màu cảnh báo (không phải màu trạng thái) vì đây là điều operator phải
+  xử lý bằng tay.
+*/
+.bill-created {
+  margin: 8px 0 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: #fff8c5;
+  color: #633c01;
   font-weight: 600;
 }
 
