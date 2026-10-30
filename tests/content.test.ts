@@ -198,7 +198,7 @@ describe('content script — chạy manifest qua API', () => {
 
     expect(result.ok).toBe(false)
     expect(result.message).toBe(
-      'Open the 预配舱单申报平台 page (#/exportBusinessOperations/maintenanceOfManifestData) and try again.',
+      'Open the manifest page (#/exportBusinessOperations/maintenanceOfManifestData) and try again.',
     )
     expect(fetchMock).not.toHaveBeenCalled()
   })
@@ -231,6 +231,56 @@ describe('content script — chạy manifest qua API', () => {
     expect(result.billCreated).toBe(true)
     expect(result.written).toBe(true)
     expect(result.billNo).toBe('BILL-1')
+  })
+
+  it('allowWrite là CHUỖI ⇒ KHÔNG POST lên site (opt-in phải là boolean true)', async () => {
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    const result = await send({
+      type: MSG_CREATE_MANIFEST,
+      blNo: BL_NO,
+      allowWrite: 'true',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(fake.calls.filter((call) => call.method === 'POST')).toHaveLength(0)
+    expect(result.billCreated).toBe(false)
+    expect(result.written).toBe(false)
+  })
+
+  it('ghi hai lần cùng số bill ⇒ lần hai bị từ chối, KHÔNG POST thêm', async () => {
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    const first = await send({
+      type: MSG_CREATE_MANIFEST,
+      blNo: BL_NO,
+      allowWrite: true,
+    })
+    expect(first.ok).toBe(true)
+    expect(first.written).toBe(true)
+
+    const postsAfterFirst = fake.calls.filter((call) => call.method === 'POST').length
+    expect(postsAfterFirst).toBeGreaterThan(0)
+
+    // Số bill KHÁC CHỮ HOA vẫn là CÙNG một số bill (chuẩn hoá) ⇒ vẫn bị chặn.
+    const second = await send({
+      type: MSG_CREATE_MANIFEST,
+      blNo: BL_NO.toLowerCase(),
+      allowWrite: true,
+    })
+
+    expect(second.ok).toBe(false)
+    expect(second.message).toBe(
+      'A manifest was already created on the site for this bill of lading number in this tab. Reload the page first if you really need to create another one.',
+    )
+    expect(second.billCreated).toBe(false)
+    expect(second.written).toBe(false)
+
+    // KHÔNG có POST nào nữa tới site — lần hai phải bị chặn TRƯỚC khi chạm
+    // network, nếu không thì site bị tạo bill hai lần.
+    expect(fake.calls.filter((call) => call.method === 'POST')).toHaveLength(postsAfterFirst)
   })
 
   it('cookie của site ⇒ header Authorization: JWT <token>', async () => {

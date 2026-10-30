@@ -6,8 +6,6 @@
  */
 import type { ManifestRunResult } from './manifest-run'
 
-export const MSG_FILL = 'manifest-autofill:fill'
-
 /**
  * Message tạo manifest qua API — đường CHÍNH.
  *
@@ -20,12 +18,17 @@ export const MSG_CREATE_MANIFEST = 'manifest-autofill:create'
 export type FillScope = 'header' | 'cargo' | 'container'
 
 /**
- * - `ok`    — điền thành công, đã xác minh lại giá trị trên form
- * - `warn`  — DOM path: điền xong nhưng bước xác minh không khớp (vd mã cảng
- *             site chưa cascade). API path: site BẮT BUỘC field này nhưng API
- *             không cung cấp ⇒ để trống, operator phải điền tay.
- * - `skip`  — API không cung cấp field này, cố ý để trống (có `note` giải thích)
- * - `error` — không điền được (không tìm thấy field, không chọn được option, …)
+ * Trạng thái của một field trong report.
+ *
+ * Ở ĐƯỜNG API, report chỉ liệt kê field BỊ BỎ TRỐNG — mọi field đã điền
+ * đều KHÔNG có mặt trong report:
+ * - `warn` — site BẮT BUỘC có field này nhưng API không cung cấp ⇒ để trống,
+ *             operator phải điền tay trên site;
+ * - `skip` — field KHÔNG bắt buộc và API không cung cấp ⇒ để trống là đúng.
+ *
+ * `ok` và `error` KHÔNG còn do đường API sinh ra. Chúng vẫn nằm trong union vì
+ * module DOM cũ (`src/core/fill.ts`) còn gán chúng — module đó bị xoá ở task
+ * sau, và lúc đó union sẽ được thu hẹp lại còn `warn | skip`.
  */
 export type ReportStatus = 'ok' | 'skip' | 'warn' | 'error'
 
@@ -42,21 +45,6 @@ export interface ReportItem {
    * Popup dùng cờ này để chỉ ra field đang chặn việc submit.
    */
   required?: boolean
-}
-
-export interface FillRequest {
-  type: typeof MSG_CREATE_MANIFEST
-  blNo: string
-  autoSubmit?: boolean
-  apiBase?: string
-}
-
-export interface FillResult {
-  ok: boolean
-  message?: string
-  items: ReportItem[]
-  cargoRows: number
-  containerRows: number
 }
 
 export interface CreateRequest {

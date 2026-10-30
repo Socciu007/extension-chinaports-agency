@@ -7,6 +7,7 @@
  *
  * `runManifest` does not reject ⇒ any error becomes `CreateResult` with `ok: false` + `message` in English.
  */
+import { normalizeBlNo } from '../core/api'
 import { runManifest } from '../core/manifest-run'
 import { readSettings } from '../core/options'
 import {
@@ -42,6 +43,19 @@ function errorResult(message: string): CreateResult {
 let inFlight: Promise<CreateResult> | null = null
 
 /**
+ * Số bill ĐÃ ghi thành công lên site trong TAB NÀY.
+ *
+ * Chốt ghi hai lần: mỗi lần ghi tạo MỘT bill mới trên site ⇒ chạy lại
+ * cùng một số bill sẽ sinh ra hai manifest trùng nhau. Cờ này nằm ở
+ * CONTENT SCRIPT (không phải popup) nên nó còn đúng kể cả khi operator
+ * đóng popup rồi mở lại.
+ *
+ * Lưu SỐ BILL CỦA OPERATOR (đã chuẩn hoá) — KHÔNG phải `result.billNo`
+ * (đó là mã bill NỘI BỘ do site gán).
+ */
+let writtenBlNo: string | undefined
+
+/**
  * Run manifest according to the request from the popup.
 **/
 async function handleCreate(request: CreateRequest): Promise<CreateResult> {
@@ -52,26 +66,37 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
     )
   }
 
+  const allowWrite = request.allowWrite === true
+  const blNo = normalizeBlNo(request.blNo ?? '')
+
+  // Đã ghi số bill này trong tab này rồi ⇒ từ chối, KHÔNG chạy gì thêm.
+  if (allowWrite && writtenBlNo !== undefined && blNo === writtenBlNo) {
+    return errorResult(
+      'A manifest was already created on the site for this bill of lading number in this tab. Reload the page first if you really need to create another one.',
+    )
+  }
+
   const settings = await readSettings()
-  console.log('settings', settings)
-  console.log('request', request)
   const apiBase = request.apiBase ?? settings.apiBase
   const siteApiBase = request.siteApiBase ?? settings.siteApiBase
-  const allowWrite = request.allowWrite === true
 
-
-  return runManifest({
+  const result = await runManifest({
     blNo: request.blNo ?? '',
     allowWrite,
     apiBase,
     siteApiBase,
     cookieString: document.cookie,
   })
+
+  // CHỈ ghi nhớ sau một lần chạy ĐÃ ghi thành công — run lỗi thì không
+  // chặn lần sau (người dùng cần chạy lại được).
+  if (result.written === true) writtenBlNo = blNo
+
+  return result
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const type = (message as { type?: string } | undefined)?.type
-  console.log('type', type)
   if (type !== MSG_CREATE_MANIFEST) return false
 
   // Prevent running multiple manifests at the same time.

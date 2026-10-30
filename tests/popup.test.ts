@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import PopupApp from '../src/popup/App.vue'
-import { MSG_FILL } from '../src/core/protocol'
+import { MSG_CREATE_MANIFEST } from '../src/core/protocol'
 import { DEFAULT_SETTINGS } from '../src/core/options'
 import { MANIFEST_URL } from '../src/core/site-url'
 
@@ -15,17 +15,23 @@ import { MANIFEST_URL } from '../src/core/site-url'
 
 const store: Record<string, unknown> = {}
 
-type StorageGet = (defaults: Record<string, unknown>) => Promise<Record<string, unknown>>
+type StorageGet = (
+  defaults?: Record<string, unknown> | null,
+) => Promise<Record<string, unknown>>
 type StorageSet = (values: Record<string, unknown>) => Promise<void>
 type SentMessage = { type: string; [key: string]: unknown }
 type SendMessage = (message: SentMessage) => Promise<unknown>
+type StorageListener = (
+  changes: Record<string, { newValue?: unknown }>,
+  areaName: string,
+) => void
 
 let storageGet: StorageGet
 let storageSet: StorageSet
 let sendMessage: SendMessage
 /** Ghi lại type của mọi message đã gửi đi — để assert "KHÔNG được gửi". */
 let sentTypes: string[]
-/** Ghi lại TOÀN BỘ message đã gửi đi — để assert payload (vd `autoSubmit`). */
+/** Ghi lại TOÀN BỘ message đã gửi đi — để assert payload (vd `allowWrite`). */
 let sentMessages: SentMessage[]
 /** Ghi lại mọi lần ĐIỀU HƯỚNG tab — để assert tab nào bị đổi URL. */
 let tabUpdates: { tabId: number; url?: string }[]
@@ -35,6 +41,10 @@ let createdTabs: (string | undefined)[]
 let tabReloads: number[]
 /** URL của tab active trong stub — đổi được để test cả nhánh "đã ở trang khai báo". */
 let activeTabUrl: string
+/** Id của tab active — `undefined` ⇒ KHÔNG có tab active nào. */
+let activeTabId: number | undefined
+/** Listener của `chrome.storage.onChanged` — để test đổi setting từ nơi khác. */
+let storageListeners: StorageListener[]
 
 beforeEach(() => {
   for (const key of Object.keys(store)) delete store[key]
@@ -43,22 +53,32 @@ beforeEach(() => {
   tabUpdates = []
   createdTabs = []
   tabReloads = []
+  storageListeners = []
   activeTabUrl = 'https://example.test/'
-  storageGet = async (defaults) => ({ ...defaults, ...store })
+  activeTabId = 1
+  storageGet = async (defaults) => ({ ...(defaults ?? {}), ...store })
   storageSet = async (values) => {
     Object.assign(store, values)
   }
-  sendMessage = async () => ({ ok: true })
+  sendMessage = async () => successResult()
 
   vi.stubGlobal('chrome', {
     storage: {
       sync: {
-        get: (defaults: Record<string, unknown>) => storageGet(defaults),
+        get: (defaults?: Record<string, unknown> | null) => storageGet(defaults),
         set: (values: Record<string, unknown>) => storageSet(values),
+      },
+      onChanged: {
+        addListener: (fn: StorageListener) => {
+          storageListeners.push(fn)
+        },
+        removeListener: (fn: StorageListener) => {
+          storageListeners = storageListeners.filter((listener) => listener !== fn)
+        },
       },
     },
     tabs: {
-      query: async () => [{ id: 1 }],
+      query: async () => (activeTabId === undefined ? [] : [{ id: activeTabId }]),
       get: async (tabId: number) => ({ id: tabId, url: activeTabUrl }),
       reload: async (tabId: number) => {
         tabReloads.push(tabId)
@@ -87,6 +107,24 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+/**
+ * Kết quả "thành công" mặc định — đủ shape để popup dựng được UI.
+ */
+function successResult(overrides: Record<string, unknown> = {}) {
+  return {
+    ok: true,
+    blocked: false,
+    steps: ['Fetched the manifest data'],
+    items: [],
+    preview: { header: {}, cargo: [], containers: [] },
+    cargoRows: 0,
+    containerRows: 0,
+    billCreated: false,
+    written: false,
+    ...overrides,
+  }
+}
+
 /** Tìm nút theo đúng chữ hiện trên nó. */
 function buttonByText(wrapper: ReturnType<typeof mount>, text: string) {
   const button = wrapper.findAll('button').find((b) => b.text() === text)
@@ -102,6 +140,11 @@ function isChecked(wrapper: ReturnType<typeof mount>): boolean {
   return (checkbox(wrapper).element as HTMLInputElement).checked
 }
 
+/** Nút có bị disable không. */
+function isDisabled(wrapper: ReturnType<typeof mount>, text: string): boolean {
+  return buttonByText(wrapper, text).attributes('disabled') !== undefined
+}
+
 /**
  * Bấm checkbox KHÔNG chờ tick nào — mô phỏng double-click rất nhanh, lúc
  * DOM chưa kịp render trạng thái `disabled`.
@@ -112,7 +155,398 @@ function fastToggle(wrapper: ReturnType<typeof mount>): void {
   el.dispatchEvent(new Event('change'))
 }
 
-describe('popup — checkbox auto-submit chỉ hiện SAU khi đọc setting xong', () => {
+/** Mô phỏng storage bị đổi từ nơi khác (trang options). */
+function emitStorageChange(changes: Record<string, { newValue?: unknown }>): void {
+  for (const listener of storageListeners) listener(changes, 'sync')
+}
+
+/**
+ * Bắn event click TRỰC TIẾP lên nút, bỏ qua việc VTU bỏ qua nút bị disable.
+ *
+ * `trigger` của VTU KHÔNG bắn event cho nút disabled ⇒ nếu chỉ dùng `trigger`
+ * thì test "bấm hai lần" pass TRONG VAI như nút bị disable, chứ không phải vì
+ * khoá busy bên trong component — tức là test sẽ không bắt được lỗi.
+ *
+ * `_vts` phải đặt tay: Vue bỏ qua event có `_vts` cũ hơn lúc listener được
+ * gắn (xem `createInvoker` trong runtime-dom).
+ */
+function rawClick(button: { element: Element }): void {
+  const event = new MouseEvent('click', { bubbles: true, cancelable: true })
+  Object.assign(event, { _vts: Date.now() + 1 })
+  button.element.dispatchEvent(event)
+}
+
+/** Bấm nút "Preview data" — hành động CHỈ preview. */
+async function clickPreview(wrapper: ReturnType<typeof mount>): Promise<void> {
+  await buttonByText(wrapper, 'Preview data').trigger('click')
+  await flushPromises()
+}
+
+describe('popup — chạy manifest qua API', () => {
+  it('ô trống ⇒ báo lỗi và KHÔNG gửi message nào', async () => {
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').trigger('keyup.enter')
+    await flushPromises()
+
+    expect(wrapper.find('.error').text()).toBe('Enter a bill of lading number first.')
+    expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(0)
+  })
+
+  it('Enter ⇒ gửi đúng MỘT message, type MSG_CREATE_MANIFEST', async () => {
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+    await wrapper.find('input[type="text"]').trigger('keyup.enter')
+    await flushPromises()
+
+    expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(1)
+  })
+
+  it('bấm hai lần liên tiếp ⇒ chỉ gửi MỘT message (khoá busy)', async () => {
+    // Run treo ⇒ nếu gửi 2 lần thì site bị tạo bill hai lần và sinh dòng
+    // hàng TRÙNG.
+    let resolveSend: ((value: unknown) => void) | undefined
+    sendMessage = async () =>
+      new Promise((resolve) => {
+        resolveSend = resolve
+      })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+
+    // Giữ nguyên wrapper của nút: nhãn của nó đổi thành "Running…" khi bấm.
+    const button = buttonByText(wrapper, 'Preview data')
+    await button.trigger('click')
+    await flushPromises()
+
+    // Nút bị disable trong lúc chạy ⇒ `trigger` của VTU sẽ bỏ qua event.
+    // Bắn trực tiếp để kiểm tra khoá busy BÊN TRONG component.
+    expect(button.attributes('disabled')).toBeDefined()
+    rawClick(button)
+    await flushPromises()
+
+    expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(1)
+
+    // Nở chốt để lần chạy kết thúc ⇒ không rò timer ra ngoài test.
+    resolveSend?.(successResult())
+    await flushPromises()
+  })
+
+  it('"Preview data" ⇒ message có allowWrite === false', async () => {
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+    await clickPreview(wrapper)
+
+    const message = sentMessages.find((m) => m.type === MSG_CREATE_MANIFEST)
+    expect(message).toBeDefined()
+    // Boolean THẬT — không phải `undefined`, không phải chuỗi.
+    expect(message?.allowWrite).toBe(false)
+  })
+
+  it('"Create draft on site" CHƯA tick ⇒ nút bị disable, KHÔNG gửi message', async () => {
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    expect(isDisabled(wrapper, 'Create draft on site')).toBe(true)
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+    // Bắn trực tiếp (nút đang bị disable nên `trigger` của VTU bỏ qua) để
+    // chứng minh component TỰ chặn, chứ không chỉ nhờ nút bị disable.
+    rawClick(buttonByText(wrapper, 'Create draft on site'))
+    await flushPromises()
+
+    expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(0)
+  })
+
+  it('"Create draft on site" ĐÃ tick ⇒ message có allowWrite === true', async () => {
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await checkbox(wrapper).setValue(true)
+    await flushPromises()
+
+    expect(isDisabled(wrapper, 'Create draft on site')).toBe(false)
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+    await buttonByText(wrapper, 'Create draft on site').trigger('click')
+    await flushPromises()
+
+    const message = sentMessages.find((m) => m.type === MSG_CREATE_MANIFEST)
+    expect(message).toBeDefined()
+    expect(message?.allowWrite).toBe(true)
+  })
+
+  it('Enter trên ô nhập KHÔNG bao giờ chạy hành động create', async () => {
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await checkbox(wrapper).setValue(true)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+    await wrapper.find('input[type="text"]').trigger('keyup.enter')
+    await flushPromises()
+
+    const message = sentMessages.find((m) => m.type === MSG_CREATE_MANIFEST)
+    expect(message?.allowWrite).toBe(false)
+  })
+})
+
+describe('popup — lỗi vận chuyển', () => {
+  it('sendMessage lỗi ⇒ báo lỗi cho operator và ghi chi tiết ra console', async () => {
+    sendMessage = async () => {
+      throw new Error('The message port closed before a response was received.')
+    }
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      const wrapper = mount(PopupApp)
+      await flushPromises()
+
+      await wrapper.find('input[type="text"]').setValue('BL123')
+      await clickPreview(wrapper)
+
+      expect(wrapper.find('.error').text()).toBe(
+        'Could not reach the page. Open the manifest declaration page and try again.',
+      )
+      // Chi tiết kỹ thuật phải nằm ở console — không bị nuốt.
+      expect(errorSpy).toHaveBeenCalled()
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+})
+
+describe('popup — hiện kết quả của lần chạy', () => {
+  it('kết quả thành công ⇒ hiện các bước, số bill và report field bị trống', async () => {
+    sendMessage = async () =>
+      successResult({
+        steps: ['Fetched the manifest data', 'Created the manifest bill on the site'],
+        items: [
+          {
+            scope: 'header',
+            prop: 'PAY_WAY_ID',
+            label: '付款方式',
+            status: 'warn',
+            required: true,
+            note: 'The API does not provide the payment method.',
+          },
+          {
+            scope: 'header',
+            prop: 'SHIPPER_EM_STR',
+            label: '发货人 (email)',
+            status: 'skip',
+            required: false,
+            note: 'The API does not provide email addresses.',
+          },
+        ],
+        preview: {
+          header: { bill_nbr: 'ONEYSHAGT1569600', pay_way_id: '' },
+          cargo: [{ piece_num: 10, e_cargo_nam: 'STEEL COIL' }],
+          containers: [{ cntr_no: 'ABCU1234567' }],
+        },
+        cargoRows: 1,
+        containerRows: 1,
+        billNo: 'BILL-1',
+        billCreated: true,
+        written: true,
+      })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+    await clickPreview(wrapper)
+
+    // Các bước của lần chạy — operator thấy run tới đâu.
+    const steps = wrapper.find('.steps')
+    expect(steps.exists()).toBe(true)
+    expect(steps.text()).toContain('Fetched the manifest data')
+    expect(steps.text()).toContain('Created the manifest bill on the site')
+
+    // Số bill do site gán.
+    expect(wrapper.text()).toContain('Bill number: BILL-1')
+
+    // Report field bị trống — kèm note (note mới là lý do thật).
+    const table = wrapper.find('table.table')
+    expect(table.exists()).toBe(true)
+    expect(table.text()).toContain('付款方式')
+    expect(table.text()).toContain('The API does not provide the payment method.')
+
+    // Đếm field trống: required và optional tách riêng.
+    const summary = wrapper.find('.summary').text()
+    expect(summary).toContain('cargo: 1')
+    expect(summary).toContain('containers: 1')
+    expect(summary).toContain('blank fields: 1 required, 1 optional')
+  })
+
+  it('ghi thành công ⇒ hiện cảnh báo ghi hai lần', async () => {
+    sendMessage = async () =>
+      successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+    await clickPreview(wrapper)
+
+    expect(wrapper.text()).toContain(
+      'The manifest was created on the site and saved as a draft (暂存).',
+    )
+    expect(wrapper.find('.double-write').text()).toContain(
+      'Running it again would create a second manifest.',
+    )
+  })
+
+  it('bill tạo được nhưng lưu chưa xong ⇒ KHÔNG nói "đã lưu"', async () => {
+    sendMessage = async () => successResult({ billCreated: true, written: false })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+    await clickPreview(wrapper)
+
+    expect(wrapper.text()).toContain(
+      'The manifest bill was created on the site, but saving it did not finish.',
+    )
+    expect(wrapper.text()).not.toContain('saved as a draft (暂存)')
+  })
+
+  it('preview: header mở sẵn, dòng hàng và container đóng; field trống hiện (blank)', async () => {
+    sendMessage = async () =>
+      successResult({
+        preview: {
+          header: { bill_nbr: 'ONEYSHAGT1569600', pay_way_id: '' },
+          cargo: [{ piece_num: 10, e_cargo_nam: 'STEEL COIL' }],
+          containers: [{ cntr_no: 'ABCU1234567' }],
+        },
+        cargoRows: 1,
+        containerRows: 1,
+      })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+    await clickPreview(wrapper)
+
+    const details = wrapper.findAll('details')
+    expect(details).toHaveLength(3)
+    // Header mở sẵn, hai khối dòng đóng.
+    expect(details[0]?.attributes('open')).toBeDefined()
+    expect(details[1]?.attributes('open')).toBeUndefined()
+    expect(details[2]?.attributes('open')).toBeUndefined()
+
+    // Nhãn lấy từ map viết HOA, key payload thì chữ thường.
+    expect(details[0]?.text()).toContain('提单号')
+    expect(details[0]?.text()).toContain('ONEYSHAGT1569600')
+    // Field trống hiện `(blank)`.
+    expect(details[0]?.text()).toContain('(blank)')
+    expect(details[1]?.text()).toContain('包装件数')
+  })
+
+  it('kết quả lỗi ⇒ hiện đúng message của lần chạy', async () => {
+    sendMessage = async () =>
+      successResult({
+        ok: false,
+        message: 'No manifest was found for this bill of lading number.',
+      })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickPreview(wrapper)
+
+    expect(wrapper.find('.error').text()).toBe(
+      'No manifest was found for this bill of lading number.',
+    )
+  })
+
+  it('còn field bắt buộc bị trống ⇒ hiện cảnh báo và liệt kê field kèm note', async () => {
+    sendMessage = async () =>
+      successResult({
+        blocked: true,
+        message:
+          '1 field(s) required by the site are not provided by the API — they are listed in the report and must be filled in by hand on the site.',
+        items: [
+          {
+            scope: 'header',
+            prop: 'PAY_WAY_ID',
+            label: '付款方式',
+            status: 'warn',
+            required: true,
+            note: 'The API does not provide the payment method.',
+          },
+        ],
+      })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickPreview(wrapper)
+
+    const blocked = wrapper.find('.blocked')
+    expect(blocked.exists()).toBe(true)
+    expect(blocked.text()).toContain('required by the site are not provided by the API')
+
+    const panel = wrapper.find('.blocking')
+    expect(panel.exists()).toBe(true)
+    expect(panel.text()).toContain('付款方式')
+    expect(panel.text()).toContain('PAY_WAY_ID')
+    expect(wrapper.find('.blocking-note').text()).toBe(
+      'The API does not provide the payment method.',
+    )
+  })
+})
+
+describe('popup — đọc setting thất bại', () => {
+  it('storage.get lỗi ⇒ nút create TẮT, preview vẫn chạy, lỗi ở khe riêng', async () => {
+    // Opt-in ĐÃ lưu là `true` (đây là sự thật trong storage) nhưng lần đọc
+    // hỏng ⇒ popup KHÔNG biết điều đó ⇒ KHÔNG được phép ghi lên site.
+    store.createOnSite = true
+    storageGet = async () => {
+      throw new Error('storage disabled')
+    }
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      const wrapper = mount(PopupApp)
+      await flushPromises()
+
+      // Control phải ẨN — không được hiện ra một checkbox "tắt" bịa đặt.
+      expect(checkbox(wrapper).exists()).toBe(false)
+      // Lỗi đọc phải nằm ở khe lỗi của setting, không phải khe lỗi chạy.
+      expect(wrapper.find('.settings-error').text()).toBe('Could not read the settings.')
+      expect(wrapper.find('.error').exists()).toBe(false)
+
+      // Nút create phải TẮT — không có cách nào ghi lên site.
+      expect(isDisabled(wrapper, 'Create draft on site')).toBe(true)
+
+      // Preview vẫn chạy được.
+      await wrapper.find('input[type="text"]').setValue('BL123')
+      await clickPreview(wrapper)
+
+      const message = sentMessages.find((m) => m.type === MSG_CREATE_MANIFEST)
+      expect(message).toBeDefined()
+      expect(message?.allowWrite).toBe(false)
+      // Lỗi của setting vẫn còn nguyên sau lần chạy.
+      expect(wrapper.find('.settings-error').exists()).toBe(true)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+})
+
+describe('popup — checkbox create-on-site chỉ hiện SAU khi đọc setting xong', () => {
   it('setting đọc chưa xong ⇒ chưa có checkbox', async () => {
     // Giữ promise `get` treo ⇒ `onMounted` chưa xong.
     let resolveGet: ((values: Record<string, unknown>) => void) | undefined
@@ -127,58 +561,34 @@ describe('popup — checkbox auto-submit chỉ hiện SAU khi đọc setting xon
     // Control chưa có ⇒ không thể tick sớm (không đè lên lựa chọn của user).
     expect(checkbox(wrapper).exists()).toBe(false)
 
-    resolveGet?.({ ...DEFAULT_SETTINGS, autoSubmit: true })
+    resolveGet?.({ ...DEFAULT_SETTINGS, createOnSite: true })
     await flushPromises()
 
     // Setting đã lưu là `true` ⇒ phải hiện ĐÃ TICK, không phải unchecked.
     expect(checkbox(wrapper).exists()).toBe(true)
     expect(isChecked(wrapper)).toBe(true)
   })
-})
 
-describe('popup — đọc setting thất bại', () => {
-  it('storage.get lỗi ⇒ KHÔNG gửi autoSubmit, KHÔNG hiện checkbox, và báo lỗi', async () => {
-    // Opt-in ĐÃ lưu là `true` (đây là sự thật trong storage) nhưng lần đọc
-    // hỏng ⇒ popup KHÔNG biết điều đó. Nếu popup coi như "setting = false"
-    // rồi gửi `autoSubmit: false` đi thì content script coi đó là giá trị
-    // HỢP LỆ (`request.autoSubmit ?? settings.autoSubmit`) ⇒ ĐÈ LÊN opt-in
-    // đã lưu: auto-submit bị tắt trong im lặng, còn checkbox thì hiện chưa
-    // tick ⇒ control nói dối.
-    store.autoSubmit = true
-    storageGet = async () => {
-      throw new Error('storage disabled')
-    }
-    sendMessage = async () => ({ ok: true, items: [], cargoRows: 0, containerRows: 0 })
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  it('setting đổi từ nơi khác ⇒ checkbox cập nhật ngay', async () => {
+    const wrapper = mount(PopupApp)
+    await flushPromises()
 
-    try {
-      const wrapper = mount(PopupApp)
-      await flushPromises()
+    expect(isChecked(wrapper)).toBe(false)
+    expect(isDisabled(wrapper, 'Create draft on site')).toBe(true)
 
-      // Control phải ẨN — không được hiện ra một checkbox "tắt" bịa đặt.
-      expect(checkbox(wrapper).exists()).toBe(false)
-      // Lỗi đọc phải nằm ở khe lỗi của setting, không phải khe lỗi trang.
-      expect(wrapper.find('.settings-error').text()).toBe('Could not read the settings.')
-      expect(wrapper.find('.error').exists()).toBe(false)
+    // Trang options bật opt-in ⇒ storage đổi ⇒ popup phải thấy ngay.
+    store.createOnSite = true
+    emitStorageChange({ createOnSite: { newValue: true } })
+    await flushPromises()
 
-      await wrapper.find('input[type="text"]').setValue('BL123')
-      await buttonByText(wrapper, 'Fill data').trigger('click')
-      await flushPromises()
-
-      const fillMessage = sentMessages.find((m) => m.type === MSG_FILL)
-      expect(fillMessage).toBeDefined()
-      // Key `autoSubmit` phải VẮNG MẶT — để content script tự đọc setting
-      // (lần đọc MỚI của nó) và tôn trọng opt-in đã lưu.
-      expect('autoSubmit' in (fillMessage as SentMessage)).toBe(false)
-    } finally {
-      warnSpy.mockRestore()
-    }
+    expect(isChecked(wrapper)).toBe(true)
+    expect(isDisabled(wrapper, 'Create draft on site')).toBe(false)
   })
 })
 
 describe('popup — lưu setting thất bại', () => {
   it('lưu lỗi ⇒ rollback checkbox về giá trị đã lưu thật và báo lỗi', async () => {
-    store.autoSubmit = false
+    store.createOnSite = false
     storageSet = async () => {
       throw new Error('storage disabled')
     }
@@ -206,9 +616,9 @@ describe('popup — lưu setting thất bại', () => {
   })
 
   it('lưu lỗi khi giá trị đã lưu là `true` ⇒ rollback về checked', async () => {
-    // Trường hợp ngược của test trên: nếu drop `savedAutoSubmit` thì rollback
+    // Trường hợp ngược của test trên: nếu bỏ `savedCreateOnSite` thì rollback
     // sẽ về `false` ⇒ test này bắt được.
-    store.autoSubmit = true
+    store.createOnSite = true
     storageSet = async () => {
       throw new Error('storage disabled')
     }
@@ -236,7 +646,7 @@ describe('popup — lưu setting thất bại', () => {
 
 describe('popup — lưu setting thành công', () => {
   it('lưu được ⇒ checkbox giữ nguyên ticked và không báo lỗi', async () => {
-    store.autoSubmit = false
+    store.createOnSite = false
 
     const wrapper = mount(PopupApp)
     await flushPromises()
@@ -244,7 +654,7 @@ describe('popup — lưu setting thành công', () => {
     await checkbox(wrapper).setValue(true)
     await flushPromises()
 
-    expect(store.autoSubmit).toBe(true)
+    expect(store.createOnSite).toBe(true)
     expect(isChecked(wrapper)).toBe(true)
     expect(wrapper.find('.settings-error').exists()).toBe(false)
     expect(wrapper.find('.error').exists()).toBe(false)
@@ -278,241 +688,27 @@ describe('popup — lưu setting bị chặn khi đang chạy', () => {
 
     // Giá trị đã lưu phải khớp với ý định của lần đang chạy, và control
     // KHÔNG được lệch với storage.
-    expect(store.autoSubmit).toBe(true)
+    expect(store.createOnSite).toBe(true)
     expect(isChecked(wrapper)).toBe(true)
   })
 })
 
-describe('popup — báo cáo field bị chặn', () => {
-  it('field `warn` bắt buộc ⇒ báo lý do, KHÔNG quy cho API thiếu dữ liệu', async () => {
-    sendMessage = async () => ({
-      ok: false,
-      items: [
-        {
-          scope: 'header',
-          prop: 'START_PORT_NAM',
-          label: '卸货港',
-          status: 'warn',
-          required: true,
-          note: 'The site did not fill the port code from the port name.',
-        },
-      ],
-      cargoRows: 0,
-      containerRows: 0,
-    })
-
-    const wrapper = mount(PopupApp)
-    await flushPromises()
-
-    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
-    await buttonByText(wrapper, 'Fill data').trigger('click')
-    await flushPromises()
-
-    const errorText = wrapper.find('.error').text()
-    // KHÔNG được quy field `warn` là "API không có dữ liệu" — API CÓ dữ liệu,
-    // site không verify được giá trị đó.
-    expect(errorText).not.toContain('no data from the API')
-    expect(errorText).toContain('卸货港')
-
-    // Panel blocking phải liệt kê field KÈM note (note mới là lý do thật).
-    const panel = wrapper.find('.blocking')
-    expect(panel.exists()).toBe(true)
-    expect(panel.text()).toContain('卸货港')
-    expect(panel.text()).toContain('START_PORT_NAM')
-    expect(wrapper.find('.blocking-note').text()).toBe(
-      'The site did not fill the port code from the port name.',
-    )
-  })
-})
-
-describe('popup — chạy lần điền', () => {
-  it('Enter với ô trống ⇒ báo lỗi và KHÔNG gửi MSG_FILL', async () => {
-    const wrapper = mount(PopupApp)
-    await flushPromises()
-
-    await wrapper.find('input[type="text"]').trigger('keyup.enter')
-    await flushPromises()
-
-    expect(wrapper.find('.error').text()).toBe('Enter a bill of lading number first.')
-    expect(sentTypes.filter((t) => t === MSG_FILL)).toHaveLength(0)
-  })
-
-  it('Enter hai lần khi đang điền ⇒ chỉ gửi MSG_FILL đúng MỘT lần', async () => {
-    // Fill treo ⇒ nếu gửi 2 lần thì site sẽ bấm 新增舱单信息 hai lần và sinh
-    // dòng hàng TRÙNG.
-    let resolveFill: ((value: unknown) => void) | undefined
-    sendMessage = async (message) => {
-      if (message.type === MSG_FILL) {
-        return new Promise((resolve) => {
-          resolveFill = resolve
-        })
-      }
-      return { ok: true }
-    }
-
-    const wrapper = mount(PopupApp)
-    await flushPromises()
-
-    const input = wrapper.find('input[type="text"]')
-    await input.setValue('ONEYSHAGT1569600')
-    await input.trigger('keyup.enter')
-    await input.trigger('keyup.enter')
-    await flushPromises()
-
-    expect(sentTypes.filter((t) => t === MSG_FILL)).toHaveLength(1)
-
-    // Nở chốt để lần điền kết thúc ⇒ không rò timer ra ngoài test.
-    resolveFill?.({ ok: true, items: [], cargoRows: 0, containerRows: 0 })
-    await flushPromises()
-  })
-
-  it('điền thành công ⇒ không báo lỗi và hiện số dòng hàng/ container', async () => {
-    sendMessage = async () => ({
-      ok: true,
-      items: [],
-      cargoRows: 2,
-      containerRows: 1,
-    })
-
-    const wrapper = mount(PopupApp)
-    await flushPromises()
-
-    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
-    await buttonByText(wrapper, 'Fill data').trigger('click')
-    await flushPromises()
-
-    expect(wrapper.find('.error').exists()).toBe(false)
-    const summary = wrapper.find('.summary').text()
-    expect(summary).toContain('cargo: 2')
-    expect(summary).toContain('containers: 1')
-  })
-
-  it('điền khi setting CHƯA đọc xong ⇒ payload KHÔNG mang autoSubmit', async () => {
-    // Gửi `autoSubmit: false` placeholder sẽ bị content script dùng (vì
-    // `request.autoSubmit ?? settings.autoSubmit` coi `false` là CÓ giá trị)
-    // ⇒ opt-in đã lưu bị bỏ qua trong im lặng. Bỏ trống key ⇒ content script
-    // tự đọc setting đã lưu.
-    let resolveGet: ((values: Record<string, unknown>) => void) | undefined
-    storageGet = () =>
-      new Promise((resolve) => {
-        resolveGet = resolve
-      })
-    sendMessage = async () => ({ ok: true, items: [], cargoRows: 0, containerRows: 0 })
-
-    const wrapper = mount(PopupApp)
-    await flushPromises()
-
-    await wrapper.find('input[type="text"]').setValue('BL123')
-    await buttonByText(wrapper, 'Fill data').trigger('click')
-    await flushPromises()
-
-    const fillMessage = sentMessages.find((m) => m.type === MSG_FILL)
-    expect(fillMessage).toBeDefined()
-    // Key `autoSubmit` phải VẮNG MẶT — không phải `false`.
-    expect('autoSubmit' in (fillMessage as SentMessage)).toBe(false)
-
-    resolveGet?.({ ...DEFAULT_SETTINGS, autoSubmit: true })
-    await flushPromises()
-  })
-})
-
-describe('popup — hai khe lỗi tách biệt', () => {
-  it('lỗi lưu setting và lỗi điền cùng hiện được', async () => {
-    storageSet = async () => {
-      throw new Error('storage disabled')
-    }
-    sendMessage = async (message) => {
-      if (message.type === MSG_FILL) {
-        return {
-          ok: false,
-          message: 'The manifest could not be filled.',
-          items: [],
-          cargoRows: 0,
-          containerRows: 0,
-        }
-      }
-      return { ok: true }
-    }
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-
-    try {
-      const wrapper = mount(PopupApp)
-      await flushPromises()
-
-      await checkbox(wrapper).setValue(true)
-      await flushPromises()
-
-      await wrapper.find('input[type="text"]').setValue('BL123')
-      await buttonByText(wrapper, 'Fill data').trigger('click')
-      await flushPromises()
-
-      expect(wrapper.find('.settings-error').exists()).toBe(true)
-      expect(wrapper.find('.error').exists()).toBe(true)
-      expect(wrapper.find('.error').text()).toBe('The manifest could not be filled.')
-    } finally {
-      errorSpy.mockRestore()
-    }
-  })
-
-  it('lưu setting thành công ⇒ KHÔNG xoá lỗi điền', async () => {
-    sendMessage = async (message) => {
-      if (message.type === MSG_FILL) {
-        return {
-          ok: false,
-          message: 'The manifest could not be filled.',
-          items: [],
-          cargoRows: 0,
-          containerRows: 0,
-        }
-      }
-      return { ok: true }
-    }
-
-    const wrapper = mount(PopupApp)
-    await flushPromises()
-
-    await wrapper.find('input[type="text"]').setValue('BL123')
-    await buttonByText(wrapper, 'Fill data').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('.error').exists()).toBe(true)
-
-    await checkbox(wrapper).setValue(true)
-    await flushPromises()
-
-    // Lỗi điền vẫn còn nguyên — lưu setting KHÔNG được xoá nó.
-    expect(wrapper.find('.error').text()).toBe('The manifest could not be filled.')
-    expect(wrapper.find('.settings-error').exists()).toBe(false)
-  })
-
-  it('bắt đầu lần điền ⇒ KHÔNG xoá lỗi lưu setting', async () => {
-    storageSet = async () => {
-      throw new Error('storage disabled')
-    }
-    sendMessage = async () => ({ ok: true, items: [], cargoRows: 0, containerRows: 0 })
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-
-    try {
-      const wrapper = mount(PopupApp)
-      await flushPromises()
-
-      await checkbox(wrapper).setValue(true)
-      await flushPromises()
-      expect(wrapper.find('.settings-error').exists()).toBe(true)
-
-      await wrapper.find('input[type="text"]').setValue('BL123')
-      await buttonByText(wrapper, 'Fill data').trigger('click')
-      await flushPromises()
-
-      // Lỗi lưu setting vẫn còn — lần điền KHÔNG được xoá nó.
-      expect(wrapper.find('.settings-error').exists()).toBe(true)
-    } finally {
-      errorSpy.mockRestore()
-    }
-  })
-})
-
 describe('popup — nút Open page', () => {
-  it('điều hướng CHÍNH tab đang mở sang trang khai báo, KHÔNG tạo tab mới', async () => {
+  it('không có tab active ⇒ tạo tab mới với MANIFEST_URL', async () => {
+    activeTabId = undefined
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await buttonByText(wrapper, 'Open page').trigger('click')
+    await flushPromises()
+
+    expect(createdTabs).toEqual([MANIFEST_URL])
+    expect(tabUpdates).toEqual([])
+    expect(tabReloads).toEqual([])
+  })
+
+  it('tab active ở trang KHÁC ⇒ điều hướng tab đó, KHÔNG tạo tab mới', async () => {
     const wrapper = mount(PopupApp)
     await flushPromises()
 
