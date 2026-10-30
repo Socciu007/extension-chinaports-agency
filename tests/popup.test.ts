@@ -31,7 +31,7 @@ let storageSet: StorageSet
 let sendMessage: SendMessage
 /** Ghi lại type của mọi message đã gửi đi — để assert "KHÔNG được gửi". */
 let sentTypes: string[]
-/** Ghi lại TOÀN BỘ message đã gửi đi — để assert payload (vd `allowWrite`). */
+/** Ghi lại TOÀN BỘ message đã gửi đi — để assert payload (vd `blNo`). */
 let sentMessages: SentMessage[]
 /** Ghi lại mọi lần ĐIỀU HƯỚNG tab — để assert tab nào bị đổi URL. */
 let tabUpdates: { tabId: number; url?: string; active?: boolean }[]
@@ -121,7 +121,6 @@ function successResult(overrides: Record<string, unknown> = {}) {
     blocked: false,
     steps: ['Fetched the manifest data'],
     items: [],
-    preview: { header: {}, cargo: [], containers: [] },
     cargoRows: 0,
     containerRows: 0,
     billCreated: false,
@@ -206,14 +205,22 @@ function evidenceLine(wrapper: ReturnType<typeof mount>, blNo: string) {
   return line
 }
 
-/** Bấm nút "Preview data" — hành động CHỈ preview. */
-async function clickPreview(wrapper: ReturnType<typeof mount>): Promise<void> {
-  await buttonByText(wrapper, 'Preview data').trigger('click')
+/**
+ * Bấm nút "Create draft on site" — hành động DUY NHẤT của extension.
+ *
+ * Test phải bật opt-in TRƯỚC khi mount (`store.createOnSite = true`), nếu
+ * không nút bị disable và KHÔNG gửi message nào.
+ */
+async function clickCreate(wrapper: ReturnType<typeof mount>): Promise<void> {
+  await buttonByText(wrapper, 'Create draft on site').trigger('click')
   await flushPromises()
 }
 
 describe('popup — chạy manifest qua API', () => {
   it('ô trống ⇒ báo lỗi và KHÔNG gửi message nào', async () => {
+    // Opt-in ĐÃ bật ⇒ lần chạy thật sự bắt đầu rồi bị chặn vì ô nhập rỗng.
+    store.createOnSite = true
+
     const wrapper = mount(PopupApp)
     await flushPromises()
 
@@ -225,6 +232,8 @@ describe('popup — chạy manifest qua API', () => {
   })
 
   it('Enter ⇒ gửi đúng MỘT message, type MSG_CREATE_MANIFEST', async () => {
+    store.createOnSite = true
+
     const wrapper = mount(PopupApp)
     await flushPromises()
 
@@ -236,6 +245,7 @@ describe('popup — chạy manifest qua API', () => {
   })
 
   it('bấm hai lần liên tiếp ⇒ chỉ gửi MỘT message (khoá busy)', async () => {
+    store.createOnSite = true
     // Run treo ⇒ nếu gửi 2 lần thì site bị tạo bill hai lần và sinh dòng
     // hàng TRÙNG.
     let resolveSend: ((value: unknown) => void) | undefined
@@ -249,7 +259,7 @@ describe('popup — chạy manifest qua API', () => {
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
 
     // Giữ nguyên wrapper của nút: nhãn của nó đổi thành "Running…" khi bấm.
-    const button = buttonByText(wrapper, 'Preview data')
+    const button = buttonByText(wrapper, 'Create draft on site')
     await button.trigger('click')
     await flushPromises()
 
@@ -267,6 +277,7 @@ describe('popup — chạy manifest qua API', () => {
   })
 
   it('nút đang chạy ⇒ mang class `busy` (con trỏ "đang xử lý")', async () => {
+    store.createOnSite = true
     let resolveSend: ((value: unknown) => void) | undefined
     sendMessage = async () =>
       new Promise((resolve) => {
@@ -277,7 +288,7 @@ describe('popup — chạy manifest qua API', () => {
     await flushPromises()
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
 
-    const button = buttonByText(wrapper, 'Preview data')
+    const button = buttonByText(wrapper, 'Create draft on site')
     expect(button.classes()).not.toContain('busy')
 
     await button.trigger('click')
@@ -289,19 +300,6 @@ describe('popup — chạy manifest qua API', () => {
     await flushPromises()
 
     expect(button.classes()).not.toContain('busy')
-  })
-
-  it('"Preview data" ⇒ message có allowWrite === false', async () => {
-    const wrapper = mount(PopupApp)
-    await flushPromises()
-
-    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
-    await clickPreview(wrapper)
-
-    const message = sentMessages.find((m) => m.type === MSG_CREATE_MANIFEST)
-    expect(message).toBeDefined()
-    // Boolean THẬT — không phải `undefined`, không phải chuỗi.
-    expect(message?.allowWrite).toBe(false)
   })
 
   it('"Create draft on site" CHƯA tick ⇒ nút bị disable, KHÔNG gửi message', async () => {
@@ -319,7 +317,7 @@ describe('popup — chạy manifest qua API', () => {
     expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(0)
   })
 
-  it('"Create draft on site" ĐÃ tick ⇒ message có allowWrite === true', async () => {
+  it('"Create draft on site" ĐÃ tick ⇒ message KHÔNG mang cờ nào, chỉ có `blNo`', async () => {
     const wrapper = mount(PopupApp)
     await flushPromises()
 
@@ -334,10 +332,24 @@ describe('popup — chạy manifest qua API', () => {
 
     const message = sentMessages.find((m) => m.type === MSG_CREATE_MANIFEST)
     expect(message).toBeDefined()
-    expect(message?.allowWrite).toBe(true)
+    expect(message?.blNo).toBe('ONEYSHAGT1569600')
+    // KHÔNG còn cờ "chỉ đọc" ⇒ request chỉ có `type` + `blNo`.
+    expect(Object.keys(message ?? {}).sort()).toEqual(['blNo', 'type'])
   })
 
-  it('Enter trên ô nhập KHÔNG bao giờ chạy hành động create', async () => {
+  it('Enter khi CHƯA bật opt-in ⇒ KHÔNG gửi message nào', async () => {
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+    await wrapper.find('input[type="text"]').trigger('keyup.enter')
+    await flushPromises()
+
+    // Enter y hệt nút đang bị disable ⇒ không làm gì cả.
+    expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(0)
+  })
+
+  it('Enter khi ĐÃ bật opt-in ⇒ gửi đúng MỘT message', async () => {
     const wrapper = mount(PopupApp)
     await flushPromises()
 
@@ -349,12 +361,15 @@ describe('popup — chạy manifest qua API', () => {
     await flushPromises()
 
     const message = sentMessages.find((m) => m.type === MSG_CREATE_MANIFEST)
-    expect(message?.allowWrite).toBe(false)
+    expect(message).toBeDefined()
+    expect(message?.blNo).toBe('ONEYSHAGT1569600')
   })
 })
 
 describe('popup — lỗi vận chuyển', () => {
   it('sendMessage lỗi ⇒ báo lỗi cho operator và ghi chi tiết ra console', async () => {
+    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
+    store.createOnSite = true
     sendMessage = async () => {
       throw new Error('The message port closed before a response was received.')
     }
@@ -365,7 +380,7 @@ describe('popup — lỗi vận chuyển', () => {
       await flushPromises()
 
       await wrapper.find('input[type="text"]').setValue('BL123')
-      await clickPreview(wrapper)
+      await clickCreate(wrapper)
 
       expect(wrapper.find('.error').text()).toBe(
         'Could not reach the page. Open the manifest declaration page, reload it, and try again.',
@@ -380,6 +395,8 @@ describe('popup — lỗi vận chuyển', () => {
 
 describe('popup — hiện kết quả của lần chạy', () => {
   it('kết quả thành công ⇒ hiện các bước, số bill và report field bị trống', async () => {
+    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
+    store.createOnSite = true
     sendMessage = async () =>
       successResult({
         steps: ['Fetched the manifest data', 'Created the manifest bill on the site'],
@@ -401,11 +418,6 @@ describe('popup — hiện kết quả của lần chạy', () => {
             note: 'The API does not provide email addresses.',
           },
         ],
-        preview: {
-          header: { bill_nbr: 'ONEYSHAGT1569600', pay_way_id: '' },
-          cargo: [{ piece_num: 10, e_cargo_nam: 'STEEL COIL' }],
-          containers: [{ cntr_no: 'ABCU1234567' }],
-        },
         cargoRows: 1,
         containerRows: 1,
         billNo: 'BILL-1',
@@ -417,7 +429,7 @@ describe('popup — hiện kết quả của lần chạy', () => {
     await flushPromises()
 
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
 
     // Các bước của lần chạy — operator thấy run tới đâu.
     const steps = wrapper.find('.steps')
@@ -442,6 +454,8 @@ describe('popup — hiện kết quả của lần chạy', () => {
   })
 
   it('ghi thành công ⇒ hiện cảnh báo ghi hai lần', async () => {
+    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
+    store.createOnSite = true
     sendMessage = async () =>
       successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
 
@@ -449,7 +463,7 @@ describe('popup — hiện kết quả của lần chạy', () => {
     await flushPromises()
 
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
 
     expect(wrapper.text()).toContain(
       'The manifest was created on the site and saved as a draft (暂存).',
@@ -460,6 +474,8 @@ describe('popup — hiện kết quả của lần chạy', () => {
   })
 
   it('ghi thành công ⇒ báo operator phải tải lại danh sách manifest trên site', async () => {
+    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
+    store.createOnSite = true
     // Danh sách manifest trên site là SPA ⇒ bill vừa tạo qua API KHÔNG có
     // trong danh sách cho tới khi trang được tải lại. Nút "Open page" KHÔNG
     // reload nữa ⇒ phải nói rõ điều đó.
@@ -469,7 +485,7 @@ describe('popup — hiện kết quả của lần chạy', () => {
     await flushPromises()
 
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
 
     const billStatus = wrapper.find('.bill-status')
     expect(billStatus.exists()).toBe(true)
@@ -482,13 +498,15 @@ describe('popup — hiện kết quả của lần chạy', () => {
   })
 
   it('bill tạo được nhưng lưu chưa xong ⇒ KHÔNG nói "đã lưu"', async () => {
+    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
+    store.createOnSite = true
     sendMessage = async () => successResult({ billCreated: true, written: false })
 
     const wrapper = mount(PopupApp)
     await flushPromises()
 
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
 
     expect(wrapper.text()).toContain(
       'The manifest bill was created on the site, but saving it did not finish.',
@@ -496,40 +514,9 @@ describe('popup — hiện kết quả của lần chạy', () => {
     expect(wrapper.text()).not.toContain('saved as a draft (暂存)')
   })
 
-  it('preview: header mở sẵn, dòng hàng và container đóng; field trống hiện (blank)', async () => {
-    sendMessage = async () =>
-      successResult({
-        preview: {
-          header: { bill_nbr: 'ONEYSHAGT1569600', pay_way_id: '' },
-          cargo: [{ piece_num: 10, e_cargo_nam: 'STEEL COIL' }],
-          containers: [{ cntr_no: 'ABCU1234567' }],
-        },
-        cargoRows: 1,
-        containerRows: 1,
-      })
-
-    const wrapper = mount(PopupApp)
-    await flushPromises()
-
-    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
-    await clickPreview(wrapper)
-
-    const details = wrapper.findAll('details')
-    expect(details).toHaveLength(3)
-    // Header mở sẵn, hai khối dòng đóng.
-    expect(details[0]?.attributes('open')).toBeDefined()
-    expect(details[1]?.attributes('open')).toBeUndefined()
-    expect(details[2]?.attributes('open')).toBeUndefined()
-
-    // Nhãn lấy từ map viết HOA, key payload thì chữ thường.
-    expect(details[0]?.text()).toContain('提单号')
-    expect(details[0]?.text()).toContain('ONEYSHAGT1569600')
-    // Field trống hiện `(blank)`.
-    expect(details[0]?.text()).toContain('(blank)')
-    expect(details[1]?.text()).toContain('包装件数')
-  })
-
   it('kết quả lỗi ⇒ hiện đúng message của lần chạy', async () => {
+    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
+    store.createOnSite = true
     sendMessage = async () =>
       successResult({
         ok: false,
@@ -540,7 +527,7 @@ describe('popup — hiện kết quả của lần chạy', () => {
     await flushPromises()
 
     await wrapper.find('input[type="text"]').setValue('BL123')
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
 
     expect(wrapper.find('.error').text()).toBe(
       'No manifest was found for this bill of lading number.',
@@ -548,6 +535,8 @@ describe('popup — hiện kết quả của lần chạy', () => {
   })
 
   it('còn field bắt buộc bị trống ⇒ hiện cảnh báo và liệt kê field kèm note', async () => {
+    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
+    store.createOnSite = true
     sendMessage = async () =>
       successResult({
         blocked: true,
@@ -569,7 +558,7 @@ describe('popup — hiện kết quả của lần chạy', () => {
     await flushPromises()
 
     await wrapper.find('input[type="text"]').setValue('BL123')
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
 
     const blocked = wrapper.find('.blocked')
     expect(blocked.exists()).toBe(true)
@@ -586,7 +575,7 @@ describe('popup — hiện kết quả của lần chạy', () => {
 })
 
 describe('popup — đọc setting thất bại', () => {
-  it('storage.get lỗi ⇒ nút create TẮT, preview vẫn chạy, lỗi ở khe riêng', async () => {
+  it('storage.get lỗi ⇒ nút create TẮT, KHÔNG gửi message nào, lỗi ở khe riêng', async () => {
     // Opt-in ĐÃ lưu là `true` (đây là sự thật trong storage) nhưng lần đọc
     // hỏng ⇒ popup KHÔNG biết điều đó ⇒ KHÔNG được phép ghi lên site.
     store.createOnSite = true
@@ -611,14 +600,13 @@ describe('popup — đọc setting thất bại', () => {
       // Nút create phải TẮT — không có cách nào ghi lên site.
       expect(isDisabled(wrapper, 'Create draft on site')).toBe(true)
 
-      // Preview vẫn chạy được.
+      // Enter cũng KHÔNG chạy được — y hệt nút đang bị disable.
       await wrapper.find('input[type="text"]').setValue('BL123')
-      await clickPreview(wrapper)
+      await wrapper.find('input[type="text"]').trigger('keyup.enter')
+      await flushPromises()
 
-      const message = sentMessages.find((m) => m.type === MSG_CREATE_MANIFEST)
-      expect(message).toBeDefined()
-      expect(message?.allowWrite).toBe(false)
-      // Lỗi của setting vẫn còn nguyên sau lần chạy.
+      expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(0)
+      // Lỗi của setting vẫn còn nguyên.
       expect(wrapper.find('.settings-error').exists()).toBe(true)
     } finally {
       warnSpy.mockRestore()
@@ -918,13 +906,15 @@ describe('popup — ảnh chụp CŨ không được ghi đè giá trị mới',
 
 describe('popup — kết quả của lần chạy TRƯỚC được đánh dấu là cũ', () => {
   it('lần chạy đang bay ⇒ có dòng "đang hiện kết quả cũ"', async () => {
+    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
+    store.createOnSite = true
     sendMessage = async () => successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
 
     const wrapper = mount(PopupApp)
     await flushPromises()
 
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
 
     // Kết quả đầu tiên đang hiện, chưa có gì cũ.
     expect(wrapper.find('.bill-status').exists()).toBe(true)
@@ -938,7 +928,7 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
       new Promise((resolve) => {
         resolveSend = resolve
       })
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
 
     expect(wrapper.find('.stale-result').exists()).toBe(true)
     expect(wrapper.find('.stale-result').text()).toBe(
@@ -954,13 +944,15 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
   })
 
   it('lần chạy bị chặn vì ô nhập rỗng ⇒ kết quả cũ KHÔNG bị đánh dấu là cũ', async () => {
+    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
+    store.createOnSite = true
     sendMessage = async () => successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
 
     const wrapper = mount(PopupApp)
     await flushPromises()
 
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
 
     await wrapper.find('input[type="text"]').setValue('')
     await wrapper.find('input[type="text"]').trigger('keyup.enter')
@@ -976,13 +968,15 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
   })
 
   it('gõ bill KHÁC bill của report đang hiện ⇒ banner báo report thuộc bill KHÁC', async () => {
+    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
+    store.createOnSite = true
     sendMessage = async () => successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
 
     const wrapper = mount(PopupApp)
     await flushPromises()
 
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
 
     // Report của bill A đang hiện, ô nhập cũng là A ⇒ chưa có gì cũ.
     expect(wrapper.text()).not.toContain('Showing the previous result')
@@ -1000,20 +994,22 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
   })
 
   it('lần chạy HỎNG ⇒ banner KHÔNG nói "đang có lần chạy"', async () => {
+    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
+    store.createOnSite = true
     sendMessage = async () => successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
 
     const wrapper = mount(PopupApp)
     await flushPromises()
 
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
 
     // Lần chạy sau HỎNG: content script không còn đó.
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569601')
     sendMessage = async () => {
       throw new Error('The message port closed before a response was received.')
     }
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
 
     // Lần chạy đã hỏng ⇒ KHÔNG được nói "đang có lần chạy" (nút đã hết
     // trạng thái busy) — operator không được đứng đợi một lần chạy đã chết.
@@ -1025,6 +1021,8 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
   })
 
   it('lần chạy THÀNH CÔNG cho bill KHÁC ⇒ banner biến mất', async () => {
+    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
+    store.createOnSite = true
     sendMessage = async () => successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
 
     const wrapper = mount(PopupApp)
@@ -1032,19 +1030,21 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
 
     // Lần chạy đầu cho bill A.
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
 
     // Lần chạy sau cho bill B, THÀNH CÔNG ⇒ report trên màn hình là của B
     // ⇒ KHÔNG được gắn nhãn "của bill khác".
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569601')
     sendMessage = async () => successResult({ billCreated: true, written: true, billNo: 'BILL-2' })
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
 
     expect(wrapper.find('.stale-result').exists()).toBe(false)
     expect(wrapper.text()).toContain('Bill number: BILL-2')
   })
 
   it('lần chạy trả về KẾT QUẢ LỖI cho bill KHÁC ⇒ banner biến mất', async () => {
+    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
+    store.createOnSite = true
     sendMessage = async () => successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
 
     const wrapper = mount(PopupApp)
@@ -1052,7 +1052,7 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
 
     // Lần chạy đầu cho bill A.
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
 
     // Lần chạy sau cho bill B, site TỪ CHỐI ⇒ report MỚI (lỗi của B) thay
     // thế report cũ ⇒ report đang hiện là của B ⇒ không gắn nhãn "bill khác".
@@ -1062,7 +1062,7 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
         ok: false,
         message: 'No manifest was found for this bill of lading number.',
       })
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
 
     expect(wrapper.find('.stale-result').exists()).toBe(false)
     expect(wrapper.find('.error').text()).toBe(
@@ -1165,14 +1165,16 @@ describe('popup — hội tụ về giá trị ĐÃ LƯU trong storage', () => {
 })
 
 describe('popup — bằng chứng "bill đã có trên site"', () => {
-  it('bill ĐÃ tạo nhưng lưu chưa xong ⇒ dòng cảnh báo SỐNG LÂU qua lần preview sau', async () => {
+  it('bill ĐÃ tạo nhưng lưu chưa xong ⇒ dòng cảnh báo SỐNG LÂU qua lần chạy sau', async () => {
+    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
+    store.createOnSite = true
     sendMessage = async () => successResult({ billCreated: true, written: false })
 
     const wrapper = mount(PopupApp)
     await flushPromises()
 
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
 
     const evidence = wrapper.find('.bill-created')
     expect(evidence.exists()).toBe(true)
@@ -1181,23 +1183,25 @@ describe('popup — bằng chứng "bill đã có trên site"', () => {
     )
     expect(evidence.text()).toContain('Check the site and finish that manifest by hand.')
 
-    // Lần preview SAU: kết quả mới KHÔNG có billCreated ⇒ khối `bill-status`
+    // Lần chạy SAU: kết quả mới KHÔNG có billCreated ⇒ khối `bill-status`
     // biến mất, nhưng bằng chứng thì phải CÒN — nếu không operator tưởng
     // site chưa có bill và tạo manifest thứ hai.
     sendMessage = async () => successResult()
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
 
     expect(wrapper.find('.bill-created').exists()).toBe(true)
   })
 
   it('lần chạy bị chặn vì ô nhập rỗng ⇒ kết quả CŨ không bị xoá', async () => {
+    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
+    store.createOnSite = true
     sendMessage = async () => successResult({ billCreated: true, written: false })
 
     const wrapper = mount(PopupApp)
     await flushPromises()
 
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
     expect(wrapper.text()).toContain(
       'The manifest bill was created on the site, but saving it did not finish.',
     )
@@ -1225,7 +1229,7 @@ describe('popup — bằng chứng "bill đã có trên site"', () => {
     await flushPromises()
 
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
     expect(wrapper.find('.bill-created').exists()).toBe(true)
 
     // Lần create này lưu THÀNH CÔNG và không còn field bắt buộc bị trống ⇒
@@ -1249,7 +1253,7 @@ describe('popup — bằng chứng "bill đã có trên site"', () => {
     expect(line.text()).not.toContain('Check the site and finish that manifest by hand.')
     // Lời nhắc "đừng tạo manifest khác" phải Ở LẠI trong dòng bằng chứng: nó
     // đang nằm ở `.bill-status` — khối bị lần chạy sau xoá mất — nên nếu chỉ
-    // dựa vào đó thì sau một lần preview bất kỳ operator mất hẳn cảnh báo.
+    // dựa vào đó thì sau một lần chạy bất kỳ operator mất hẳn cảnh báo.
     expect(line.text()).toContain('Do not create another manifest for this bill number.')
   })
 
@@ -1301,7 +1305,7 @@ describe('popup — bằng chứng "bill đã có trên site"', () => {
     )
   })
 
-  it('tạo BL-A rồi preview BL-A ⇒ dòng của BL-A vẫn còn', async () => {
+  it('tạo BL-A rồi chạy lại BL-A (kết quả không có billCreated) ⇒ dòng của BL-A vẫn còn', async () => {
     store.createOnSite = true
     sendMessage = async () => successResult({ billCreated: true, written: true })
 
@@ -1312,9 +1316,9 @@ describe('popup — bằng chứng "bill đã có trên site"', () => {
     await buttonByText(wrapper, 'Create draft on site').trigger('click')
     await flushPromises()
 
-    // Lần preview thay kết quả ⇒ bằng chứng phải SỐNG LÂU trong ref riêng.
+    // Lần chạy sau thay kết quả ⇒ bằng chứng phải SỐNG LÂU trong ref riêng.
     sendMessage = async () => successResult()
-    await clickPreview(wrapper)
+    await clickCreate(wrapper)
 
     expect(evidenceLine(wrapper, 'BL-A').text()).toContain(
       'A manifest bill was already created on the site for BL-A.',

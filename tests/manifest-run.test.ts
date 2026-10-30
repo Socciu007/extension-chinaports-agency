@@ -152,25 +152,25 @@ function baseOptions(
   }
 }
 
-/** Chạy ở chế độ preview (KHÔNG ghi lên site). */
-async function preview(
+/**
+ * Chạy manifest — extension CHỈ CÓ MỘT hành động: ghi lên site
+ * (tạo bill → gắn hàng → lưu nháp).
+ */
+async function run(
   h: ReturnType<typeof harness>,
   overrides: Partial<ManifestRunOptions> = {},
 ): Promise<ManifestRunResult> {
   return runManifest(baseOptions(h, overrides))
 }
 
-/** Chạy ở chế độ ghi (tạo bill → gắn hàng → lưu). */
-async function write(
-  h: ReturnType<typeof harness>,
-  overrides: Partial<ManifestRunOptions> = {},
-): Promise<ManifestRunResult> {
-  return runManifest(baseOptions(h, { allowWrite: true, ...overrides }))
-}
-
 /** Các POST mà site đã nhận. */
 function postsOf(h: ReturnType<typeof harness>): RecordedCall[] {
   return h.site.calls.filter((call) => call.method === 'POST')
+}
+
+/** POST gắn dòng hàng (`cargo/add/`) — dòng hàng đầu tiên. */
+function cargoPostOf(h: ReturnType<typeof harness>): RecordedCall | undefined {
+  return h.site.calls.find((call) => call.url.includes('cargo/add/'))
 }
 
 /** Fixture có 2 dòng hàng (dùng để kiểm tra lỗi giữa chừng). */
@@ -246,35 +246,22 @@ function hasNullValue(value: unknown): boolean {
   return false
 }
 
-describe('runManifest — preview mode', () => {
-  it('KHÔNG gửi POST nào lên site', async () => {
-    const h = harness()
-    const result = await preview(h)
-
-    expect(result.ok).toBe(true)
-    expect(h.site.calls.length).toBeGreaterThan(0)
-    for (const call of h.site.calls) {
-      expect(call.method).toBe('GET')
-    }
-    expect(postsOf(h)).toHaveLength(0)
-    expect(result.billCreated).toBe(false)
-    expect(result.written).toBe(false)
-    expect(result.billNo).toBeUndefined()
-  })
-
+describe('runManifest — dựng payload và report', () => {
   it('dựng tên cảng tiếng Trung (KHÔNG dùng nameEn)', async () => {
     const h = harness()
-    const result = await preview(h)
+    await run(h)
 
-    expect(result.preview.header.start_port_nam).toBe('上海')
-    expect(result.preview.header.dischrg_port_nam).toBe('勿拉湾')
-    expect(result.preview.header.start_port_nam).not.toBe('SHANGHAI')
-    expect(result.preview.header.dischrg_port_nam).not.toBe('BELAWAN')
+    // Header đi lên site ở bước TẠO bill (POST đầu tiên).
+    const createPost = postsOf(h)[0]
+    expect(createPost?.body?.start_port_nam).toBe('上海')
+    expect(createPost?.body?.dischrg_port_nam).toBe('勿拉湾')
+    expect(createPost?.body?.start_port_nam).not.toBe('SHANGHAI')
+    expect(createPost?.body?.dischrg_port_nam).not.toBe('BELAWAN')
   })
 
   it('báo field BẮT BUỘC bị trống với `warn`', async () => {
     const h = harness()
-    const result = await preview(h)
+    const result = await run(h)
 
     const item = result.items.find(
       (entry) => entry.scope === 'cargo' && entry.prop === 'PACKAGE_COD',
@@ -290,7 +277,7 @@ describe('runManifest — preview mode', () => {
 
   it('báo field thường bị trống với `skip`', async () => {
     const h = harness()
-    const result = await preview(h)
+    const result = await run(h)
 
     const item = result.items.find((entry) => entry.prop === 'SHIPPER_EM_STR')
     expect(item).toBeDefined()
@@ -304,7 +291,7 @@ describe('runManifest — preview mode', () => {
 
   it('báo ĐÚNG số field bắt buộc bị trống', async () => {
     const h = harness()
-    const result = await preview(h)
+    const result = await run(h)
 
     const required = result.items.filter((entry) => entry.required === true)
     expect(required.map((entry) => entry.prop)).toEqual([
@@ -320,7 +307,7 @@ describe('runManifest — preview mode', () => {
 
   it('KHÔNG báo field bị site xoá theo loại hàng', async () => {
     const h = harness()
-    const result = await preview(h)
+    const result = await run(h)
 
     const props = result.items.map((entry) => entry.prop)
     for (const prop of [...DANGER_FIELDS, ...TEMP_FIELDS]) {
@@ -328,14 +315,14 @@ describe('runManifest — preview mode', () => {
     }
     // Fixture là hàng thường (loại `S`) ⇒ cả field nguy hiểm lẫn nhiệt độ
     // đều bị site xoá ⇒ không phải lỗi.
-    expect(result.preview.cargo[0]?.cargo_kind_cod).toBe('S')
+    expect(cargoPostOf(h)?.body?.cargo_kind_cod).toBe('S')
   })
 
   it('hàng NGUY HIỂM (D) ⇒ báo field nguy hiểm bắt buộc, KHÔNG báo field nhiệt độ', async () => {
     const h = harness(kindEnvelope('D'))
-    const result = await preview(h)
+    const result = await run(h)
 
-    expect(result.preview.cargo[0]?.cargo_kind_cod).toBe('D')
+    expect(cargoPostOf(h)?.body?.cargo_kind_cod).toBe('D')
     const cargoItems = result.items.filter((entry) => entry.scope === 'cargo')
     const required = cargoItems
       .filter((entry) => entry.required === true)
@@ -354,9 +341,9 @@ describe('runManifest — preview mode', () => {
 
   it('hàng KIỂM DỊCH (R) ⇒ báo field nhiệt độ bắt buộc, KHÔNG báo field nguy hiểm', async () => {
     const h = harness(kindEnvelope('R'))
-    const result = await preview(h)
+    const result = await run(h)
 
-    expect(result.preview.cargo[0]?.cargo_kind_cod).toBe('R')
+    expect(cargoPostOf(h)?.body?.cargo_kind_cod).toBe('R')
     const cargoItems = result.items.filter((entry) => entry.scope === 'cargo')
     const required = cargoItems
       .filter((entry) => entry.required === true)
@@ -372,9 +359,9 @@ describe('runManifest — preview mode', () => {
 
   it('hàng NGUY HIỂM + KIỂM DỊCH (G) ⇒ báo CẢ hai nhóm field bắt buộc', async () => {
     const h = harness(kindEnvelope('G'))
-    const result = await preview(h)
+    const result = await run(h)
 
-    expect(result.preview.cargo[0]?.cargo_kind_cod).toBe('G')
+    expect(cargoPostOf(h)?.body?.cargo_kind_cod).toBe('G')
     const required = result.items
       .filter((entry) => entry.scope === 'cargo' && entry.required === true)
       .map((entry) => entry.prop)
@@ -385,9 +372,9 @@ describe('runManifest — preview mode', () => {
     expect(required).toContain('SET_TEMP_NUM')
   })
 
-  it('preview mode CŨNG mang message khi còn field bắt buộc bị trống', async () => {
+  it('ghi xong VẪN mang message khi còn field bắt buộc bị trống', async () => {
     const h = harness()
-    const result = await preview(h)
+    const result = await run(h)
 
     expect(result.ok).toBe(true)
     expect(result.blocked).toBe(true)
@@ -398,7 +385,7 @@ describe('runManifest — preview mode', () => {
 
   it('mọi item đều có note', async () => {
     const h = harness()
-    const result = await preview(h)
+    const result = await run(h)
 
     expect(result.items.length).toBeGreaterThan(0)
     for (const item of result.items) {
@@ -407,24 +394,26 @@ describe('runManifest — preview mode', () => {
     }
   })
 
-  it('preview có đủ dòng hàng + dòng container, và đúng số dòng', async () => {
+  it('ghi đủ dòng hàng + dòng container, và đúng số dòng', async () => {
     const h = harness()
-    const result = await preview(h)
+    const result = await run(h)
 
     expect(result.cargoRows).toBe(1)
     expect(result.containerRows).toBe(1)
-    expect(result.preview.cargo).toHaveLength(1)
-    expect(result.preview.containers).toHaveLength(1)
-    // Mã bill chưa biết lúc dựng preview ⇒ để trống.
-    expect(result.preview.cargo[0]?.bill_no).toBe('')
-    expect(result.preview.containers[0]?.bill_no).toBe('')
+    // MỘT dòng hàng ⇒ MỘT POST `cargo/add/`.
+    expect(h.site.calls.filter((call) => call.url.includes('cargo/add/'))).toHaveLength(1)
+    // MỘT dòng container ⇒ `cntr_list` của bước LƯU có đúng một phần tử.
+    const savePost = postsOf(h)[postsOf(h).length - 1]
+    expect(savePost?.body?.cntr_list).toHaveLength(1)
+    // Dòng hàng đi lên site với mã bill DO SERVER GÁN.
+    expect(cargoPostOf(h)?.body?.bill_no).toBe('BILL-1')
   })
 })
 
-describe('runManifest — write mode', () => {
+describe('runManifest — ghi lên site', () => {
   it('gửi đúng 3 POST theo thứ tự create → cargo → save', async () => {
     const h = harness()
-    const result = await write(h)
+    const result = await run(h)
 
     expect(result.ok).toBe(true)
     const posts = postsOf(h)
@@ -442,7 +431,7 @@ describe('runManifest — write mode', () => {
   it('dòng hàng mang bill_no do server gán (nguyên văn)', async () => {
     // Mã bill CHỨA chữ thường ⇒ nếu bị uppercase thì test này bắt được.
     const h = harness({ status: 1, data: manifest }, { billNo: 'bill-1' })
-    await write(h)
+    await run(h)
 
     const cargoPost = h.site.calls.find((call) => call.url.includes('cargo/add/'))
     expect(cargoPost?.body?.bill_no).toBe('bill-1')
@@ -452,7 +441,7 @@ describe('runManifest — write mode', () => {
 
   it('bước lưu có is_all "1" + cntr_list, KHÔNG có cargo_list', async () => {
     const h = harness()
-    await write(h)
+    await run(h)
 
     const posts = postsOf(h)
     const saveBody = posts[posts.length - 1]?.body ?? {}
@@ -468,7 +457,7 @@ describe('runManifest — write mode', () => {
 
   it('KHÔNG gọi send/ upload/ deleteBill/ downloadTemplate/', async () => {
     const h = harness()
-    await write(h)
+    await run(h)
 
     for (const call of h.site.calls) {
       expect(call.url).not.toContain('send/')
@@ -480,7 +469,7 @@ describe('runManifest — write mode', () => {
 
   it('báo thành công + vẫn còn field bắt buộc phải điền tay', async () => {
     const h = harness()
-    const result = await write(h)
+    const result = await run(h)
 
     expect(result.ok).toBe(true)
     expect(result.billCreated).toBe(true)
@@ -493,7 +482,7 @@ describe('runManifest — write mode', () => {
 
   it('site tạo bill xong nhưng không trả mã bill ⇒ KHÔNG POST dòng hàng nào', async () => {
     const h = harness({ status: 1, data: manifest }, { billNo: null })
-    const result = await write(h)
+    const result = await run(h)
 
     expect(postsOf(h)).toHaveLength(1)
     expect(postsOf(h)[0]?.url).toBe(`${SITE_BASE}/`)
@@ -506,7 +495,7 @@ describe('runManifest — write mode', () => {
 
   it('dòng hàng lỗi ⇒ báo trạng thái một phần', async () => {
     const h = harness(twoGoodsEnvelope(), { failCargoIndex: 1 })
-    const result = await write(h)
+    const result = await run(h)
 
     expect(result.billCreated).toBe(true)
     expect(result.billNo).toBe('BILL-1')
@@ -520,19 +509,21 @@ describe('runManifest — write mode', () => {
 
   it('KHÔNG mutate header khi ghi (bill_no + is_all giữ nguyên)', async () => {
     const h = harness()
-    const result = await write(h)
+    await run(h)
 
     // `saveManifestContainers` copy header rồi sửa bản copy ⇒ header gốc
-    // (mà caller có thể dùng lại) không bị đổi.
-    expect(result.preview.header.is_all).toBe('0')
-    expect(result.preview.header.bill_no).toBe('')
+    // (mà caller có thể dùng lại) không bị đổi ⇒ bước TẠO bill vẫn gửi
+    // `bill_no` rỗng và `is_all` = "0" (KHÔNG phải "2" = 发送).
+    const createPost = postsOf(h)[0]
+    expect(createPost?.body?.is_all).toBe('0')
+    expect(createPost?.body?.bill_no).toBe('')
   })
 })
 
 describe('runManifest — lỗi', () => {
   it('lỗi API manifest ⇒ ok false + message đúng, KHÔNG gửi POST nào', async () => {
     const h = harness({ status: 0, data: null })
-    const result = await preview(h)
+    const result = await run(h)
 
     expect(result.ok).toBe(false)
     expect(result.message).toContain(
@@ -544,7 +535,7 @@ describe('runManifest — lỗi', () => {
 
   it('lỗi session của site (code 4000) ⇒ message đúng', async () => {
     const h = harness({ status: 1, data: manifest }, { failGet: 'getTrustCode/' })
-    const result = await preview(h)
+    const result = await run(h)
 
     expect(result.ok).toBe(false)
     expect(result.message).toContain(
@@ -557,7 +548,7 @@ describe('runManifest — lỗi', () => {
 
   it('hết hạn trước khi làm gì ⇒ không gọi mạng', async () => {
     const h = harness()
-    const result = await preview(h, { deadlineMs: 0 })
+    const result = await run(h, { deadlineMs: 0 })
 
     expect(result.ok).toBe(false)
     expect(result.message).toContain('time limit')
@@ -570,7 +561,7 @@ describe('runManifest — lỗi', () => {
     // Cửa sổ thời gian rộng (400 ms trễ vs 300 ms hạn) ⇒ không bị flake do
     // máy chậm.
     const h = harness({ status: 1, data: manifest }, { createDelayMs: 400 })
-    const result = await write(h, { deadlineMs: 300, timeoutMs: 5000 })
+    const result = await run(h, { deadlineMs: 300, timeoutMs: 5000 })
 
     const posts = postsOf(h)
     expect(posts).toHaveLength(1)
@@ -584,7 +575,7 @@ describe('runManifest — lỗi', () => {
 
   it('blNo rỗng ⇒ không gọi mạng', async () => {
     const h = harness()
-    const result = await preview(h, { blNo: '   ' })
+    const result = await run(h, { blNo: '   ' })
 
     expect(result.ok).toBe(false)
     expect(result.message).toBe('Enter a bill of lading number before running the manifest.')
@@ -597,7 +588,7 @@ describe('runManifest — lỗi', () => {
     // Dữ liệu hỏng (`cdgoods` chứa `null`) ⇒ `TypeError` lọt ra ngoài các
     // lớp lỗi của API ⇒ phải rơi vào message chung, không reject.
     const h = harness({ status: 1, data: { ...manifest, cdgoods: [null] } })
-    const result = await preview(h)
+    const result = await run(h)
 
     expect(result.ok).toBe(false)
     expect(result.message).toContain('Something went wrong while running the manifest.')
@@ -607,7 +598,7 @@ describe('runManifest — lỗi', () => {
 
   it('site từ chối tạo bill ⇒ không POST dòng hàng, cảnh báo bill có thể đã tồn tại', async () => {
     const h = harness({ status: 1, data: manifest }, { failCreate: true })
-    const result = await write(h)
+    const result = await run(h)
 
     expect(result.ok).toBe(false)
     expect(result.billCreated).toBe(false)
@@ -636,7 +627,7 @@ describe('runManifest — lỗi', () => {
 describe('runManifest — số bill ghi lên site', () => {
   it('API tra MÃ GỐC (bỏ hậu tố piece)', async () => {
     const h = harness()
-    await preview(h, { blNo: 'ONEYSHAGT1569600P1' })
+    await run(h, { blNo: 'ONEYSHAGT1569600P1' })
 
     expect(h.api.calls[0]?.url).toContain('blNo=ONEYSHAGT1569600')
     expect(h.api.calls[0]?.url).not.toContain('P1')
@@ -644,14 +635,15 @@ describe('runManifest — số bill ghi lên site', () => {
 
   it('site nhận số bill CÓ hậu tố piece', async () => {
     const h = harness()
-    const result = await preview(h, { blNo: 'ONEYSHAGT1569600P1' })
+    await run(h, { blNo: 'ONEYSHAGT1569600P1' })
 
-    expect(result.preview.header.bill_nbr).toBe('ONEYSHAGT1569600P1')
+    const createPost = postsOf(h)[0]
+    expect(createPost?.body?.bill_nbr).toBe('ONEYSHAGT1569600P1')
   })
 
   it('số bill ghi lên site KHÁC số bill của API ⇒ báo cho operator', async () => {
     const h = harness()
-    const result = await preview(h, { blNo: 'ONEYSHAGT1569600P1' })
+    const result = await run(h, { blNo: 'ONEYSHAGT1569600P1' })
 
     expect(result.steps.join('\n')).toContain(
       'The manifest will use the bill number ONEYSHAGT1569600P1 — the API returned ONEYSHAGT1569600.',
@@ -660,22 +652,23 @@ describe('runManifest — số bill ghi lên site', () => {
 
   it('số bill TRÙNG số bill của API ⇒ KHÔNG báo', async () => {
     const h = harness()
-    const result = await preview(h)
+    const result = await run(h)
 
     expect(result.steps.join('\n')).not.toContain('The manifest will use the bill number')
   })
 
   it('số bill của API KHÁC chữ HOA ⇒ KHÔNG báo nhầm (site upper-case mọi field)', async () => {
     const h = harness({ status: 1, data: { ...manifest, blNo: 'oneySHAGT1569600' } })
-    const result = await preview(h)
+    const result = await run(h)
 
-    expect(result.preview.header.bill_nbr).toBe('ONEYSHAGT1569600')
+    const createPost = postsOf(h)[0]
+    expect(createPost?.body?.bill_nbr).toBe('ONEYSHAGT1569600')
     expect(result.steps.join('\n')).not.toContain('The manifest will use the bill number')
   })
 
   it('số bill ghi lên site giữ nguyên qua cả bước TẠO bill', async () => {
     const h = harness()
-    await write(h, { blNo: 'ONEYSHAGT1569600P1' })
+    await run(h, { blNo: 'ONEYSHAGT1569600P1' })
 
     const createPost = postsOf(h)[0]
     expect(createPost?.body?.bill_nbr).toBe('ONEYSHAGT1569600P1')
@@ -693,7 +686,7 @@ describe('runManifest — số bill ghi lên site', () => {
 describe('runManifest — bên không có kênh liên hệ', () => {
   it('bên không có phone ⇒ ô điện thoại BẮT BUỘC, kèm lý do đúng', async () => {
     const h = harness(partyWithoutPhoneEnvelope())
-    const result = await preview(h)
+    const result = await run(h)
 
     const item = result.items.find((entry) => entry.prop === 'CONSIGNEE_TE_STR')
     expect(item).toBeDefined()
@@ -707,14 +700,14 @@ describe('runManifest — bên không có kênh liên hệ', () => {
 
   it('bên CÓ phone ⇒ KHÔNG có dòng báo cho ô điện thoại đó', async () => {
     const h = harness()
-    const result = await preview(h)
+    const result = await run(h)
 
     expect(result.items.map((entry) => entry.prop)).not.toContain('CONSIGNEE_TE_STR')
   })
 
   it('các ô EMAIL / FAX giữ NGUYÊN note cũ (không phải bắt buộc)', async () => {
     const h = harness(partyWithoutPhoneEnvelope())
-    const result = await preview(h)
+    const result = await run(h)
 
     const email = result.items.find((entry) => entry.prop === 'CONSIGNEE_EM_STR')
     expect(email?.required).toBe(false)
@@ -724,7 +717,7 @@ describe('runManifest — bên không có kênh liên hệ', () => {
 
   it('bên không có phone ⇒ vẫn GHI được (bắt buộc chỉ là cảnh báo)', async () => {
     const h = harness(partyWithoutPhoneEnvelope())
-    const result = await write(h)
+    const result = await run(h)
 
     expect(result.ok).toBe(true)
     expect(result.written).toBe(true)
@@ -743,7 +736,7 @@ describe('runManifest — bên không có kênh liên hệ', () => {
 describe('runManifest — số không parse được', () => {
   it('báo "could not be parsed", KHÔNG phải "does not provide"', async () => {
     const h = harness(unparsableWeightEnvelope())
-    const result = await preview(h)
+    const result = await run(h)
 
     const item = result.items.find(
       (entry) => entry.scope === 'cargo' && entry.prop === 'GWEIGHT_TON',
@@ -757,7 +750,7 @@ describe('runManifest — số không parse được', () => {
 
   it('body gửi đi KHÔNG có null, số không parse được đi ra là 0', async () => {
     const h = harness(unparsableWeightEnvelope())
-    await write(h)
+    await run(h)
 
     const cargoPost = h.site.calls.find((call) => call.url.includes('cargo/add/'))
     expect(cargoPost?.body?.gweight_ton).toBe(0)

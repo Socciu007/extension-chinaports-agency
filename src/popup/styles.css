@@ -19,7 +19,7 @@ body {
   display: flex;
   gap: 6px;
   align-items: center;
-  /* Ba nút không vừa 360px ⇒ cho phép xuống hàng thay vì chữ vỡ trong nút. */
+  /* Các nút không vừa 360px ⇒ cho phép xuống hàng thay vì chữ vỡ trong nút. */
   flex-wrap: wrap;
 }
 
@@ -232,36 +232,4 @@ td.note {
   color: #57606a;
   max-width: 150px;
   overflow-wrap: anywhere;
-}
-
-/* Khối preview — payload mà extension dựng ra. */
-details.preview {
-  margin-top: 8px;
-  border: 1px solid #d0d7de;
-  border-radius: 6px;
-  padding: 4px 8px;
-}
-
-details.preview > summary {
-  cursor: pointer;
-  font-weight: 600;
-}
-
-details.preview table {
-  table-layout: fixed;
-}
-
-details.preview td.field,
-details.preview th {
-  width: 45%;
-  overflow-wrap: anywhere;
-}
-
-details.preview td.value {
-  overflow-wrap: anywhere;
-}
-
-details.preview td.row-index {
-  width: 34px;
-  color: #57606a;
 }

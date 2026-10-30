@@ -3,7 +3,7 @@
  *
  * MAIN ROUTE: API.
  *
- *  popup → `MSG_CREATE_MANIFEST` → `runManifest` (read manifest from API outside → read site dicts → build payload → (optional) write to site).
+ *  popup → `MSG_CREATE_MANIFEST` → `runManifest` (read manifest from API outside → read site dicts → build payload → write to site).
  *
  * `runManifest` does not reject ⇒ any error becomes `CreateResult` with `ok: false` + `message` in English.
  */
@@ -55,7 +55,6 @@ function errorResult(message: string): CreateResult {
     blocked: false,
     steps: [],
     items: [],
-    preview: { header: {}, cargo: [], containers: [] },
     cargoRows: 0,
     containerRows: 0,
     billCreated: false,
@@ -231,7 +230,6 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
     )
   }
 
-  const allowWrite = request.allowWrite === true
   // Key chốt = số bill ĐÃ GHI LÊN SITE (giữ hậu tố piece) — KHÔNG phải mã
   // gốc mà API tra cứu.
   //
@@ -250,7 +248,7 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
   // lúc vẫn có thể cùng vượt qua — cả hai đọc trước khi ai kịp ghi. Chốt
   // chặn được trường hợp PHỔ BIẾN (chạy lại ở tab khác, hoặc sau khi đóng
   // tab), không chặn được cái tranh chấp đúng giây đó.
-  if (allowWrite && (await loadCreatedBillNos()).has(billKey)) {
+  if ((await loadCreatedBillNos()).has(billKey)) {
     return errorResult(
       'A manifest was already created on the site for this bill of lading number. Check the site and finish that manifest by hand — the extension does not create a second manifest for the same bill. If the site no longer has that manifest, clear the storage of the Manifest Autofill extension for this browser and run again.',
     )
@@ -261,7 +259,7 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
   // Chốt ghi lên site: popup KHÔNG phải nguồn sự thật — setting ĐÃ LƯU mới
   // là. `readSettings()` trả `DEFAULT_SETTINGS` khi đọc hỏng ⇒ `createOnSite`
   // = `false` ⇒ fail closed.
-  if (allowWrite && settings.createOnSite !== true) {
+  if (settings.createOnSite !== true) {
     return errorResult(
       'Creating the manifest on the site is turned off in the extension settings.',
     )
@@ -272,7 +270,6 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
 
   const result = await runManifest({
     blNo: request.blNo,
-    allowWrite,
     apiBase,
     siteApiBase,
     // KHÔNG chụp cookie lúc bắt đầu: site có thể xoay token giữa hai lần

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { billNoAsWritten } from '../core/api'
-import { isBlankPayloadValue, labelOf } from '../core/field-meta'
 import { DeadlineError, withDeadline } from '../core/http'
 import {
   readSettingsResult,
@@ -42,8 +41,6 @@ const blNo = ref('')
 const createOnSite = ref(false)
 /** Đang chạy một lần run — khóa nút để không gửi hai message cùng lúc. */
 const busy = ref(false)
-/** Hành động đang chạy — để đổi nhãn của ĐÚNG nút đang bấm. */
-const runningAction = ref<'preview' | 'create' | null>(null)
 /** Lỗi của lần chạy (vận chuyển, hết hạn, hoặc `message` của kết quả). */
 const runError = ref('')
 /** Lỗi khi lưu setting — RIÊNG, không đè lên lỗi của lần chạy. */
@@ -148,7 +145,7 @@ const billEvidence = computed<BillEvidence[]>(() =>
  *
  * Câu "Do not create another manifest for this bill number." LUÔN có mặt:
  * nó đang nằm ở `.bill-status` (khối bị lần chạy sau xoá mất) ⇒ chỉ dựa
- * vào đó thì sau một lần preview bất kỳ, operator mất hẳn lời nhắc. Dùng
+ * vào đó thì sau một lần chạy bất kỳ, operator mất hẳn lời nhắc. Dùng
  * ĐÚNG câu của `.double-write` để hai nơi nói như nhau.
  *
  * Câu này KHÔNG nói "chạy lại sẽ tạo manifest thứ hai": trong CHÍNH tab đó
@@ -161,7 +158,7 @@ const billEvidence = computed<BillEvidence[]>(() =>
  * thì dòng này vẫn phải nói rõ operator phải TỰ submit trên site: extension
  * chỉ lưu nháp, KHÔNG BAO GIỜ submit, và câu "saved as a draft (暂存)" chỉ
  * nằm ở `.bill-status` — khối bị lần chạy sau xoá mất ⇒ không nói ở đây thì
- * sau một lần preview bất kỳ operator tưởng đã xong.
+ * sau một lần chạy bất kỳ operator tưởng đã xong.
  */
 function evidenceText(entry: BillEvidence): string {
   const base = `A manifest bill was already created on the site for ${entry.blNo}.`
@@ -213,85 +210,21 @@ function icon(item: ReportItem): string {
   return '⏭'
 }
 
-/** Một dòng của bảng preview — field (có nhãn) + giá trị đã hiển thị. */
-interface PreviewRow {
-  /** số thứ tự của dòng hàng / container (chỉ có với hai loại đó) */
-  row?: number
-  /** key của payload (chữ thường) */
-  field: string
-  /** nhãn hiển thị của field */
-  label: string
-  /** giá trị đã hiển thị — `(blank)` nếu field trống */
-  value: string
-}
-
-/**
- * Giá trị để hiển thị — field trống hiện `(blank)`.
- *
- * Quy tắc "trống" là quy tắc CỦA PAYLOAD (`isBlankPayloadValue`) — cùng quy
- * tắc với report của `manifest-run.ts` ⇒ preview KHÔNG trái với report (report
- * liệt kê đúng những field đã hiện `(blank)` ở đây).
- */
-function displayValue(value: unknown): string {
-  if (isBlankPayloadValue(value)) return '(blank)'
-  if (typeof value === 'string') return value
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  try {
-    return JSON.stringify(value) ?? '(blank)'
-  } catch {
-    return String(value)
-  }
-}
-
-const headerRows = computed<PreviewRow[]>(() => {
-  const header = result.value?.preview?.header ?? {}
-  return Object.entries(header).map(([key, value]) => ({
-    field: key,
-    // Key của payload là CHỮ THƯỜNG, còn bảng nhãn key theo TÊN FIELD VIẾT HOA.
-    label: labelOf('header', key.toUpperCase()),
-    value: displayValue(value),
-  }))
-})
-
-const cargoRows = computed<PreviewRow[]>(() =>
-  (result.value?.preview?.cargo ?? []).flatMap((row, index) =>
-    Object.entries(row).map(([key, value]) => ({
-      row: index + 1,
-      field: key,
-      label: labelOf('cargo', key.toUpperCase()),
-      value: displayValue(value),
-    })),
-  ),
-)
-
-const containerRows = computed<PreviewRow[]>(() =>
-  (result.value?.preview?.containers ?? []).flatMap((row, index) =>
-    Object.entries(row).map(([key, value]) => ({
-      row: index + 1,
-      field: key,
-      label: labelOf('container', key.toUpperCase()),
-      value: displayValue(value),
-    })),
-  ),
-)
-
 async function activeTabId(): Promise<number | undefined> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
   return tab?.id
 }
 
 /**
- * Chạy manifest.
+ * Chạy manifest — hành động DUY NHẤT của extension.
  *
- * `allowWrite` = `false` ⇒ CHỈ preview (không POST nào lên site);
- * `allowWrite` = `true` ⇒ ghi lên site (tạo bill + gắn hàng + lưu nháp).
- *
- * `allowWrite` chỉ được là `true` khi hành động là "create" VÀ operator đã
- * opt-in — nếu không thì lần chạy bị bỏ qua, không gửi message nào.
+ * Ghi lên site (tạo bill + gắn hàng + lưu nháp) ⇒ CHỈ chạy khi operator đã
+ * opt-in "Create the manifest on the site". Nếu không thì lần chạy bị bỏ qua,
+ * không gửi message nào — y hệt nút đang bị disable.
  */
-async function run(allowWrite: boolean): Promise<void> {
+async function run(): Promise<void> {
   if (busy.value) return
-  if (allowWrite && !createOptIn.value) return
+  if (!createOptIn.value) return
 
   runError.value = ''
   const value = blNo.value.trim()
@@ -305,16 +238,12 @@ async function run(allowWrite: boolean): Promise<void> {
   // rỗng thì `busy` không bao giờ lên true ⇒ kết quả cũ vẫn là kết quả
   // hiện hành (không có lần chạy nào mới để gán nhầm).
   busy.value = true
-  runningAction.value = allowWrite ? 'create' : 'preview'
   try {
     const tabId = await activeTabId()
     if (tabId === undefined) throw new Error('no active tab')
-    // `allowWrite` LUÔN là boolean — không bao giờ `undefined`, không bao giờ
-    // là chuỗi ⇒ content script kiểm tra `=== true` một cách chắc chắn.
     const request: CreateRequest = {
       type: MSG_CREATE_MANIFEST,
       blNo: value,
-      allowWrite,
     }
     const res = (await withDeadline(
       chrome.tabs.sendMessage(tabId, request),
@@ -332,8 +261,8 @@ async function run(allowWrite: boolean): Promise<void> {
 
     if (res.billCreated === true) {
       // Site ĐÃ có manifest cho số bill này ⇒ ghi nhớ, VÀO MỘT BẢNG RIÊNG
-      // (không gắn vào `result`) ⇒ một lần preview hay một số bill khác không
-      // xoá được bằng chứng này.
+      // (không gắn vào `result`) ⇒ một lần chạy sau hay một số bill khác
+      // không xoá được bằng chứng này.
       //
       // Manifest còn DỞ khi: lưu hỏng (`written` = false) HOẶC còn field BẮT
       // BUỘC bị trống (`blocked` = true) ⇒ operator vẫn phải điền tay.
@@ -352,7 +281,6 @@ async function run(allowWrite: boolean): Promise<void> {
         : 'Could not reach the page. Open the manifest declaration page, reload it, and try again.'
   } finally {
     busy.value = false
-    runningAction.value = null
   }
 }
 
@@ -416,7 +344,8 @@ async function openPage(): Promise<void> {
  * Bật/tắt opt-in create-on-site.
  *
  * Checkbox này là opt-in DUY NHẤT cho hành động ghi lên site: nút "Create
- * draft on site" chỉ bật khi opt-in đã LƯU, và chính popup gửi `allowWrite`.
+ * draft on site" chỉ bật khi opt-in đã LƯU, và content script tự kiểm tra
+ * lại setting ĐÃ LƯU trước khi ghi.
  */
 async function onToggleCreateOnSite(): Promise<void> {
   // Đang lưu ⇒ bỏ qua lần click này và đưa checkbox về giá trị đã lưu thật.
@@ -559,7 +488,7 @@ onUnmounted(() => {
         v-model="blNo"
         type="text"
         placeholder="Bill of lading number (提单号)"
-        @keyup.enter="run(false)"
+        @keyup.enter="run()"
       />
     </div>
 
@@ -568,19 +497,10 @@ onUnmounted(() => {
         type="button"
         class="primary"
         :class="{ busy }"
-        :disabled="busy"
-        @click="run(false)"
-      >
-        {{ runningAction === 'preview' ? 'Running…' : 'Preview data' }}
-      </button>
-      <button
-        type="button"
-        class="secondary"
-        :class="{ busy }"
         :disabled="busy || !createOptIn"
-        @click="run(true)"
+        @click="run()"
       >
-        {{ runningAction === 'create' ? 'Running…' : 'Create draft on site' }}
+        {{ busy ? 'Running…' : 'Create draft on site' }}
       </button>
       <button type="button" @click="openPage">Open page</button>
     </div>
@@ -666,7 +586,7 @@ onUnmounted(() => {
     <!--
       Bằng chứng "bill đã có trên site" — SỐNG LÂU, không bị run sau xoá mất.
       Nằm NGOÀI khối `bill-status` vì khối đó bám vào `result` (kết quả mới thay
-      thế kết quả cũ) ⇒ một lần preview là mất cảnh báo. MỘT DÒNG cho mỗi
+      thế kết quả cũ) ⇒ một lần chạy là mất cảnh báo. MỘT DÒNG cho mỗi
       số bill: BL-A đang dở thì BL-B chạy sau không được làm mất nhắc nhở về
       BL-A.
     -->
@@ -703,57 +623,5 @@ onUnmounted(() => {
         </tr>
       </tbody>
     </table>
-
-    <details v-if="result" class="preview" open>
-      <summary>Header</summary>
-      <table class="table">
-        <tbody>
-          <tr v-for="row in headerRows" :key="row.field">
-            <td class="field">{{ row.label }}</td>
-            <td class="value">{{ row.value }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </details>
-
-    <details v-if="result" class="preview">
-      <summary>Cargo rows ({{ cargoRowCount }})</summary>
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Row</th>
-            <th>Field</th>
-            <th>Value</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(row, index) in cargoRows" :key="`${row.row}-${row.field}-${index}`">
-            <td class="row-index">{{ row.row }}</td>
-            <td class="field">{{ row.label }}</td>
-            <td class="value">{{ row.value }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </details>
-
-    <details v-if="result" class="preview">
-      <summary>Container rows ({{ containerRowCount }})</summary>
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Row</th>
-            <th>Field</th>
-            <th>Value</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(row, index) in containerRows" :key="`${row.row}-${row.field}-${index}`">
-            <td class="row-index">{{ row.row }}</td>
-            <td class="field">{{ row.label }}</td>
-            <td class="value">{{ row.value }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </details>
   </div>
 </template>

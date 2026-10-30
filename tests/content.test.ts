@@ -316,7 +316,7 @@ describe('content script — chạy manifest qua API', () => {
     const fake = fakeFetch()
     vi.stubGlobal('fetch', fake.fetchImpl)
 
-    const result = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, allowWrite: true })
+    const result = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO })
 
     expect(result.message).not.toBe(WRONG_PAGE_MESSAGE)
     expect(result.ok).toBe(true)
@@ -368,23 +368,11 @@ describe('content script — chạy manifest qua API', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('KHÔNG có allowWrite ⇒ KHÔNG POST lên site (chỉ preview)', async () => {
+  it('tạo bill + gắn dòng hàng + lưu bill', async () => {
     const fake = fakeFetch()
     vi.stubGlobal('fetch', fake.fetchImpl)
 
     const result = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO })
-
-    expect(result.ok).toBe(true)
-    expect(fake.calls.filter((call) => call.method === 'POST')).toHaveLength(0)
-    expect(result.billCreated).toBe(false)
-    expect(result.written).toBe(false)
-  })
-
-  it('allowWrite: true ⇒ tạo bill + gắn dòng hàng + lưu bill', async () => {
-    const fake = fakeFetch()
-    vi.stubGlobal('fetch', fake.fetchImpl)
-
-    const result = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, allowWrite: true })
 
     const posts = fake.calls.filter((call) => call.method === 'POST')
     expect(posts).toHaveLength(3)
@@ -398,20 +386,17 @@ describe('content script — chạy manifest qua API', () => {
     expect(result.billNo).toBe('BILL-1')
   })
 
-  it('allowWrite là CHUỖI ⇒ KHÔNG POST lên site (opt-in phải là boolean true)', async () => {
+  it('opt-in ĐÃ LƯU đang bật ⇒ KHÔNG có cờ nào trong request, vẫn ghi lên site', async () => {
+    // Request KHÔNG còn mang cờ "chỉ đọc" ⇒ mọi request đều ghi lên
+    // site (sau khi qua chốt opt-in ĐÃ LƯU).
     const fake = fakeFetch()
     vi.stubGlobal('fetch', fake.fetchImpl)
 
-    const result = await send({
-      type: MSG_CREATE_MANIFEST,
-      blNo: BL_NO,
-      allowWrite: 'true',
-    })
+    const result = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO })
 
     expect(result.ok).toBe(true)
-    expect(fake.calls.filter((call) => call.method === 'POST')).toHaveLength(0)
-    expect(result.billCreated).toBe(false)
-    expect(result.written).toBe(false)
+    expect(result.written).toBe(true)
+    expect(fake.calls.filter((call) => call.method === 'POST').length).toBeGreaterThan(0)
   })
 
   it('ghi hai lần cùng số bill ⇒ lần hai bị từ chối, KHÔNG POST thêm', async () => {
@@ -421,7 +406,6 @@ describe('content script — chạy manifest qua API', () => {
     const first = await send({
       type: MSG_CREATE_MANIFEST,
       blNo: BL_NO,
-      allowWrite: true,
     })
     expect(first.ok).toBe(true)
     expect(first.written).toBe(true)
@@ -433,7 +417,6 @@ describe('content script — chạy manifest qua API', () => {
     const second = await send({
       type: MSG_CREATE_MANIFEST,
       blNo: BL_NO.toLowerCase(),
-      allowWrite: true,
     })
 
     expect(second.ok).toBe(false)
@@ -454,7 +437,6 @@ describe('content script — chạy manifest qua API', () => {
     const first = await send({
       type: MSG_CREATE_MANIFEST,
       blNo: `${BL_NO}P1`,
-      allowWrite: true,
     })
     expect(first.ok).toBe(true)
     expect(first.written).toBe(true)
@@ -462,7 +444,6 @@ describe('content script — chạy manifest qua API', () => {
     const second = await send({
       type: MSG_CREATE_MANIFEST,
       blNo: `${BL_NO}P2`,
-      allowWrite: true,
     })
     expect(second.ok).toBe(true)
     expect(second.written).toBe(true)
@@ -475,7 +456,6 @@ describe('content script — chạy manifest qua API', () => {
     const first = await send({
       type: MSG_CREATE_MANIFEST,
       blNo: `${BL_NO}P1`,
-      allowWrite: true,
     })
     expect(first.ok).toBe(true)
 
@@ -484,7 +464,6 @@ describe('content script — chạy manifest qua API', () => {
     const second = await send({
       type: MSG_CREATE_MANIFEST,
       blNo: `${BL_NO}P1`,
-      allowWrite: true,
     })
     expect(second.ok).toBe(false)
     expect(second.message).toBe(DUPLICATE_MESSAGE)
@@ -495,19 +474,19 @@ describe('content script — chạy manifest qua API', () => {
     const fake = fakeFetch()
     vi.stubGlobal('fetch', fake.fetchImpl)
 
-    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-A', allowWrite: true })
+    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-A' })
     expect(first.ok).toBe(true)
     expect(first.written).toBe(true)
 
     // Bill KHÁC ghi đè bill trước đó — chốt phải nhớ TẤT CẢ, không chỉ bill
     // cuối cùng, nếu không lần chạy lại cho A sẽ lọt.
-    const second = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-B', allowWrite: true })
+    const second = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-B' })
     expect(second.ok).toBe(true)
     expect(second.written).toBe(true)
 
     const postsBeforeThird = fake.calls.filter((call) => call.method === 'POST').length
 
-    const third = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-A', allowWrite: true })
+    const third = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-A' })
     expect(third.ok).toBe(false)
     expect(third.message).toBe(DUPLICATE_MESSAGE)
     expect(third.billCreated).toBe(false)
@@ -521,7 +500,7 @@ describe('content script — chạy manifest qua API', () => {
     const fake = fakeFetch({ failSave: true })
     vi.stubGlobal('fetch', fake.fetchImpl)
 
-    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-C', allowWrite: true })
+    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-C' })
     // Site ĐÃ tạo bill nhưng bước lưu hỏng ⇒ `billCreated` mà CHƯA `written`.
     expect(first.billCreated).toBe(true)
     expect(first.written).toBe(false)
@@ -530,7 +509,7 @@ describe('content script — chạy manifest qua API', () => {
     const postsAfterFirst = fake.calls.filter((call) => call.method === 'POST').length
 
     // Chốt phải ghi nhớ khi bill ĐÃ có trên site, không chờ tới khi lưu xong.
-    const second = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-C', allowWrite: true })
+    const second = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-C' })
     expect(second.ok).toBe(false)
     expect(second.message).toBe(DUPLICATE_MESSAGE)
     expect(second.billCreated).toBe(false)
@@ -544,14 +523,14 @@ describe('content script — chạy manifest qua API', () => {
     const fake = fakeFetch()
     vi.stubGlobal('fetch', fake.fetchImpl)
 
-    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-D', allowWrite: true })
+    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-D' })
     expect(first.written).toBe(true)
 
     // Nạp lại module content script — giống reload trang.
     vi.resetModules()
     await import('../src/content/index')
 
-    const second = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-D', allowWrite: true })
+    const second = await send({ type: MSG_CREATE_MANIFEST, blNo: 'BL-D' })
     expect(second.ok).toBe(false)
     expect(second.message).toBe(DUPLICATE_MESSAGE)
     expect(second.billCreated).toBe(false)
@@ -562,7 +541,7 @@ describe('content script — chạy manifest qua API', () => {
     const fake = fakeFetch()
     vi.stubGlobal('fetch', fake.fetchImpl)
 
-    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, allowWrite: true })
+    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO })
     expect(first.written).toBe(true)
 
     // Chốt phải nằm trong `chrome.storage.local` (CHUNG cho mọi tab) chứ không
@@ -577,7 +556,7 @@ describe('content script — chạy manifest qua API', () => {
     const fake = fakeFetch()
     vi.stubGlobal('fetch', fake.fetchImpl)
 
-    await send({ type: MSG_CREATE_MANIFEST, blNo: `${BL_NO}P1`, allowWrite: true })
+    await send({ type: MSG_CREATE_MANIFEST, blNo: `${BL_NO}P1` })
 
     // Key là số bill ĐÃ GHI LÊN SITE (giữ hậu tố piece) — KHÔNG phải mã gốc.
     expect(localSet).toHaveBeenCalledWith({
@@ -590,7 +569,7 @@ describe('content script — chạy manifest qua API', () => {
     const fake = fakeFetch()
     vi.stubGlobal('fetch', fake.fetchImpl)
 
-    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, allowWrite: true })
+    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO })
     expect(first.written).toBe(true)
     const postsAfterFirst = fake.calls.filter((call) => call.method === 'POST').length
 
@@ -604,7 +583,7 @@ describe('content script — chạy manifest qua API', () => {
     const tab2Module: string = '../src/content/index?tab2'
     await import(tab2Module)
 
-    const second = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, allowWrite: true })
+    const second = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO })
 
     // Chốt nằm trong `chrome.storage.local` ⇒ tab mới vẫn thấy ⇒ từ chối.
     expect(second.ok).toBe(false)
@@ -620,7 +599,7 @@ describe('content script — chạy manifest qua API', () => {
     const fake = fakeFetch()
     vi.stubGlobal('fetch', fake.fetchImpl)
 
-    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, allowWrite: true })
+    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO })
     expect(first.written).toBe(true)
 
     // Operator xoá nháp trên site rồi xoá storage của extension ⇒ phải chạy
@@ -628,7 +607,7 @@ describe('content script — chạy manifest qua API', () => {
     // trong message từ chối sẽ là lời nói dối.
     for (const key of Object.keys(localStore)) delete localStore[key]
 
-    const second = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, allowWrite: true })
+    const second = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO })
     expect(second.ok).toBe(true)
     expect(second.written).toBe(true)
   })
@@ -655,13 +634,13 @@ describe('content script — chạy manifest qua API', () => {
     vi.resetModules()
     await import('../src/content/index')
 
-    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, allowWrite: true })
+    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO })
     expect(first.written).toBe(true)
     expect(localSet).not.toHaveBeenCalled()
 
     // Đường dự phòng vẫn chốt được (trong `sessionStorage` của tab này).
     const postsAfterFirst = fake.calls.filter((call) => call.method === 'POST').length
-    const second = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, allowWrite: true })
+    const second = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO })
     expect(second.ok).toBe(false)
     expect(second.message).toBe(DUPLICATE_MESSAGE)
     expect(fake.calls.filter((call) => call.method === 'POST')).toHaveLength(postsAfterFirst)
@@ -675,7 +654,6 @@ describe('content script — chạy manifest qua API', () => {
     const result = await send({
       type: MSG_CREATE_MANIFEST,
       blNo: BL_NO,
-      allowWrite: true,
     })
 
     expect(result.ok).toBe(false)

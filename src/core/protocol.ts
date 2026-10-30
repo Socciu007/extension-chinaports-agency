@@ -55,8 +55,6 @@ export interface CreateRequest {
    * bill GHI LÊN SITE giữ nguyên hậu tố.
    */
   blNo: string
-  /** `true` ⇒ ghi lên site (tạo bill + gắn hàng + lưu nháp). Thiếu/`false` ⇒ CHỈ preview, KHÔNG POST. */
-  allowWrite?: boolean
   /** Base URL của API manifest bên ngoài. */
   apiBase?: string
   /** Base URL của API của site. */

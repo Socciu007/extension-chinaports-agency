@@ -1,6 +1,6 @@
 /**
  * Tầng điều phối của luồng manifest — gọi API manifest, dựng body của site,
- * báo cáo field bị bỏ trống, và (tuỳ chọn) ghi lên site.
+ * báo cáo field bị bỏ trống, và ghi lên site.
  *
  * Luồng:
  *
@@ -8,7 +8,7 @@
  *   2) `loadSiteDicts`      — lấy dict của site (承运人, 交货条款, 箱型, 尺寸…)
  *   3) `build*Payload`      — dựng header + dòng hàng + dòng container
  *   4) dựng report          — liệt kê field BỊ BỎ TRỐNG (kèm lý do)
- *   5) nếu `allowWrite`     — tạo bill → gắn dòng hàng → lưu bill + container
+ *   5) ghi lên site         — tạo bill → gắn dòng hàng → lưu bill + container
  *
  * `runManifest` KHÔNG BAO GIỜ reject: mọi lỗi được đổi thành
  * `ManifestRunResult` với `ok: false` + `message` tiếng Anh.
@@ -73,8 +73,6 @@ export interface ManifestRunOptions {
    * bill GHI LÊN SITE giữ nguyên hậu tố.
    */
   blNo: string
-  /** `true` ⇒ ghi lên site. Thiếu / `false` ⇒ CHỈ preview, KHÔNG gửi POST nào. */
-  allowWrite?: boolean
   /** Base URL của API manifest bên ngoài. */
   apiBase?: string
   /** Base URL của API site. */
@@ -102,12 +100,6 @@ export interface ManifestRunOptions {
   deadlineMs?: number
 }
 
-export interface ManifestRunPreview {
-  header: HeaderPayload
-  cargo: Record<string, unknown>[]
-  containers: Record<string, unknown>[]
-}
-
 export interface ManifestRunResult {
   /** Run không gặp lỗi (không lỗi mạng / API ngoài / site). */
   ok: boolean
@@ -119,7 +111,6 @@ export interface ManifestRunResult {
   steps: string[]
   /** Các field bị bỏ trống. */
   items: ReportItem[]
-  preview: ManifestRunPreview
   cargoRows: number
   containerRows: number
   /** Mã bill do server gán — chỉ có sau khi tạo bill thành công. */
@@ -401,7 +392,6 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
   /** Hạn của lần chạy — tính một lần, lúc bắt đầu run. */
   const deadlineAt = Date.now() + (options?.deadlineMs ?? DEFAULT_DEADLINE_MS)
 
-  let preview: ManifestRunPreview = { header: {}, cargo: [], containers: [] }
   let cargoRows = 0
   let containerRows = 0
   let billNo: string | undefined
@@ -448,7 +438,6 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
       blocked: requiredCount > 0,
       steps,
       items,
-      preview,
       cargoRows,
       containerRows,
       billCreated,
@@ -505,21 +494,12 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
 
     cargoRows = cargoPayloads.length
     containerRows = containerPayloads.length
-    // `NaN` (số không parse được) KHÔNG sống sót qua ranh giới message
-    // content → popup: Chrome JSON-serialise message ⇒ popup nhận `null`,
-    // không phải `NaN`. Lý do "không parse được" vì vậy phải được nói ở
-    // REPORT (dựng trong content script), KHÔNG ở preview.
-    preview = { header, cargo: cargoPayloads, containers: containerPayloads }
-
+    // Lý do "không parse được" phải nằm ở REPORT (đi qua ranh giới message
+    // content → popup: Chrome JSON-serialise message ⇒ `NaN` thành `null`,
+    // không phải `NaN`), KHÔNG ở payload gửi lên site.
     items.push(...reportHeader(header))
     items.push(...reportCargo(cargoPayloads, kinds))
     items.push(...reportContainers(containerPayloads))
-
-    // KHÔNG ghi (preview) ⇒ dừng luôn ở đây, KHÔNG gửi POST nào.
-    if (options.allowWrite !== true) {
-      steps.push('Preview only — nothing was written to the site')
-      return buildResult({ ok: true })
-    }
 
     // 1) Tạo bill — server gán mã bill nội bộ.
     checkDeadline('creating the manifest bill')
