@@ -7,7 +7,6 @@ import {
   readSettingsResult,
   saveSettings,
   subscribeSettingsChanges,
-  type SettingsChange,
 } from '../core/options'
 import {
   MSG_CREATE_MANIFEST,
@@ -60,16 +59,52 @@ const savedCreateOnSite = ref(false)
 /** Đang lưu setting create-on-site — khoá control để không có 2 lần ghi chồng nhau. */
 const saving = ref(false)
 /**
- * Số bill mà site ĐÃ tạo manifest — bằng chứng KHÔNG được mất.
+ * Số bill mà site ĐÃ có manifest — bằng chứng phải SỐNG LÂU.
  *
- * Kết quả của lần chạy có thể bị thay thế bởi lần chạy sau (một lần preview
- * chẳng hạn) ⇒ nếu chỉ dựa vào `result` thì bằng chứng "bill đã có trên site"
- * biến mất và operator sẽ tạo manifest thứ hai cho cùng một số bill.
+ * Mỗi entry là số bill; `true` = manifest đó còn DỞ (site đã tạo bill nhưng
+ * lưu hỏng, hoặc còn field BẮT BUỘC bị trống) ⇒ operator phải điền tay.
  *
- * Chỉ bị xoá khi operator tạo manifest cho một số bill KHÁC, hoặc khi
- * manifest của chính số bill này đã lưu xong.
+ * KHÔNG bao giờ xoá vì một lần chạy khác: BL-A đang dở thì BL-B chạy sau
+ * không được làm mất nhắc nhở về BL-A. Key là số bill ĐÃ CHUẨN HOÁ — cùng
+ * một số bill thì cùng một entry (giống hệt cách content script chốt).
  */
-const billCreatedBlNo = ref('')
+const manifestBills = ref<Record<string, boolean>>({})
+
+/**
+ * Kết quả đang hiện là của lần chạy TRƯỚC, không phải của lần đang chạy.
+ *
+ * Kết quả cũ được giữ lại (một lần chạy hỏng không được xoá thông tin đã
+ * thấy) ⇒ nhưng phải ĐÁNH DẤU là cũ, nếu không operator có thể tưởng đó là
+ * kết quả của số bill vừa gõ.
+ */
+const resultStale = ref(false)
+
+/** Một dòng bằng chứng — một số bill đã có manifest trên site. */
+interface BillEvidence {
+  /** số bill (đã chuẩn hoá) */
+  blNo: string
+  /** manifest đó còn DỞ ⇒ operator phải điền tay trên site */
+  needsFinishing: boolean
+}
+
+/** Các dòng bằng chứng — sắp xếp theo số bill cho ổn định. */
+const billEvidence = computed<BillEvidence[]>(() =>
+  Object.entries(manifestBills.value)
+    .map(([blNo, needsFinishing]) => ({ blNo, needsFinishing }))
+    .sort((a, b) => a.blNo.localeCompare(b.blNo)),
+)
+
+/**
+ * Câu đầy đủ của một dòng bằng chứng.
+ *
+ * Câu được dựng ở đây (không ghép trong template) để dấu chấm câu luôn có
+ * mặt — kể cả khi không kèm câu "điền tay".
+ */
+function evidenceText(entry: BillEvidence): string {
+  const base = `A manifest bill was already created on the site for ${entry.blNo}.`
+  if (!entry.needsFinishing) return base
+  return `${base} Check the site and finish that manifest by hand.`
+}
 
 const items = computed<ReportItem[]>(() => result.value?.items ?? [])
 
@@ -201,15 +236,10 @@ async function run(allowWrite: boolean): Promise<void> {
     return
   }
 
-  // Chạy create cho một số bill KHÁC ⇒ bằng chứng của số bill cũ không còn
-  // liên quan ⇒ bỏ đi (nếu không operator tưởng nhầm là còn bill đó).
-  if (
-    allowWrite &&
-    billCreatedBlNo.value !== '' &&
-    normalizeBlNo(value) !== normalizeBlNo(billCreatedBlNo.value)
-  ) {
-    billCreatedBlNo.value = ''
-  }
+  // Lần chạy thật sự BẮT ĐẦU ⇒ kết quả đang hiện (nếu có) là của lần trước
+  // ⇒ đánh dấu là cũ. Lần chạy bị chặn vì ô nhập rỗng thì KHÔNG đánh dấu:
+  // không có lần chạy nào mới, kết quả cũ vẫn là kết quả hiện hành.
+  resultStale.value = true
 
   busy.value = true
   runningAction.value = allowWrite ? 'create' : 'preview'
@@ -231,14 +261,20 @@ async function run(allowWrite: boolean): Promise<void> {
     // Kết quả cũ chỉ bị thay khi kết quả MỚI đã về ⇒ bằng chứng "bill đã có
     // trên site" không bị xoá vô tình giữa chừng.
     result.value = res
+    resultStale.value = false
 
-    if (res.written === true) {
-      // Manifest của chính số bill này đã lưu xong ⇒ cảnh báo "điền tay" không
-      // còn đúng nữa.
-      billCreatedBlNo.value = ''
-    } else if (res.billCreated === true) {
-      // Site ĐÃ tạo bill (dù chưa lưu xong) ⇒ ghi nhớ số bill.
-      billCreatedBlNo.value = value
+    if (res.billCreated === true) {
+      // Site ĐÃ có manifest cho số bill này ⇒ ghi nhớ, VÀO MỘT BẢNG RIÊNG
+      // (không gắn vào `result`) ⇒ một lần preview hay một số bill khác không
+      // xoá được bằng chứng này.
+      //
+      // Manifest còn DỞ khi: lưu hỏng (`written` = false) HOẶC còn field BẮT
+      // BUỘC bị trống (`blocked` = true) ⇒ operator vẫn phải điền tay.
+      const blNo = normalizeBlNo(value)
+      manifestBills.value = {
+        ...manifestBills.value,
+        [blNo]: res.written !== true || res.blocked === true,
+      }
     }
   } catch (e) {
     // Chi tiết kỹ thuật (vd "The message port closed before a response was
@@ -309,14 +345,14 @@ async function onToggleCreateOnSite(): Promise<void> {
 }
 
 /**
- * Giá trị MỚI NHẤT mà `storage.onChanged` báo cho `createOnSite`.
+ * Số thứ tự của lần đọc setting đang bay.
  *
- * `undefined` = chưa có thay đổi nào tới. Giữ lại (kể cả khi đang lưu) vì
- * một lần đọc storage là một ẢNH CHỤP: nếu có thay đổi tới trong lúc đang
- * đọc thì ảnh chụp đó có thể CŨ hơn thay đổi ⇒ không được dùng nó để đè lên
- * giá trị mới nhất.
+ * `chrome.storage.sync.get` trả về một ẢNH CHỤP, và ảnh chụp có thể tới
+ * SAU một sự kiện `onChanged` đã báo giá trị mới hơn. Số thứ tự tăng dần
+ * ⇒ chỉ lần đọc MỚI NHẤT được ghi vào state ⇒ ảnh chụp cũ KHÔNG BAO GIỜ
+ * ghi đè giá trị mới.
  */
-let latestExternal: { createOnSite: boolean } | undefined
+let refreshSeq = 0
 
 /**
  * Đọc lại setting từ storage và đồng bộ MỌI state của popup theo sự thật đó.
@@ -327,8 +363,11 @@ let latestExternal: { createOnSite: boolean } | undefined
  * ai ghi cuối cùng thì thắng.
  */
 async function refreshFromStorage(): Promise<void> {
-  const before = latestExternal
+  const seq = ++refreshSeq
   const outcome = await readSettingsResult()
+  // Một lần đọc MỚI HƠN đã bắt đầu ⇒ kết quả của lần này đã cũ ⇒ bỏ qua,
+  // không được ghi đè giá trị mới hơn.
+  if (seq !== refreshSeq) return
   if (!outcome.ok) {
     // Đọc hỏng ⇒ KHÔNG được coi là "setting = false".
     //
@@ -339,48 +378,25 @@ async function refreshFromStorage(): Promise<void> {
     settingsError.value = outcome.error
     return
   }
-  if (latestExternal !== before) {
-    // Có thay đổi tới TRONG LÚC đang đọc ⇒ ảnh chụp có thể cũ ⇒ lấy giá
-    // trị mới nhất do `onChanged` báo thay vì ảnh chụp.
-    const next = latestExternal?.createOnSite
-    if (next !== undefined) {
-      createOnSite.value = next
-      savedCreateOnSite.value = next
-    }
-    settingsLoaded.value = true
-    settingsError.value = ''
-    return
-  }
   createOnSite.value = outcome.settings.createOnSite
   savedCreateOnSite.value = outcome.settings.createOnSite
   settingsLoaded.value = true
   settingsError.value = ''
 }
 
-/**
- * Setting đổi từ nơi khác (trang options) ⇒ cập nhật control ngay.
- *
- * Khi `saving` là `true` thì KHÔNG đụng vào control: lần đọc lại sau khi lưu
- * (`refreshFromStorage`) sẽ lấy đúng sự thật. Cố "vá" lại trong lúc đang
- * lưu chỉ làm trạng thái lệch thêm — nhưng giá trị mới vẫn được GHI LẠI ở
- * `latestExternal` để lần đọc đó không bị đè bởi ảnh chụp cũ.
- */
-function applyExternalChange(changes: SettingsChange): void {
-  const next = changes.createOnSite
-  if (next === undefined) return
-  latestExternal = { createOnSite: next }
-  if (saving.value) return
-  createOnSite.value = next
-  savedCreateOnSite.value = next
-}
-
 /** Huỷ đăng ký `storage.onChanged` — phải gọi khi unmount. */
 let unsubscribe: (() => void) | undefined
 
 onMounted(async () => {
-  // Đăng ký NGHE TRƯỚC rồi mới đọc: một thay đổi tới trong lúc đang đọc thì
-  // phải được nghe thấy, không được bị lần đọc sau đè mất.
-  unsubscribe = subscribeSettingsChanges(applyExternalChange)
+  // Mọi sự kiện storage ⇒ ĐỌC LẠI, không dùng giá trị mà sự kiện mang.
+  //
+  // Giá trị của sự kiện được tính từ CHỈ những key đổi ⇒ nó không biết
+  // fallback của key legacy (`autoSubmit`) mà một lần đọc đầy đủ biết ⇒
+  // dùng nó có thể khiến popup lệch với content script. Đọc lại thì
+  // không bao giờ lệch.
+  unsubscribe = subscribeSettingsChanges(() => {
+    void refreshFromStorage()
+  })
   await refreshFromStorage()
 })
 
@@ -444,6 +460,15 @@ onUnmounted(() => {
       {{ result.message }}
     </p>
 
+    <!--
+      Kết quả đang hiện là của lần chạy TRƯỚC — phải nói rõ, nếu không
+      operator tưởng đó là kết quả của số bill vừa gõ. Đặt NGAY TRÊN phần
+      báo cáo để nó đọc như một lời cảnh báo cho cả khối bên dưới.
+    -->
+    <p v-if="resultStale && result" class="hint stale-result">
+      Showing the previous result — a new run is in progress.
+    </p>
+
     <div v-if="result && result.ok && result.blocked && result.message" class="blocked">
       <p class="blocked-message">{{ result.message }}</p>
     </div>
@@ -486,12 +511,15 @@ onUnmounted(() => {
     <!--
       Bằng chứng "bill đã có trên site" — SỐNG LÂU, không bị run sau xoá mất.
       Nằm NGOÀI khối `bill-status` vì khối đó bám vào `result` (kết quả mới thay
-      thế kết quả cũ) ⇒ một lần preview là mất cảnh báo.
+      thế kết quả cũ) ⇒ một lần preview là mất cảnh báo. MỘT DÒNG cho mỗi
+      số bill: BL-A đang dở thì BL-B chạy sau không được làm mất nhắc nhở về
+      BL-A.
     -->
-    <p v-if="billCreatedBlNo" class="bill-created">
-      A manifest bill was already created on the site for {{ billCreatedBlNo }}. Check the site and
-      finish that manifest by hand.
-    </p>
+    <div v-if="billEvidence.length" class="bill-created">
+      <div v-for="entry in billEvidence" :key="entry.blNo" class="bill-created-line">
+        {{ evidenceText(entry) }}
+      </div>
+    </div>
 
     <div v-if="result" class="summary">
       cargo: {{ cargoRowCount }} · containers: {{ containerRowCount }} · blank fields: {{
