@@ -789,9 +789,14 @@ describe('popup — lưu setting thất bại', () => {
     }
   })
 
-  it('lưu THẤT BẠI mà nơi khác đã TẮT setting trong lúc đang lưu ⇒ popup theo storage và VẪN báo lỗi', async () => {
-    // Opt-in tắt lúc đầu.
-    store.createOnSite = false
+  it('lưu THẤT BẠI khi operator BỎ TICK opt-in, nơi khác cũng TẮT trong lúc đang lưu ⇒ popup theo storage và VẪN báo lỗi', async () => {
+    // KHÔNG phải máy dò lỗi: bản code CŨ cũng đi theo storage ở kịch bản này
+    // ⇒ đây là CHỐT HỘ (regression guard) cho bất biến "lưu hỏng ⇒ popup vẫn
+    // theo storage VÀ vẫn báo lỗi cho operator".
+    //
+    // Gương của test ngay trên: opt-in đang BẬT, operator bỏ tick, lần ghi
+    // của popup hỏng, và đúng lúc đó nơi khác TẮT opt-in.
+    store.createOnSite = true
 
     // Lần ghi của popup THẤT BẠI — và đúng lúc đó nơi khác TẮT opt-in.
     // Sự kiện của nơi khác tới lúc đang lưu ⇒ bị bỏ qua ⇒ lần đọc lại ở
@@ -807,8 +812,11 @@ describe('popup — lưu setting thất bại', () => {
       const wrapper = mount(PopupApp)
       await flushPromises()
 
-      // Operator muốn BẬT opt-in.
-      await checkbox(wrapper).setValue(true)
+      // Opt-in đang BẬT ⇒ checkbox tick.
+      expect(isChecked(wrapper)).toBe(true)
+
+      // Operator muốn TẮT opt-in.
+      await checkbox(wrapper).setValue(false)
       await flushPromises()
 
       // Storage đang TẮT ⇒ popup phải theo storage: không tick, nút create
@@ -1208,6 +1216,13 @@ describe('popup — bằng chứng "bill đã có trên site"', () => {
     const line = evidenceLine(wrapper, 'ONEYSHAGT1569600')
     expect(line.text()).toContain(
       'A manifest bill was already created on the site for ONEYSHAGT1569600.',
+    )
+    // Lời nhắc "đã lưu nháp ⇒ VẪN phải submit trên site" là câu RIÊNG của
+    // nhánh "đã ghi xong, không còn field bắt buộc". Chưa có assert nào chốt
+    // câu này ⇒ ai sửa nó thì test vẫn xanh, mà operator lại tưởng đã xong
+    // (extension chỉ lưu nháp, KHÔNG BAO GIỜ submit).
+    expect(line.text()).toContain(
+      'saved as a draft (暂存) and still has to be submitted on the site',
     )
     expect(line.text()).not.toContain('Check the site and finish that manifest by hand.')
     // Lời nhắc "đừng tạo manifest khác" phải Ở LẠI trong dòng bằng chứng: nó
