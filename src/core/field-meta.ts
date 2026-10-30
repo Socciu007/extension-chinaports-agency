@@ -211,22 +211,28 @@ export const HEADER_LABELS: Record<string, string> = {
   NOTIFY_TE_STR: '通知人 (telephone)',
   NOTIFY_EM_STR: '通知人 (email)',
   NOTIFY_FX_STR: '通知人 (fax)',
-  NOTIFY_AEO: '通知人 (AEO)',
   TOTAL_PIECE_NUM: 'Total pieces',
-  TOTAL_GWEIGHT_TON: 'Total gross weight (ton)',
+  // Header KHÔNG có nhãn của site cho các ô tổng (site tự tính) ⇒ đơn vị
+  // chọn theo đại lượng: tổng trọng lượng = 货物毛重 ⇒ kg.
+  TOTAL_GWEIGHT_TON: 'Total gross weight (kg)',
   TOTAL_GVOL_NUM: 'Total volume (m³)',
   MANDATORY_CHECK: 'Mandatory check',
   SOFT_CHECK: 'Soft check',
   IS_ALL: 'Save mode',
 }
 
-/** Nhãn hiển thị của field dòng hàng — theo TÊN TIẾNG TRUNG của site. */
+/**
+ * Nhãn hiển thị của field dòng hàng — theo TÊN TIẾNG TRUNG của site.
+ *
+ * Đơn vị trọng lượng là `kg`: site ghi 公斤 (货物毛重（公斤）/ 货物净重（公斤）)
+ * và extension ghi đúng giá trị KG của API ⇒ ghi "ton" sẽ lệch 1000 lần.
+ */
 export const CARGO_LABELS: Record<string, string> = {
   BILL_NO: 'Site bill ID',
   PIECE_NUM: '包装件数',
-  GWEIGHT_TON: '毛重 (ton)',
+  GWEIGHT_TON: '毛重 (kg)',
   GVOL_NUM: '体积 (m³)',
-  NWEIGHT_TON: '净重 (ton)',
+  NWEIGHT_TON: '净重 (kg)',
   CARGO_KIND_COD: '货物标识',
   CARGO_HS_COD: '海关编码',
   PACKAGE_COD: '包装代码',
@@ -249,7 +255,11 @@ export const CARGO_LABELS: Record<string, string> = {
   SET_TEMP_NUM: '温度设置 (°C)',
 }
 
-/** Nhãn hiển thị của field container — theo TÊN TIẾNG TRUNG của site. */
+/**
+ * Nhãn hiển thị của field container — theo TÊN TIẾNG TRUNG của site.
+ *
+ * `WEIGH_TON`: site ghi 箱内货重（公斤） ⇒ đơn vị là `kg`.
+ */
 export const CONTAINER_LABELS: Record<string, string> = {
   BILL_NO: 'Site bill ID',
   CNTR_NO: '箱号',
@@ -258,7 +268,7 @@ export const CONTAINER_LABELS: Record<string, string> = {
   CNTR_EF_ID: '箱状态',
   SEAL_NO: '铅封号',
   PIECE_NUM: '箱内件数',
-  WEIGH_TON: '箱内毛重 (ton)',
+  WEIGH_TON: '箱内货重 (kg)',
   VOLUME_NUM: '箱内体积 (m³)',
   SOC_ID: '货主箱标志',
 }
@@ -282,8 +292,6 @@ export const BLANK_NOTES: Record<string, string> = {
   SHIPPER_AEO:
     'The API provides a business registration number (USCI/TIN), not an AEO code — leave this blank unless you know the AEO code.',
   CONSIGNEE_AEO:
-    'The API provides a business registration number (USCI/TIN), not an AEO code — leave this blank unless you know the AEO code.',
-  NOTIFY_AEO:
     'The API provides a business registration number (USCI/TIN), not an AEO code — leave this blank unless you know the AEO code.',
   SIGN_PLACE_COD:
     'The API does not provide the bill of lading issue place — fill this in by hand on the site.',

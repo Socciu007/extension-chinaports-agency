@@ -90,40 +90,64 @@ export function lowerKeys<T>(value: T): T {
 }
 
 /**
+ * Một bên trong body header (发货人 / 收货人 / 通知人).
+ *
+ * Mỗi field là TÊN FIELD (key) của site cho bên đó — KHÔNG phải giá trị.
+ * Tên field có hậu tố `Key` để không nhầm với dữ liệu: `party.nameKey` là
+ * `'e_shipper_nam'`, còn TÊN bên đó nằm ở `contact.master`.
+ */
+interface Party {
+  role: 0 | 1 | 2
+  nameKey: string
+  addressKey: string
+  countryKey: string
+  phoneKey: string
+  emailKey: string
+  faxKey: string
+  /**
+   * Key AEO — TUỲ CHỌN vì site KHÔNG có field AEO cho 通知人.
+   *
+   * Form header của site chỉ có `SHIPPER_AEO` và `CONSIGNEE_AEO`; không hề
+   * có `NOTIFY_AEO` (FACT 1 của plan live-site-alignment) ⇒ bên 通知人 KHÔNG
+   * được có key AEO trong body.
+   */
+  aeoKey?: string
+}
+
+/**
  * Key của 3 bên trong body header.
  *
  * Vai trò lấy theo `type` của contact: 0 = 发货人, 1 = 收货人, 2 = 通知人.
  */
-const PARTIES = [
+const PARTIES: Party[] = [
   {
-    role: 0 as const,
-    name: 'e_shipper_nam',
-    address: 'shipper_add_str',
-    country: 'shipper_country_cod',
-    phone: 'shipper_te_str',
-    email: 'shipper_em_str',
-    fax: 'shipper_fx_str',
-    aeo: 'shipper_aeo',
+    role: 0,
+    nameKey: 'e_shipper_nam',
+    addressKey: 'shipper_add_str',
+    countryKey: 'shipper_country_cod',
+    phoneKey: 'shipper_te_str',
+    emailKey: 'shipper_em_str',
+    faxKey: 'shipper_fx_str',
+    aeoKey: 'shipper_aeo',
   },
   {
-    role: 1 as const,
-    name: 'e_consignee_nam',
-    address: 'consignee_add_str',
-    country: 'consignee_country_cod',
-    phone: 'consignee_te_str',
-    email: 'consignee_em_str',
-    fax: 'consignee_fx_str',
-    aeo: 'consignee_aeo',
+    role: 1,
+    nameKey: 'e_consignee_nam',
+    addressKey: 'consignee_add_str',
+    countryKey: 'consignee_country_cod',
+    phoneKey: 'consignee_te_str',
+    emailKey: 'consignee_em_str',
+    faxKey: 'consignee_fx_str',
+    aeoKey: 'consignee_aeo',
   },
   {
-    role: 2 as const,
-    name: 'e_notify_nam',
-    address: 'notify_add_str',
-    country: 'notify_country_cod',
-    phone: 'notify_te_str',
-    email: 'notify_em_str',
-    fax: 'notify_fx_str',
-    aeo: 'notify_aeo',
+    role: 2,
+    nameKey: 'e_notify_nam',
+    addressKey: 'notify_add_str',
+    countryKey: 'notify_country_cod',
+    phoneKey: 'notify_te_str',
+    emailKey: 'notify_em_str',
+    faxKey: 'notify_fx_str',
   },
 ]
 
@@ -186,16 +210,19 @@ export function buildHeaderPayload(data: ManifestData, ctx: MappingContext): Hea
 
   for (const party of PARTIES) {
     const contact = contactOf(data, party.role)
-    payload[party.name] = str(contact?.master)
-    payload[party.address] = str(contact?.address)
-    payload[party.country] = str(contact?.country)
-    payload[party.phone] = str(contact?.phone)
+    payload[party.nameKey] = str(contact?.master)
+    payload[party.addressKey] = str(contact?.address)
+    payload[party.countryKey] = str(contact?.country)
+    payload[party.phoneKey] = str(contact?.phone)
     // API không có email/fax ⇒ luôn để trống.
-    payload[party.email] = ''
-    payload[party.fax] = ''
+    payload[party.emailKey] = ''
+    payload[party.faxKey] = ''
     // AEO: `firmCode` của API là mã đăng ký doanh nghiệp (USCI/TIN), KHÔNG
     // phải mã AEO ⇒ không điền AEO.
-    payload[party.aeo] = ''
+    //
+    // Site KHÔNG có field AEO cho 通知人 ⇒ bên đó KHÔNG ghi key (đừng ghi
+    // key "undefined").
+    if (party.aeoKey !== undefined) payload[party.aeoKey] = ''
   }
 
   // Tổng số lượng / tổng trọng lượng / tổng thể tích: site tự tính.

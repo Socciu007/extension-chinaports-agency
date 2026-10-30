@@ -33,7 +33,20 @@ const ctx: MappingContext = {
   findCntrSize: () => undefined,
 }
 
-/** 44 key của body header — đúng theo mẫu thật của site. */
+/**
+ * 43 key của body header — đúng theo mẫu thật của site.
+ *
+ * Site KHÔNG có field AEO cho 通知人 (`NOTIFY_AEO` không tồn tại) ⇒ body
+ * KHÔNG được có `notify_aeo`.
+ *
+ * Thứ tự ở đây là thứ tự body THỰC SỰ gửi đi (khớp với `buildHeaderPayload`)
+ * ⇒ test dưới chốt luôn cả vị trí của từng key.
+ *
+ * LƯU Ý: thứ tự này CỐ TÌNH khác thứ tự form của site (site: 卸货港 →
+ * 中转港 → 交货地; body: dischrg → dest → trans). Thứ tự key trong JSON không
+ * mang ý nghĩa với POST của site (`keyToLowercase` nhận object) ⇒ giữ nguyên
+ * thứ tự body, không sửa để "giống site".
+ */
 const HEADER_KEYS = [
   'bill_no',
   'bill_nbr',
@@ -48,10 +61,10 @@ const HEADER_KEYS = [
   'start_port_nam',
   'dischrg_port_cod',
   'dischrg_port_nam',
-  'trans_port_cod',
-  'trans_port_nam',
   'dest_port_cod',
   'dest_port_nam',
+  'trans_port_cod',
+  'trans_port_nam',
   'e_shipper_nam',
   'shipper_add_str',
   'shipper_country_cod',
@@ -72,7 +85,6 @@ const HEADER_KEYS = [
   'notify_te_str',
   'notify_em_str',
   'notify_fx_str',
-  'notify_aeo',
   'total_piece_num',
   'total_gweight_ton',
   'total_gvol_num',
@@ -127,9 +139,13 @@ const CONTAINER_KEYS = [
 describe('buildHeaderPayload', () => {
   const payload = buildHeaderPayload(manifest, ctx)
 
-  it('có đúng 44 key của mẫu thật', () => {
+  it('có đúng 43 key của mẫu thật', () => {
     expect(Object.keys(payload).sort()).toEqual([...HEADER_KEYS].sort())
-    expect(Object.keys(payload)).toHaveLength(44)
+    expect(Object.keys(payload)).toHaveLength(43)
+  })
+
+  it('giữ thứ tự key như body thực sự gửi đi (43 key, không lệch vị trí nào)', () => {
+    expect(Object.keys(payload)).toEqual(HEADER_KEYS)
   })
 
   it('mọi giá trị là chuỗi (thiếu dữ liệu ⇒ "" chứ không null/undefined)', () => {
@@ -221,7 +237,15 @@ describe('buildHeaderPayload', () => {
   it('KHÔNG điền AEO (firmCode là mã đăng ký doanh nghiệp, không phải mã AEO)', () => {
     expect(payload.shipper_aeo).toBe('')
     expect(payload.consignee_aeo).toBe('')
-    expect(payload.notify_aeo).toBe('')
+  })
+
+  it('KHÔNG có key `notify_aeo` (site không có field AEO cho 通知人)', () => {
+    // Site chỉ có `SHIPPER_AEO` / `CONSIGNEE_AEO` ⇒ body phải đúng 43 key.
+    expect(Object.keys(payload)).not.toContain('notify_aeo')
+  })
+
+  it('KHÔNG có key "undefined" (party không có field AEO thì KHÔNG ghi key)', () => {
+    expect(Object.keys(payload)).not.toContain('undefined')
   })
 
   it('KHÔNG điền email/fax (API không có)', () => {
