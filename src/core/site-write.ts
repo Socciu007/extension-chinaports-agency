@@ -10,9 +10,15 @@
  *
  * Mọi body đi qua `lowerKeys` ở tầng này: site gọi helper `keyToLowercase`
  * trước khi POST nên key viết hoa sẽ bị site đọc sai.
+ *
+ * Mọi body cũng đi qua `toWireValue`: số KHÔNG parse được (`NaN`) đi ra là
+ * `0` — cùng giá trị với case "API không có giá trị này" ⇒ field số giữ
+ * nguyên kiểu JSON **number** (site validate bằng regex số, KHÔNG nhận
+ * chuỗi rỗng). `NaN` chỉ có thể nằm ở field số của dòng hàng / container;
+ * report (dựng trong content script) là nơi phân biệt hai lý do.
  */
 import { postSiteJson, SiteApiError, type SiteFetchOptions } from './site-api'
-import { lowerKeys, type HeaderPayload } from './payload'
+import { lowerKeys, toWireValue, type HeaderPayload } from './payload'
 
 /** Endpoint tạo bill và lưu bill — path rỗng ⇒ URL kết thúc bằng `/`. */
 export const BILL_PATH = ''
@@ -56,12 +62,20 @@ function withLabel(options: SiteFetchOptions | undefined, label: string): SiteFe
  *
  * Header do `buildHeaderPayload` dựng đã có sẵn `bill_no: ''` và
  * `is_all: '0'` ("0" = tạo bill) ⇒ không sửa gì thêm.
+ *
+ * `toWireValue` đổi mọi số KHÔNG parse được (`NaN`) thành `0` — cùng giá
+ * trị với case "API không có giá trị này" ⇒ field số giữ nguyên kiểu JSON
+ * **number** (site validate bằng regex số, KHÔNG nhận chuỗi rỗng).
  */
 export function createManifestBill(
   header: HeaderPayload,
   options?: SiteFetchOptions,
 ): Promise<unknown> {
-  return postSiteJson(BILL_PATH, lowerKeys(header), withLabel(options, BILL_LABEL))
+  return postSiteJson(
+    BILL_PATH,
+    toWireValue(lowerKeys(header)),
+    withLabel(options, BILL_LABEL),
+  )
 }
 
 /**
@@ -86,7 +100,7 @@ export async function addCargoRow(
   }
   return postSiteJson(
     CARGO_PATH,
-    lowerKeys({ ...cargo, bill_no: billNo }),
+    toWireValue(lowerKeys({ ...cargo, bill_no: billNo })),
     withLabel(options, CARGO_LABEL),
   )
 }
@@ -114,7 +128,11 @@ export function saveManifestContainers(
   body.is_all = '1'
   body.cntr_list = containers
 
-  return postSiteJson(BILL_PATH, lowerKeys(body), withLabel(options, BILL_LABEL))
+  return postSiteJson(
+    BILL_PATH,
+    toWireValue(lowerKeys(body)),
+    withLabel(options, BILL_LABEL),
+  )
 }
 
 /**

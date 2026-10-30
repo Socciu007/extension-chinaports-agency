@@ -20,20 +20,24 @@
  * - mã bill do server gán lấy NGUYÊN VEN (không trim, không uppercase);
  * - tên cảng lấy từ `PortData.name` (tiếng Trung), KHÔNG dùng `nameEn`.
  */
-import { describeApiError, fetchManifest, ManifestApiError } from './api'
+import { billNoAsWritten, describeApiError, fetchManifest, ManifestApiError } from './api'
 import { HTTP_TIMEOUT_MS } from './http'
 import {
   BLANK_NOTES,
   DANGER_FIELDS,
   deriveCargoKind,
   isBlankPayloadValue,
+  isUnparsablePayloadValue,
   labelOf,
   optionalBlankNote,
+  partyContactRequiredNote,
+  partiesWithoutContactChannel,
   REQUIRED_BY_KIND,
   REQUIRED_CONTAINER,
   REQUIRED_HEADER,
   requiredBlankNote,
   TEMP_FIELDS,
+  unparsableNumberNote,
   type CargoKind,
 } from './field-meta'
 import {
@@ -62,7 +66,12 @@ import type { ManifestCargo, ManifestContainer } from './types'
 export const DEFAULT_DEADLINE_MS = 240_000
 
 export interface ManifestRunOptions {
-  /** Số bill — `fetchManifest` tự chuẩn hoá (trim, uppercase, bỏ hậu tố `P<n>`). */
+  /**
+   * Số bill của OPERATOR — giữ hậu tố piece (`P1`, `P12`).
+   *
+   * `fetchManifest` bỏ hậu tố khi TRA CỨU (API chỉ nhận mã gốc), còn số
+   * bill GHI LÊN SITE giữ nguyên hậu tố.
+   */
   blNo: string
   /** `true` ⇒ ghi lên site. Thiếu / `false` ⇒ CHỈ preview, KHÔNG gửi POST nào. */
   allowWrite?: boolean
@@ -209,25 +218,34 @@ function byDesignBlanks(kind: CargoKind): ReadonlySet<string> {
 /**
  * Dựng một item của report cho field bị bỏ trống.
  *
- * `note` LUÔN có: note riêng (`BLANK_NOTES`) nếu có, nếu không thì note
- * chung theo việc field có bắt buộc hay không.
+ * `note` LUÔN có: note riêng do caller truyền (nếu có), sau đó là note của
+ * lý do RIÊNG (`BLANK_NOTES`), sau đó là note chung theo việc field có bắt
+ * buộc hay không.
+ *
+ * Số KHÔNG parse được (`NaN`) có note riêng: lý do KHÁC hẳn "API không có
+ * giá trị này" ⇒ note riêng thắng `BLANK_NOTES`.
  */
 function blankItem(
   scope: FillScope,
   prop: string,
   required: boolean,
   row: number | undefined,
+  value: unknown,
+  note?: string,
 ): ReportItem {
   const label = labelOf(scope, prop)
-  const note =
-    BLANK_NOTES[prop] ??
-    (required ? requiredBlankNote(prop, label) : optionalBlankNote(prop, label))
+  const text =
+    note ??
+    (isUnparsablePayloadValue(value)
+      ? unparsableNumberNote(prop, label)
+      : BLANK_NOTES[prop] ??
+        (required ? requiredBlankNote(prop, label) : optionalBlankNote(prop, label)))
   return {
     scope,
     prop,
     label,
     status: required ? 'warn' : 'skip',
-    note,
+    note: text,
     row,
     required,
   }
@@ -241,6 +259,12 @@ interface ReportRowSpec {
   row?: number
   /** field này có BẮT BUỘC không */
   required: (prop: string) => boolean
+  /**
+   * Note RIÊNG cho một field — thắng `BLANK_NOTES` và note chung.
+   *
+   * Trả `undefined` ⇒ dùng note chung.
+   */
+  note?: (prop: string) => string | undefined
   /**
    * Key mà site XOÁ theo loại hàng — để trống là ĐÚNG ⇒ không báo.
    *
@@ -258,17 +282,31 @@ function reportRow(spec: ReportRowSpec): ReportItem[] {
     // Field site xoá theo loại hàng ⇒ để trống là ĐÚNG ⇒ không báo.
     if (spec.skipped?.has(key)) continue
     if (!isBlankPayloadValue(value)) continue
-    items.push(blankItem(spec.scope, prop, spec.required(prop), spec.row))
+    items.push(
+      blankItem(spec.scope, prop, spec.required(prop), spec.row, value, spec.note?.(prop)),
+    )
   }
   return items
 }
 
-/** Report của header — theo thứ tự key trong payload. */
+/**
+ * Report của header — theo thứ tự key trong payload.
+ *
+ * Ngoài field BẮT BUỘC cố định, còn một quy tắc theo NHÓM: mỗi bên phải có
+ * ÍT NHẤT một kênh liên hệ (电话 / EMAIL / 传真) — xem
+ * `partiesWithoutContactChannel`.
+ */
 function reportHeader(header: HeaderPayload): ReportItem[] {
+  // Tính MỘT LẦN: điều kiện là của BÊN, không phải của từng prop.
+  const withoutContact = partiesWithoutContactChannel(header)
   return reportRow({
     scope: 'header',
     values: header,
-    required: (prop) => REQUIRED_HEADER.includes(prop),
+    required: (prop) => REQUIRED_HEADER.includes(prop) || withoutContact.has(prop),
+    note: (prop) =>
+      withoutContact.has(prop)
+        ? partyContactRequiredNote(prop, labelOf('header', prop))
+        : undefined,
   })
 }
 
@@ -327,6 +365,20 @@ function partialStateSentence(
 /** Message khi run thành công nhưng còn field BẮT BUỘC bị trống. */
 function blockedMessage(requiredCount: number): string {
   return `${requiredCount} field(s) required by the site are not provided by the API — they are listed in the report and must be filled in by hand on the site.`
+}
+
+/**
+ * Câu nhắc khi số bill GHI LÊN SITE khác số bill của API.
+ *
+ * Số bill trên site CÓ THỂ mang hậu tố piece (`P1`, `P12`) còn API chỉ trả
+ * mã gốc ⇒ site nhận số khác số API trả về. Không nói ra thì operator mở
+ * site, thấy số khác số mình gõ, và tưởng extension ghi sai.
+ */
+function billNoMismatchStep(written: string, apiBillNo: string): string {
+  if (apiBillNo === '') {
+    return `The manifest will use the bill number ${written} — the API did not return a bill number.`
+  }
+  return `The manifest will use the bill number ${written} — the API returned ${apiBillNo}.`
 }
 
 /** Text lỗi cho người dùng — theo loại lỗi. */
@@ -436,13 +488,27 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
     const goods: ManifestCargo[] = data.cdgoods ?? []
     const containers: ManifestContainer[] = data.cdCon ?? []
 
-    const header = buildHeaderPayload(data, ctx)
+    const header = buildHeaderPayload(data, ctx, options.blNo)
+    // Số bill GHI LÊN SITE có thể khác số bill API trả về (hậu tố piece) ⇒
+    // phải nói cho operator biết, không để họ tưởng extension ghi sai.
+    const writtenBillNo = header.bill_nbr ?? ''
+    // Số bill của API cũng đi qua `billNoAsWritten` (trim + upper-case) — cùng
+    // hình dạng với số GHI LÊN SITE ⇒ so sánh KHÔNG báo nhầm chỉ vì khác
+    // chữ HOA.
+    const apiBillNo = billNoAsWritten(data.blNo ?? '')
+    if (writtenBillNo !== '' && writtenBillNo !== apiBillNo) {
+      steps.push(billNoMismatchStep(writtenBillNo, apiBillNo))
+    }
     const cargoPayloads = goods.map((item) => buildCargoPayload(item, ''))
     const containerPayloads = containers.map((item) => buildContainerPayload(item, ctx, ''))
     const kinds = goods.map((item) => deriveCargoKind(item))
 
     cargoRows = cargoPayloads.length
     containerRows = containerPayloads.length
+    // `NaN` (số không parse được) KHÔNG sống sót qua ranh giới message
+    // content → popup: Chrome JSON-serialise message ⇒ popup nhận `null`,
+    // không phải `NaN`. Lý do "không parse được" vì vậy phải được nói ở
+    // REPORT (dựng trong content script), KHÔNG ở preview.
     preview = { header, cargo: cargoPayloads, containers: containerPayloads }
 
     items.push(...reportHeader(header))

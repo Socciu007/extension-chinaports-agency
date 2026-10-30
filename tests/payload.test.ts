@@ -4,6 +4,7 @@ import {
   buildContainerPayload,
   buildHeaderPayload,
   lowerKeys,
+  toWireValue,
 } from '../src/core/payload'
 import type { MappingContext } from '../src/core/field-meta'
 import type { ManifestCargo, ManifestContainer, ManifestData } from '../src/core/types'
@@ -280,6 +281,114 @@ describe('buildHeaderPayload', () => {
       }
       expect(empty[key]).toBe('')
     }
+  })
+})
+
+/**
+ * Số bill ghi vào 提单号 trên site.
+ *
+ * Số bill trên site CÓ THỂ mang hậu tố piece (`P1`, `P12`) — đó là số bill
+ * thật mà operator gõ. API của dadaex chỉ trả mã gốc ⇒ ghi mã gốc vào
+ * 提单号 là ĐỔI ÂM THẦM số bill trên tờ khai.
+ */
+describe('buildHeaderPayload — số bill ghi lên site', () => {
+  it('ghi số bill CÓ hậu tố piece đúng như operator gõ', () => {
+    const payload = buildHeaderPayload(manifest, ctx, 'CHN4139065P1')
+    expect(payload.bill_nbr).toBe('CHN4139065P1')
+  })
+
+  it('trim + upper-case (site upper-case mọi field chuỗi trước khi POST)', () => {
+    const payload = buildHeaderPayload(manifest, ctx, '  chn4139065p1 ')
+    expect(payload.bill_nbr).toBe('CHN4139065P1')
+  })
+
+  it('fallback sang blNo của API khi operator KHÔNG gõ số bill', () => {
+    const payload = buildHeaderPayload(manifest, ctx, '')
+    expect(payload.bill_nbr).toBe('ONEYSHAGT1569600')
+  })
+
+  it('không có tham số ⇒ vẫn lấy blNo của API', () => {
+    const payload = buildHeaderPayload(manifest, ctx)
+    expect(payload.bill_nbr).toBe('ONEYSHAGT1569600')
+  })
+})
+
+/**
+ * Số API trả về mà extension KHÔNG parse được.
+ *
+ * `num()` trước đây nuốt lỗi parse thành `0` ⇒ `"22,400"` thành 0 kg mà
+ * không có bất kỳ cảnh báo nào. Nay là `NaN` ⇒ report biết đây là lý do
+ * KHÁC ("không parse được"). Payload TRONG BỘ NHỚ giữ `NaN` (report đọc
+ * chính payload đó); tầng gửi đi đổi thành `0` — cùng giá trị với case
+ * thiếu dữ liệu ⇒ field số giữ nguyên kiểu JSON **number** (site validate
+ * 货物毛重/货物体积/包装件数 bằng regex số, KHÔNG nhận chuỗi rỗng).
+ */
+describe('số không parse được', () => {
+  it('NaN (KHÔNG phải 0) khi API trả giá trị không phải số', () => {
+    const payload = buildCargoPayload({ name: 'x', weight: '22,400' }, 'BILL-123')
+    expect(Number.isNaN(payload.gweight_ton)).toBe(true)
+  })
+
+  it('NaN cho cả số nguyên (包装件数) khi API trả giá trị không phải số', () => {
+    const payload = buildCargoPayload({ name: 'x', amount: 'abc' }, 'BILL-123')
+    expect(Number.isNaN(payload.piece_num)).toBe(true)
+  })
+
+  it('giá trị THẬT 0 từ API thì VẪN là 0 (không phải "không có dữ liệu")', () => {
+    const payload = buildCargoPayload({ name: 'x', weight: 0 }, 'BILL-123')
+    expect(payload.gweight_ton).toBe(0)
+  })
+
+  it('thiếu dữ liệu ⇒ 0 (không phải NaN)', () => {
+    const payload = buildCargoPayload({ name: 'x' }, 'BILL-123')
+    expect(payload.gweight_ton).toBe(0)
+  })
+
+  it('toWireValue đổi NaN thành 0 (giữ nguyên kiểu số của field số)', () => {
+    expect(toWireValue({ gweight_ton: Number.NaN })).toEqual({ gweight_ton: 0 })
+  })
+
+  it('toWireValue đi đệ quy (object lồng nhau, mảng)', () => {
+    const wire = toWireValue({
+      rows: [{ gweight_ton: Number.NaN }],
+      nested: { deep: { gvol_num: Number.NaN } },
+    })
+    expect(wire).toEqual({
+      rows: [{ gweight_ton: 0 }],
+      nested: { deep: { gvol_num: 0 } },
+    })
+  })
+
+  it('toWireValue giữ nguyên số hợp lệ và chuỗi', () => {
+    expect(toWireValue({ piece_num: 114, mark_str: 'N/M' })).toEqual({
+      piece_num: 114,
+      mark_str: 'N/M',
+    })
+  })
+
+  it('toWireValue KHÔNG mutate input', () => {
+    const input = { gweight_ton: Number.NaN }
+    toWireValue(input)
+    expect(Number.isNaN(input.gweight_ton)).toBe(true)
+  })
+})
+
+/**
+ * `null` / `undefined` trong payload.
+ *
+ * Site TỪ CHỐI giá trị null ⇒ hai giá trị này phải đi ra là CHUỖI RỐNG. Key
+ * cũng phải CÒN trong body: `JSON.stringify` BỎ HẲN key có giá trị
+ * `undefined` ⇒ để nguyên thì site sẽ thiếu key đó.
+ */
+describe('toWireValue — null / undefined', () => {
+  it('null ⇒ CHUỖI RỐNG (giữ key, tránh null)', () => {
+    expect(toWireValue({ mark_str: null })).toEqual({ mark_str: '' })
+    expect(JSON.stringify(toWireValue({ mark_str: null }))).toBe('{"mark_str":""}')
+  })
+
+  it('undefined ⇒ CHUỖI RỐNG (giữ key, tránh null)', () => {
+    expect(toWireValue({ mark_str: undefined })).toEqual({ mark_str: '' })
+    expect(JSON.stringify(toWireValue({ mark_str: undefined }))).toBe('{"mark_str":""}')
   })
 })
 

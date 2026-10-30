@@ -1299,6 +1299,46 @@ describe('popup — bằng chứng "bill đã có trên site"', () => {
     )
   })
 
+  it('số bill CÓ hậu tố piece ⇒ dòng bằng chứng dùng số bill ĐÃ GHI LÊN SITE', async () => {
+    store.createOnSite = true
+    sendMessage = async () => successResult({ billCreated: true, written: true })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600P1')
+    await buttonByText(wrapper, 'Create draft on site').trigger('click')
+    await flushPromises()
+
+    expect(evidenceLine(wrapper, 'ONEYSHAGT1569600P1').text()).toContain(
+      'A manifest bill was already created on the site for ONEYSHAGT1569600P1.',
+    )
+  })
+
+  it('hai piece khác nhau của cùng mã gốc ⇒ HAI dòng bằng chứng', async () => {
+    store.createOnSite = true
+    sendMessage = async () => successResult({ billCreated: true, written: true })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600P1')
+    await buttonByText(wrapper, 'Create draft on site').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600P2')
+    await buttonByText(wrapper, 'Create draft on site').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('.bill-created-line')).toHaveLength(2)
+    expect(evidenceLine(wrapper, 'ONEYSHAGT1569600P1').text()).toContain(
+      'A manifest bill was already created on the site for ONEYSHAGT1569600P1.',
+    )
+    expect(evidenceLine(wrapper, 'ONEYSHAGT1569600P2').text()).toContain(
+      'A manifest bill was already created on the site for ONEYSHAGT1569600P2.',
+    )
+  })
+
   it('cùng một số bill, khác CHỮ HOA ⇒ CHỈ MỘT dòng bằng chứng', async () => {
     store.createOnSite = true
     sendMessage = async () => successResult({ billCreated: true, written: true })
@@ -1314,9 +1354,9 @@ describe('popup — bằng chứng "bill đã có trên site"', () => {
     await buttonByText(wrapper, 'Create draft on site').trigger('click')
     await flushPromises()
 
-    // KEY của bằng chứng phải là số bill ĐÃ CHUẨN HOÁ — đúng cách content
-    // script chốt (`normalizeBlNo(request.blNo)`) — nếu hai bên lệch nhau thì
-    // site bị ghi manifest thứ hai cho cùng một số bill.
+    // KEY của bằng chứng phải là số bill ĐÃ GHI LÊN SITE — đúng cách content
+    // script chốt (`billNoAsWritten(request.blNo)`, giữ hậu tố piece) — nếu
+    // hai bên lệch nhau thì site bị ghi manifest thứ hai cho cùng một số bill.
     expect(wrapper.findAll('.bill-created-line')).toHaveLength(1)
     expect(evidenceLine(wrapper, 'ONEYSHAGT1569600').text()).toContain(
       'A manifest bill was already created on the site for ONEYSHAGT1569600.',

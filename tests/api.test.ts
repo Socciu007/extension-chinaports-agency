@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   ManifestApiError,
+  billNoAsWritten,
   normalizeBlNo,
   parseEnvelope,
   fetchManifest,
@@ -32,6 +33,39 @@ describe('normalizeBlNo', () => {
 
   it('không bỏ hậu tố P<digits> khi mã gốc thật sự kết thúc bằng nó', () => {
     expect(normalizeBlNo('ABCP12')).toBe('ABCP12')
+  })
+})
+
+/**
+ * Số bill ĐI LÊN SITE — giữ hậu tố piece.
+ *
+ * Số bill trên site CÓ THỂ kèm hậu tố piece (`P1`, `P12`); API của dadaex
+ * chỉ nhận mã gốc ⇒ hai số khác nhau, đừng gộp.
+ */
+describe('billNoAsWritten', () => {
+  it('giữ hậu tố piece P1', () => {
+    expect(billNoAsWritten('CHN4139065P1')).toBe('CHN4139065P1')
+  })
+
+  it('giữ hậu tố piece P12', () => {
+    expect(billNoAsWritten('ONEYSHAGT1569600P12')).toBe('ONEYSHAGT1569600P12')
+  })
+
+  it('trim và upper-case', () => {
+    expect(billNoAsWritten('  chn4139065p1 ')).toBe('CHN4139065P1')
+  })
+
+  it('không đụng vào blNo không có hậu tố', () => {
+    expect(billNoAsWritten('ONEYSHAGT1569600')).toBe('ONEYSHAGT1569600')
+  })
+
+  it('không đụng vào mã gốc thật sự kết thúc bằng P<digits>', () => {
+    expect(billNoAsWritten('ABCP12')).toBe('ABCP12')
+  })
+
+  it('KHÁC normalizeBlNo (bản tra cứu thì bỏ hậu tố piece)', () => {
+    expect(normalizeBlNo('CHN4139065P1')).toBe('CHN4139065')
+    expect(billNoAsWritten('CHN4139065P1')).not.toBe(normalizeBlNo('CHN4139065P1'))
   })
 })
 

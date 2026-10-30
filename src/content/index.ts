@@ -7,7 +7,7 @@
  *
  * `runManifest` does not reject ⇒ any error becomes `CreateResult` with `ok: false` + `message` in English.
  */
-import { normalizeBlNo } from '../core/api'
+import { billNoAsWritten } from '../core/api'
 import { runManifest } from '../core/manifest-run'
 import { readSettings } from '../core/options'
 import {
@@ -137,11 +137,20 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
   }
 
   const allowWrite = request.allowWrite === true
-  const blNo = normalizeBlNo(request.blNo)
+  // Key chốt = số bill ĐÃ GHI LÊN SITE (giữ hậu tố piece) — KHÔNG phải mã
+  // gốc mà API tra cứu.
+  //
+  // `…P1` và `…P2` là HAI bản ghi KHÁC NHAU trên site ⇒ phải là hai chốt
+  // riêng; gộp chúng thì piece thứ hai bị từ chối với lý do sai.
+  //
+  // Hệ quả (đã chấp nhận): extension chỉ có dữ liệu ở mức MÃ GỐC ⇒ cả hai
+  // bản ghi mang CÙNG dòng hàng / container. Extension chỉ lưu NHÁP (暂存)
+  // và KHÔNG BAO GIỜ tự submit ⇒ operator tự điền lại dòng cho từng piece.
+  const billKey = billNoAsWritten(request.blNo)
 
   // Site ĐÃ có manifest cho số bill này trong tab này ⇒ từ chối, KHÔNG chạy
   // gì thêm. Chặn TRƯỚC mọi lần gọi mạng.
-  if (allowWrite && loadCreatedBillNos().has(blNo)) {
+  if (allowWrite && loadCreatedBillNos().has(billKey)) {
     return errorResult(
       'A manifest was already created on the site for this bill of lading number. Check the site and finish that manifest by hand — the extension does not create a second manifest for the same bill.',
     )
@@ -172,7 +181,7 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
   })
 
   // Site ĐÃ xác nhận có bill ⇒ ghi nhớ, kể cả khi bước lưu chưa xong.
-  if (result.billCreated === true) rememberCreatedBillNo(blNo)
+  if (result.billCreated === true) rememberCreatedBillNo(billKey)
 
   return result
 }

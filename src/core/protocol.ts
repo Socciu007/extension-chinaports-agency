@@ -48,7 +48,12 @@ export interface ReportItem {
 
 export interface CreateRequest {
   type: typeof MSG_CREATE_MANIFEST
-  /** Số bill — `runManifest` tự chuẩn hoá (trim, uppercase, bỏ hậu tố `P<n>`). */
+  /**
+   * Số bill của OPERATOR — giữ hậu tố piece (`P1`, `P12`).
+   *
+   * `runManifest` bỏ hậu tố khi TRA CỨU API (API chỉ nhận mã gốc), còn số
+   * bill GHI LÊN SITE giữ nguyên hậu tố.
+   */
   blNo: string
   /** `true` ⇒ ghi lên site (tạo bill + gắn hàng + lưu nháp). Thiếu/`false` ⇒ CHỈ preview, KHÔNG POST. */
   allowWrite?: boolean

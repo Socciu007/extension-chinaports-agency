@@ -58,6 +58,27 @@ export function normalizeBlNo(raw: string): string {
   return raw.trim().toUpperCase().replace(/(?<=\d)P\d+$/, '')
 }
 
+/**
+ * Số bill THEO ĐÚNG CÁCH OPERATOR GÕ — đúng thứ ghi vào 提单号 trên site.
+ *
+ * KHÁC `normalizeBlNo`: KHÔNG bỏ hậu tố piece (`P1`, `P12`). Số bill trên
+ * site CÓ THỂ kèm hậu tố piece (operator gõ `CHN4139065P1`), còn API của
+ * dadaex chỉ nhận mã gốc ⇒ hai số khác nhau, đừng gộp.
+ *
+ * `normalizeBlNo` là key TRA CỨU; hàm này là key ĐÃ GHI LÊN SITE — chốt
+ * trùng bill và bằng chứng "bill đã có trên site" phải dùng hàm này.
+ *
+ * Số bill trong ngành này luôn VIẾT HOA (mã API của dadaex cũng vậy) ⇒
+ * chuẩn hoá input của operator cho khớp: số ghi lên site, key chốt trùng
+ * bill và mã của API phải so sánh được với nhau.
+ *
+ * KHÔNG phải vì site tự upper-case mọi field — site chỉ upper-case giá trị
+ * của DÒNG HÀNG; field header giữ nguyên chữ (xem `upper()` ở `payload.ts`).
+ */
+export function billNoAsWritten(raw: string): string {
+  return raw.trim().toUpperCase()
+}
+
 function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : []
 }

@@ -6,6 +6,9 @@ import {
   contactRole,
   deriveCargoKind,
   HEADER_LABELS,
+  isBlank,
+  isBlankPayloadValue,
+  isUnparsablePayloadValue,
   payWayOf,
   type MappingContext,
 } from '../src/core/field-meta'
@@ -86,6 +89,43 @@ describe('payWayOf', () => {
   })
   it('undefined ⇒ KHÔNG đoán, bỏ trống', () => {
     expect(payWayOf(undefined)).toBeUndefined()
+  })
+})
+
+/**
+ * Hai quy tắc "trống" — KHÔNG được gộp làm một.
+ *
+ * - `isBlank` đọc DỮ LIỆU THÔ của API ⇒ số `0` là một giá trị THẬT
+ *   (vd `dangerClass = 0` ⇒ không phải hàng nguy hiểm);
+ * - `isBlankPayloadValue` đọc PAYLOAD đã dựng ⇒ số `0` là cách builder ghi
+ *   "API không có giá trị này".
+ */
+describe('quy tắc "trống"', () => {
+  it('isBlank: số 0 từ API là giá trị THẬT ⇒ KHÔNG trống', () => {
+    expect(isBlank(0)).toBe(false)
+    expect(isBlank('0')).toBe(false)
+  })
+
+  it('isBlank: chuỗi rỗng / null / undefined ⇒ trống', () => {
+    expect(isBlank('')).toBe(true)
+    expect(isBlank('   ')).toBe(true)
+    expect(isBlank(null)).toBe(true)
+    expect(isBlank(undefined)).toBe(true)
+  })
+
+  it('isBlankPayloadValue: số 0 trong payload ⇒ trống ("API không có")', () => {
+    expect(isBlankPayloadValue(0)).toBe(true)
+  })
+
+  it('isBlankPayloadValue: NaN trong payload ⇒ trống ("không parse được")', () => {
+    expect(isBlankPayloadValue(Number.NaN)).toBe(true)
+  })
+
+  it('isUnparsablePayloadValue: chỉ NaN mới là "không parse được"', () => {
+    expect(isUnparsablePayloadValue(Number.NaN)).toBe(true)
+    expect(isUnparsablePayloadValue(0)).toBe(false)
+    expect(isUnparsablePayloadValue('')).toBe(false)
+    expect(isUnparsablePayloadValue(undefined)).toBe(false)
   })
 })
 

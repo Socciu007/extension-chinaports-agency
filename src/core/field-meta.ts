@@ -109,6 +109,76 @@ export const REQUIRED_HEADER: readonly string[] = [
   'DISCHRG_PORT_COD',
 ]
 
+/**
+ * 3 bên (发货人 / 收货人 / 通知人) và 3 kênh liên hệ của mỗi bên.
+ *
+ * `*Key` là key CHỮ THƯỜNG trong payload header; prop VIẾT HOA trong report
+ * (vd `SHIPPER_TE_STR`) suy ra từ chính key đó (`phoneKey.toUpperCase()`) ⇒
+ * không lưu cùng một sự thật ở hai chỗ.
+ *
+ * Site kiểm tra ở form (client-side) rằng mỗi bên phải có ÍT NHẤT một kênh
+ * liên hệ (电话 / EMAIL / 传真). Extension chỉ điền được 电话 ⇒ một bên
+ * không có phone thì cả ba kênh đều trống ⇒ operator phải điền tay.
+ *
+ * Đường API của extension đi KHÔNG qua form ⇒ KHÔNG biết server có từ chối
+ * manifest đó hay không ⇒ report chỉ nói đúng sự thật ĐÃ BIẾT (operator phải
+ * điền tay một kênh liên hệ), KHÔNG nói "sẽ bị từ chối".
+ */
+export const PARTY_CONTACT_CHANNELS: Record<
+  0 | 1 | 2,
+  {
+    /** key CHỮ THƯỜNG trong payload header của ô điện thoại. */
+    phoneKey: string
+    /** key CHỮ THƯỜNG trong payload header của ô email. */
+    emailKey: string
+    /** key CHỮ THƯỜNG trong payload header của ô fax. */
+    faxKey: string
+  }
+> = {
+  0: {
+    phoneKey: 'shipper_te_str',
+    emailKey: 'shipper_em_str',
+    faxKey: 'shipper_fx_str',
+  },
+  1: {
+    phoneKey: 'consignee_te_str',
+    emailKey: 'consignee_em_str',
+    faxKey: 'consignee_fx_str',
+  },
+  2: {
+    phoneKey: 'notify_te_str',
+    emailKey: 'notify_em_str',
+    faxKey: 'notify_fx_str',
+  },
+}
+
+/**
+ * Các bên KHÔNG có kênh liên hệ nào (điện thoại / email / fax đều trống).
+ *
+ * Trả về TÊN FIELD VIẾT HOA của ô điện thoại của mỗi bên như vậy — đó là
+ * prop mà report đánh dấu là BẮT BUỘC (xem `partyContactRequiredNote`).
+ * Email và fax giữ note riêng của chúng và vẫn là TUỲ CHỌN.
+ *
+ * Đọc thẳng từ PAYLOAD header ⇒ đúng với dữ liệu sẽ gửi đi, không đoán
+ * theo tên field.
+ */
+export function partiesWithoutContactChannel(
+  header: Record<string, unknown>,
+): ReadonlySet<string> {
+  const withoutContact = new Set<string>()
+  for (const role of [0, 1, 2] as const) {
+    const party = PARTY_CONTACT_CHANNELS[role]
+    if (
+      isBlankPayloadValue(header[party.phoneKey]) &&
+      isBlankPayloadValue(header[party.emailKey]) &&
+      isBlankPayloadValue(header[party.faxKey])
+    ) {
+      withoutContact.add(party.phoneKey.toUpperCase())
+    }
+  }
+  return withoutContact
+}
+
 /** Field BẮT BUỘC của site theo từng loại hàng (FACT 5.3 của plan live-site-alignment). */
 export const REQUIRED_BASE: readonly string[] = [
   'CARGO_KIND_COD',
@@ -342,6 +412,41 @@ export function optionalBlankNote(prop: string, label: string): string {
 }
 
 /**
+ * Note cho ô điện thoại của bên mà KHÔNG có kênh liên hệ nào.
+ *
+ * Site kiểm tra ở form: mỗi bên phải có ÍT NHẤT một kênh liên hệ
+ * (电话 / EMAIL / 传真). Extension chỉ điền được 电话 ⇒ bên không có phone
+ * thì cả ba kênh đều trống ⇒ operator phải điền tay.
+ *
+ * KHÔNG nói "sẽ bị từ chối" — đường API đi không qua form nên KHÔNG biết
+ * server có từ chối hay không.
+ */
+export function partyContactRequiredNote(prop: string, label: string): string {
+  return `${label} (${prop}) is required by the site — the site expects each party to have at least one of phone, email or fax. The API only provides the phone, and this party has none — fill in a contact channel for this party by hand on the site.`
+}
+
+/**
+ * Note cho field mà API trả về giá trị KHÔNG parse được.
+ *
+ * Khác hẳn "API không có giá trị này": ở đây API CÓ dữ liệu nhưng extension
+ * không đọc được nó thành số (vd `"22,400"`) ⇒ phải nói đúng lý do, không
+ * nói sai thành "API không cung cấp".
+ */
+export function unparsableNumberNote(prop: string, label: string): string {
+  return `${label} (${prop}) could not be parsed — the API returned a value that is not a valid number, so the extension could not fill this field in. Check the value on the site and fill it in by hand if needed.`
+}
+
+/**
+ * Giá trị trong PAYLOAD mà extension KHÔNG parse được (NaN) không?
+ *
+ * `NaN` là một trường hợp RIÊNG: API CÓ trả giá trị nhưng extension không
+ * đọc được nó thành số ⇒ khác hẳn "API không có giá trị này".
+ */
+export function isUnparsablePayloadValue(value: unknown): boolean {
+  return typeof value === 'number' && Number.isNaN(value)
+}
+
+/**
  * Giá trị trong PAYLOAD có bị bỏ trống không?
  *
  * KHÁC `isBlank` ở trên, và khác CÓ CHỦ ĐÍCH:
@@ -358,11 +463,14 @@ export function optionalBlankNote(prop: string, label: string): string {
  *
  * `null`/`undefined` cũng là trống — payload không bao giờ chứa chúng, nhưng
  * nếu có thì field đó rõ ràng là chưa có giá trị.
+ *
+ * `NaN` cũng là trống — nhưng là một trường hợp RIÊNG: API CÓ trả giá trị
+ * mà extension không parse được (xem `isUnparsablePayloadValue`).
  */
 export function isBlankPayloadValue(value: unknown): boolean {
   if (value === null || value === undefined) return true
   if (typeof value === 'string') return value.trim() === ''
-  if (typeof value === 'number') return value === 0
+  if (typeof value === 'number') return value === 0 || Number.isNaN(value)
   return false
 }
 

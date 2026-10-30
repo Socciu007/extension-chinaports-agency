@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { normalizeBlNo } from '../core/api'
+import { billNoAsWritten } from '../core/api'
 import { isBlankPayloadValue, labelOf } from '../core/field-meta'
 import { DeadlineError, withDeadline } from '../core/http'
 import {
@@ -73,18 +73,19 @@ const saving = ref(false)
  * lưu hỏng, hoặc còn field BẮT BUỘC bị trống) ⇒ operator phải điền tay.
  *
  * KHÔNG bao giờ xoá vì một lần chạy khác: BL-A đang dở thì BL-B chạy sau
- * không được làm mất nhắc nhở về BL-A. Key là số bill ĐÃ CHUẨN HOÁ — cùng
- * một số bill thì cùng một entry (giống hệt cách content script chốt).
+ * không được làm mất nhắc nhở về BL-A. Key là số bill ĐÃ GHI LÊN SITE (giữ
+ * hậu tố piece) — cùng một số bill thì cùng một entry (giống hệt cách
+ * content script chốt).
  */
 const manifestBills = ref<Record<string, boolean>>({})
 
 /**
  * Số bill mà lần chạy CUỐI tạo ra report đang hiện.
  *
- * Đây là SỐ BILL CỦA OPERATOR (số ô nhập đã chuẩn hoá) — KHÔNG phải
- * `result.billNo` (mã bill do SITE cấp, xem `manifest-run.ts`). Hai thứ tên
- * gần giống nhau nhưng nghĩa khác hẳn: so sán nhầm thì MỌI report bị coi
- * là của bill khác.
+ * Đây là SỐ BILL CỦA OPERATOR (số ô nhập, đã trim + upper-case, giữ hậu tố
+ * piece) — KHÔNG phải `result.billNo` (mã bill do SITE cấp, xem
+ * `manifest-run.ts`). Hai thứ tên gần giống nhau nhưng nghĩa khác hẳn: so
+ * sán nhầm thì MỌI report bị coi là của bill khác.
  *
  * Rỗng = chưa có lần chạy nào ⇒ chưa có report nào để gán nhầm.
  */
@@ -106,7 +107,7 @@ const resultStale = computed(() => {
   if (result.value === null) return false
   // Đang chạy ⇒ report đang hiện là của lần chạy TRƯỚC.
   if (busy.value) return true
-  const typed = normalizeBlNo(blNo.value)
+  const typed = billNoAsWritten(blNo.value)
   // Ô nhập rỗng ⇒ không có bill nào để gán nhầm ⇒ không cũ.
   if (typed === '' || resultInputBlNo.value === '') return false
   return typed !== resultInputBlNo.value
@@ -323,10 +324,10 @@ async function run(allowWrite: boolean): Promise<void> {
     // Kết quả cũ chỉ bị thay khi kết quả MỚI đã về ⇒ bằng chứng "bill đã có
     // trên site" không bị xoá vô tình giữa chừng.
     result.value = res
-    // Số bill ĐÃ CHUẨN HOÁ của lần chạy này — dùng làm KEY của bằng chứng
-    // (đúng cách content script chốt) và để biết report đang hiện thuộc về
-    // số bill nào (`resultInputBlNo`).
-    const billKey = normalizeBlNo(value)
+    // Số bill ĐÃ GHI LÊN SITE của lần chạy này (giữ hậu tố piece) — dùng làm
+    // KEY của bằng chứng (đúng cách content script chốt) và để biết report
+    // đang hiện thuộc về số bill nào (`resultInputBlNo`).
+    const billKey = billNoAsWritten(value)
     resultInputBlNo.value = billKey
 
     if (res.billCreated === true) {

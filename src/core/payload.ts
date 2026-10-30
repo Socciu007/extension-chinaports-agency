@@ -6,8 +6,9 @@
  *
  * - mọi key trong body phải **chữ thường** (site gọi helper `keyToLowercase`
  *   trước khi POST) ⇒ xem `lowerKeys()`;
- * - thiếu dữ liệu ⇒ `""` (KHÔNG `null`, KHÔNG `undefined`, KHÔNG bỏ hẳn key —
- *   site cần đủ key trong body);
+ * - thiếu dữ liệu ⇒ `""` cho field CHUỖI (header toàn chuỗi) và `0` cho
+ *   field SỐ (dòng hàng / container) — KHÔNG `null`, KHÔNG `undefined`, KHÔNG
+ *   bỏ hẳn key (site cần đủ key trong body);
  * - các field loại (付款方式, 货物标识, 货主箱标志) là **MÃ** của site
  *   (`P`/`C`, `S`/`D`/`R`/`G`, `Y`/`N`), KHÔNG phải nhãn tiếng Trung.
  */
@@ -15,10 +16,12 @@ import {
   contactRole,
   deriveCargoKind,
   DANGER_FIELDS,
+  PARTY_CONTACT_CHANNELS,
   payWayOf,
   TEMP_FIELDS,
   type MappingContext,
 } from './field-meta'
+import { billNoAsWritten } from './api'
 import type { ManifestCargo, ManifestContact, ManifestContainer, ManifestData } from './types'
 
 export interface HeaderPayload {
@@ -31,11 +34,23 @@ function str(value: unknown): string {
   return String(value).trim()
 }
 
-/** Số hợp lệ; thiếu / không parse được ⇒ `fallback`. */
+/**
+ * Số từ API.
+ *
+ * - THIẾU dữ liệu (`null`/`undefined`/`''`) ⇒ `fallback` (0) ⇒ payload ghi 0
+ *   ⇒ report coi là "API không có giá trị này";
+ * - CÓ dữ liệu nhưng KHÔNG parse được (vd `"22,400"`) ⇒ `NaN` ⇒ đây là một
+ *   lý do KHÁC ("không parse được"). Payload TRONG BỘ NHỚ giữ `NaN` để report
+ *   phân biệt hai lý do; tầng gửi đi đổi thành `0` — cùng giá trị với case
+ *   thiếu dữ liệu (xem `toWireValue`).
+ *
+ * Trước đây lỗi parse bị nuốt thành `0` ⇒ report nói "API không có giá trị
+ * này" — một lý do SAI, và giá trị sai đó đi thẳng lên site.
+ */
 function num(value: unknown, fallback = 0): number {
   if (value === null || value === undefined || value === '') return fallback
   const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : fallback
+  return Number.isFinite(parsed) ? parsed : Number.NaN
 }
 
 /**
@@ -90,20 +105,55 @@ export function lowerKeys<T>(value: T): T {
 }
 
 /**
+ * Giá trị đi ĐÚNG TRÊN WIRE.
+ *
+ * - Số KHÔNG parse được (`NaN`) ⇒ `0`: đó CHÍNH là giá trị mà case "API
+ *   không có dữ liệu" đã gửi từ trước ⇒ field số giữ nguyên kiểu JSON
+ *   **number** (site validate 货物毛重/货物体积/包装件数 bằng regex số, KHÔNG
+ *   chấp nhận chuỗi rỗng). `NaN` chỉ có thể xảy ra ở field SỐ của dòng hàng /
+ *   container — mọi field chuỗi đi qua `str()` nên KHÔNG BAO GIỜ ra `NaN`.
+ *   Report đọc payload TRONG BỘ NHỚ (vẫn giữ `NaN`) ⇒ đó là nơi phân biệt
+ *   "không parse được" với "API không có giá trị này".
+ * - `null`/`undefined` ⇒ `""`: giữ key trong body (`JSON.stringify` bỏ hẳn
+ *   key có giá trị `undefined`) và tránh `null` (site từ chối giá trị null).
+ *
+ * Đi đệ quy (mảng, object lồng nhau — vd `cntr_list`) và KHÔNG mutate input.
+ */
+export function toWireValue(value: unknown): unknown {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0
+  }
+  if (value === null || value === undefined) {
+    return ''
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => toWireValue(item))
+  }
+  if (typeof value === 'object') {
+    const result: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value)) {
+      result[key] = toWireValue(item)
+    }
+    return result
+  }
+  return value
+}
+
+/**
  * Một bên trong body header (发货人 / 收货人 / 通知人).
  *
  * Mỗi field là TÊN FIELD (key) của site cho bên đó — KHÔNG phải giá trị.
  * Tên field có hậu tố `Key` để không nhầm với dữ liệu: `party.nameKey` là
  * `'e_shipper_nam'`, còn TÊN bên đó nằm ở `contact.master`.
+ *
+ * Kênh liên hệ (điện thoại / email / fax) KHÔNG nằm ở đây: chúng lấy theo
+ * `role` từ `PARTY_CONTACT_CHANNELS` ⇒ không bao giờ lệch vị trí.
  */
 interface Party {
   role: 0 | 1 | 2
   nameKey: string
   addressKey: string
   countryKey: string
-  phoneKey: string
-  emailKey: string
-  faxKey: string
   /**
    * Key AEO — TUỲ CHỌN vì site KHÔNG có field AEO cho 通知人.
    *
@@ -125,9 +175,6 @@ const PARTIES: Party[] = [
     nameKey: 'e_shipper_nam',
     addressKey: 'shipper_add_str',
     countryKey: 'shipper_country_cod',
-    phoneKey: 'shipper_te_str',
-    emailKey: 'shipper_em_str',
-    faxKey: 'shipper_fx_str',
     aeoKey: 'shipper_aeo',
   },
   {
@@ -135,9 +182,6 @@ const PARTIES: Party[] = [
     nameKey: 'e_consignee_nam',
     addressKey: 'consignee_add_str',
     countryKey: 'consignee_country_cod',
-    phoneKey: 'consignee_te_str',
-    emailKey: 'consignee_em_str',
-    faxKey: 'consignee_fx_str',
     aeoKey: 'consignee_aeo',
   },
   {
@@ -145,9 +189,6 @@ const PARTIES: Party[] = [
     nameKey: 'e_notify_nam',
     addressKey: 'notify_add_str',
     countryKey: 'notify_country_cod',
-    phoneKey: 'notify_te_str',
-    emailKey: 'notify_em_str',
-    faxKey: 'notify_fx_str',
   },
 ]
 
@@ -158,12 +199,36 @@ function contactOf(data: ManifestData, role: 0 | 1 | 2): ManifestContact | undef
 }
 
 /**
+ * Số bill ghi vào 提单号 trên site.
+ *
+ * Số bill CÓ THỂ mang hậu tố piece (`P1`, `P12`) — đó là số bill trên SITE
+ * mà operator gõ. API của dadaex chỉ trả mã gốc (`normalizeBlNo` bỏ hậu
+ * tố khi tra cứu) ⇒ ghi mã gốc vào 提单号 là ĐỔI ÂM THẦM số bill trên tờ
+ * khai.
+ *
+ * Vì vậy: lấy số bill của OPERATOR (giữ hậu tố, trim + upper-case cho đúng
+ * dạng viết HOA của số bill — xem `billNoAsWritten`); chỉ khi operator không
+ * gõ gì thì mới lấy `blNo` của API.
+ */
+function billNbrOf(data: ManifestData, operatorBlNo?: string): string {
+  const written = billNoAsWritten(operatorBlNo ?? '')
+  return written !== '' ? written : billNoAsWritten(data.blNo ?? '')
+}
+
+/**
  * Dựng body tạo bill (header).
  *
  * Body ĐÚNG theo mẫu thật của site (key đã lowercase): đủ key, giá trị thiếu
  * ⇒ `""`, `is_all` = `"0"` (tạo bill — KHÔNG phải `"2"` = 发送).
+ *
+ * `operatorBlNo` là số bill do OPERATOR gõ (giữ hậu tố piece) — xem
+ * `billNbrOf`.
  */
-export function buildHeaderPayload(data: ManifestData, ctx: MappingContext): HeaderPayload {
+export function buildHeaderPayload(
+  data: ManifestData,
+  ctx: MappingContext,
+  operatorBlNo?: string,
+): HeaderPayload {
   // 交货地: chỉ điền khi KHÁC cảng卸货港.
   //
   // Trong dữ liệu thật, API copy `uploadCode` sang `aimPortCode` (cùng cảng
@@ -177,7 +242,7 @@ export function buildHeaderPayload(data: ManifestData, ctx: MappingContext): Hea
   const payload: HeaderPayload = {
     // Site tự gán số bill.
     bill_no: '',
-    bill_nbr: str(data.blNo),
+    bill_nbr: billNbrOf(data, operatorBlNo),
     e_ship_nam: str(data.shipName),
     out_voyage_no: str(data.voyage),
     trust_cod: str(ctx.findTrustCode(data.sea_order?.sea_order_bind?.supplyId)),
@@ -210,13 +275,15 @@ export function buildHeaderPayload(data: ManifestData, ctx: MappingContext): Hea
 
   for (const party of PARTIES) {
     const contact = contactOf(data, party.role)
+    // Kênh liên hệ lấy theo VAI TRÒ (`role`), KHÔNG theo thứ tự trong mảng.
+    const channels = PARTY_CONTACT_CHANNELS[party.role]
     payload[party.nameKey] = str(contact?.master)
     payload[party.addressKey] = str(contact?.address)
     payload[party.countryKey] = str(contact?.country)
-    payload[party.phoneKey] = str(contact?.phone)
+    payload[channels.phoneKey] = str(contact?.phone)
     // API không có email/fax ⇒ luôn để trống.
-    payload[party.emailKey] = ''
-    payload[party.faxKey] = ''
+    payload[channels.emailKey] = ''
+    payload[channels.faxKey] = ''
     // AEO: `firmCode` của API là mã đăng ký doanh nghiệp (USCI/TIN), KHÔNG
     // phải mã AEO ⇒ không điền AEO.
     //

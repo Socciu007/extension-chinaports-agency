@@ -213,6 +213,39 @@ function kindEnvelope(kind: 'D' | 'R' | 'G'): { status: number; data: ManifestDa
   return { status: 1, data: { ...manifest, cdgoods: [goodsOfKind(kind)] } }
 }
 
+/**
+ * Envelope có MỘT bên (收货人) KHÔNG có phone.
+ *
+ * Site kiểm tra ở form: mỗi bên phải có ÍT NHẤT một kênh liên hệ
+ * (电话 / EMAIL / 传真). Extension chỉ điền được 电话 ⇒ bên không có phone
+ * thì cả ba kênh đều trống.
+ */
+function partyWithoutPhoneEnvelope(): { status: number; data: ManifestData } {
+  const contacts = (manifest.cabContacts ?? []).map((contact) =>
+    contact.type === true ? { ...contact, phone: null } : contact,
+  )
+  return { status: 1, data: { ...manifest, cabContacts: contacts } }
+}
+
+/** Envelope có một dòng hàng mà số API trả về KHÔNG parse được. */
+function unparsableWeightEnvelope(): { status: number; data: ManifestData } {
+  const goods = manifest.cdgoods?.[0] as ManifestCargo
+  return {
+    status: 1,
+    data: { ...manifest, cdgoods: [{ ...goods, weight: '22,400' }] },
+  }
+}
+
+/** Trong body đã gửi đi có giá trị `null` nào không? */
+function hasNullValue(value: unknown): boolean {
+  if (value === null) return true
+  if (Array.isArray(value)) return value.some((item) => hasNullValue(item))
+  if (typeof value === 'object' && value !== null) {
+    return Object.values(value as Record<string, unknown>).some((item) => hasNullValue(item))
+  }
+  return false
+}
+
 describe('runManifest — preview mode', () => {
   it('KHÔNG gửi POST nào lên site', async () => {
     const h = harness()
@@ -591,5 +624,143 @@ describe('runManifest — lỗi', () => {
     expect(result.message).toContain('may already exist on the site')
     // KHÔNG được nói "chưa tạo gì cả" — yêu cầu ĐÃ gửi lên site.
     expect(result.message).not.toContain('Nothing was created on the site.')
+  })
+})
+
+/**
+ * Số bill ghi lên site.
+ *
+ * Số bill trên site CÓ THỂ mang hậu tố piece (`P1`, `P12`); API chỉ trả mã
+ * gốc ⇒ tra cứu thì bỏ hậu tố, ghi lên site thì PHẢI GIỮ.
+ */
+describe('runManifest — số bill ghi lên site', () => {
+  it('API tra MÃ GỐC (bỏ hậu tố piece)', async () => {
+    const h = harness()
+    await preview(h, { blNo: 'ONEYSHAGT1569600P1' })
+
+    expect(h.api.calls[0]?.url).toContain('blNo=ONEYSHAGT1569600')
+    expect(h.api.calls[0]?.url).not.toContain('P1')
+  })
+
+  it('site nhận số bill CÓ hậu tố piece', async () => {
+    const h = harness()
+    const result = await preview(h, { blNo: 'ONEYSHAGT1569600P1' })
+
+    expect(result.preview.header.bill_nbr).toBe('ONEYSHAGT1569600P1')
+  })
+
+  it('số bill ghi lên site KHÁC số bill của API ⇒ báo cho operator', async () => {
+    const h = harness()
+    const result = await preview(h, { blNo: 'ONEYSHAGT1569600P1' })
+
+    expect(result.steps.join('\n')).toContain(
+      'The manifest will use the bill number ONEYSHAGT1569600P1 — the API returned ONEYSHAGT1569600.',
+    )
+  })
+
+  it('số bill TRÙNG số bill của API ⇒ KHÔNG báo', async () => {
+    const h = harness()
+    const result = await preview(h)
+
+    expect(result.steps.join('\n')).not.toContain('The manifest will use the bill number')
+  })
+
+  it('số bill của API KHÁC chữ HOA ⇒ KHÔNG báo nhầm (site upper-case mọi field)', async () => {
+    const h = harness({ status: 1, data: { ...manifest, blNo: 'oneySHAGT1569600' } })
+    const result = await preview(h)
+
+    expect(result.preview.header.bill_nbr).toBe('ONEYSHAGT1569600')
+    expect(result.steps.join('\n')).not.toContain('The manifest will use the bill number')
+  })
+
+  it('số bill ghi lên site giữ nguyên qua cả bước TẠO bill', async () => {
+    const h = harness()
+    await write(h, { blNo: 'ONEYSHAGT1569600P1' })
+
+    const createPost = postsOf(h)[0]
+    expect(createPost?.body?.bill_nbr).toBe('ONEYSHAGT1569600P1')
+  })
+})
+
+/**
+ * Bên KHÔNG có kênh liên hệ nào.
+ *
+ * Site kiểm tra ở form: mỗi bên phải có ÍT NHẤT một kênh liên hệ
+ * (电话 / EMAIL / 传真). Extension chỉ điền được 电话 ⇒ bên không có phone
+ * thì cả ba kênh đều trống ⇒ phải báo là BẮT BUỘC, KHÔNG được báo là
+ * "không bắt buộc, để trống là đúng".
+ */
+describe('runManifest — bên không có kênh liên hệ', () => {
+  it('bên không có phone ⇒ ô điện thoại BẮT BUỘC, kèm lý do đúng', async () => {
+    const h = harness(partyWithoutPhoneEnvelope())
+    const result = await preview(h)
+
+    const item = result.items.find((entry) => entry.prop === 'CONSIGNEE_TE_STR')
+    expect(item).toBeDefined()
+    expect(item?.status).toBe('warn')
+    expect(item?.required).toBe(true)
+    expect(item?.scope).toBe('header')
+    expect(item?.note).toContain('at least one of phone, email or fax')
+    expect(item?.note).toContain('The API only provides the phone')
+    expect(item?.note).toContain('by hand on the site')
+  })
+
+  it('bên CÓ phone ⇒ KHÔNG có dòng báo cho ô điện thoại đó', async () => {
+    const h = harness()
+    const result = await preview(h)
+
+    expect(result.items.map((entry) => entry.prop)).not.toContain('CONSIGNEE_TE_STR')
+  })
+
+  it('các ô EMAIL / FAX giữ NGUYÊN note cũ (không phải bắt buộc)', async () => {
+    const h = harness(partyWithoutPhoneEnvelope())
+    const result = await preview(h)
+
+    const email = result.items.find((entry) => entry.prop === 'CONSIGNEE_EM_STR')
+    expect(email?.required).toBe(false)
+    expect(email?.status).toBe('skip')
+    expect(email?.note).toBe(BLANK_NOTES.CONSIGNEE_EM_STR)
+  })
+
+  it('bên không có phone ⇒ vẫn GHI được (bắt buộc chỉ là cảnh báo)', async () => {
+    const h = harness(partyWithoutPhoneEnvelope())
+    const result = await write(h)
+
+    expect(result.ok).toBe(true)
+    expect(result.written).toBe(true)
+    expect(result.billCreated).toBe(true)
+    expect(result.blocked).toBe(true)
+  })
+})
+
+/**
+ * Số API trả về mà extension KHÔNG parse được.
+ *
+ * `num()` trước đây nuốt lỗi parse thành `0` ⇒ report nói "API không có
+ * giá trị này" — một lý do SAI. Nay phải nói đúng: API CÓ giá trị nhưng
+ * extension không đọc được.
+ */
+describe('runManifest — số không parse được', () => {
+  it('báo "could not be parsed", KHÔNG phải "does not provide"', async () => {
+    const h = harness(unparsableWeightEnvelope())
+    const result = await preview(h)
+
+    const item = result.items.find(
+      (entry) => entry.scope === 'cargo' && entry.prop === 'GWEIGHT_TON',
+    )
+    expect(item).toBeDefined()
+    expect(item?.required).toBe(true)
+    expect(item?.status).toBe('warn')
+    expect(item?.note).toContain('could not be parsed')
+    expect(item?.note).not.toContain('does not provide')
+  })
+
+  it('body gửi đi KHÔNG có null, số không parse được đi ra là 0', async () => {
+    const h = harness(unparsableWeightEnvelope())
+    await write(h)
+
+    const cargoPost = h.site.calls.find((call) => call.url.includes('cargo/add/'))
+    expect(cargoPost?.body?.gweight_ton).toBe(0)
+    expect(hasNullValue(cargoPost?.body)).toBe(false)
   })
 })

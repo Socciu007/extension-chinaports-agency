@@ -404,6 +404,51 @@ describe('content script — chạy manifest qua API', () => {
     expect(fake.calls.filter((call) => call.method === 'POST')).toHaveLength(postsAfterFirst)
   })
 
+  it('hai piece KHÁC nhau (P1 / P2) của cùng mã gốc ⇒ KHÔNG bị coi là trùng bill', async () => {
+    // `…P1` và `…P2` là HAI bản ghi KHÁC NHAU trên site ⇒ chốt phải tách.
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    const first = await send({
+      type: MSG_CREATE_MANIFEST,
+      blNo: `${BL_NO}P1`,
+      allowWrite: true,
+    })
+    expect(first.ok).toBe(true)
+    expect(first.written).toBe(true)
+
+    const second = await send({
+      type: MSG_CREATE_MANIFEST,
+      blNo: `${BL_NO}P2`,
+      allowWrite: true,
+    })
+    expect(second.ok).toBe(true)
+    expect(second.written).toBe(true)
+  })
+
+  it('cùng MỘT piece ⇒ lần sau bị từ chối, KHÔNG tạo bill thứ hai', async () => {
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    const first = await send({
+      type: MSG_CREATE_MANIFEST,
+      blNo: `${BL_NO}P1`,
+      allowWrite: true,
+    })
+    expect(first.ok).toBe(true)
+
+    const postsAfterFirst = fake.calls.filter((call) => call.method === 'POST').length
+
+    const second = await send({
+      type: MSG_CREATE_MANIFEST,
+      blNo: `${BL_NO}P1`,
+      allowWrite: true,
+    })
+    expect(second.ok).toBe(false)
+    expect(second.message).toBe(DUPLICATE_MESSAGE)
+    expect(fake.calls.filter((call) => call.method === 'POST')).toHaveLength(postsAfterFirst)
+  })
+
   it('A → B → A ⇒ lần thứ ba bị từ chối, KHÔNG tạo bill thứ hai cho A', async () => {
     const fake = fakeFetch()
     vi.stubGlobal('fetch', fake.fetchImpl)
