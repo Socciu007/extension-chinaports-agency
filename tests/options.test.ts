@@ -128,6 +128,21 @@ describe('fallback từ key legacy `autoSubmit`', () => {
     expect(settings.createOnSite).toBe(false)
   })
 
+  it('`createOnSite: false` thắng dù storage còn ĐỦ key khác ở giá trị mặc định', async () => {
+    // Không được có bất kỳ ngoại lệ nào: chỉ cần `createOnSite` CÓ trong
+    // storage là lựa chọn của người dùng, dù các key khác có đang nằm ở giá
+    // trị mặc định hay không. Nếu không, opt-out tường minh sẽ bị key legacy
+    // lật ngược trong im lặng.
+    store.autoSubmit = true
+    store.createOnSite = false
+    store.apiBase = DEFAULT_SETTINGS.apiBase
+    store.siteApiBase = DEFAULT_SETTINGS.siteApiBase
+
+    const settings = await readSettings()
+
+    expect(settings.createOnSite).toBe(false)
+  })
+
   it('`autoSubmit` trong storage không phải boolean `true` ⇒ KHÔNG bật', async () => {
     // Storage có thể bị sửa tay ⇒ ép kiểu nghiêm: chỉ `true` mới bật.
     store.autoSubmit = 'true'

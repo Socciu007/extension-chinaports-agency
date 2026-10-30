@@ -51,33 +51,25 @@ function withDefaults(stored: Partial<ExtensionSettings>): ExtensionSettings {
 }
 
 /**
- * Object thô có phải "bản đã gộp sẵn mặc định" của lần đọc CŨ không?
- *
- * Lần đọc CŨ dùng `get(DEFAULT_SETTINGS)` ⇒ kết quả có ĐÚNG key của mặc định
- * với giá trị mặc định, cộng thêm key người dùng đã lưu. Object dạng đó KHÔNG
- * phải object thô của storage ⇒ `createOnSite: false` bên trong là MẶC ĐỊNH
- * bị điền vào, KHÔNG phải lựa chọn của người dùng ⇒ khi đó key legacy mới là
- * thứ nói lên ý định.
- */
-function isMergedWithDefaults(raw: RawStoredSettings): boolean {
-  const keys = Object.keys(DEFAULT_SETTINGS) as (keyof ExtensionSettings)[]
-  return keys.every((key) => raw[key] === DEFAULT_SETTINGS[key])
-}
-
-/**
  * Tính giá trị của `createOnSite` từ object THÔ của storage.
  *
  * Quy tắc, theo thứ tự:
  * - Có key `createOnSite` ⇒ người dùng ĐÃ chọn trong UI mới ⇒ thắng, kể cả khi
- *   giá trị là `false`.
+ *   giá trị là `false`. Lựa chọn tường minh KHÔNG được bất kỳ key nào khác
+ *   lật ngược — kể cả key legacy.
  * - Chỉ khi `createOnSite` VẮNG MẶT thì key legacy `autoSubmit === true` mới
  *   bật nó lên (opt-in cũ không được mất trong im lặng).
+ *
+ * Ép kiểu nghiêm: chỉ boolean `true` mới là `true` (storage có thể bị sửa tay).
  *
  * `undefined` = "chưa có lựa chọn nào" ⇒ `withDefaults` dùng mặc định.
  */
 function resolveCreateOnSite(raw: RawStoredSettings): boolean | undefined {
-  const hasNewKey = 'createOnSite' in raw && !isMergedWithDefaults(raw)
-  if (hasNewKey) return raw.createOnSite === true
+  // Có key `createOnSite` ⇒ người dùng ĐÃ chọn trong UI mới ⇒ thắng, kể cả khi
+  // giá trị là `false`.
+  if ('createOnSite' in raw) return raw.createOnSite === true
+  // Chỉ khi `createOnSite` VẮNG MẶT thì key legacy `autoSubmit === true` mới
+  // bật nó lên (opt-in cũ không được mất trong im lặng).
   if (raw[LEGACY_AUTO_SUBMIT_KEY] === true) return true
   return undefined
 }
