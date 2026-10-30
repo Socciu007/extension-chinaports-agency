@@ -349,7 +349,7 @@ async function run(allowWrite: boolean): Promise<void> {
     runError.value =
       e instanceof DeadlineError
         ? 'The manifest run is taking longer than expected. It may still be running on the page — check the manifest form before trying again.'
-        : 'Could not reach the page. Open the manifest declaration page and try again.'
+        : 'Could not reach the page. Open the manifest declaration page, reload it, and try again.'
   } finally {
     busy.value = false
     runningAction.value = null
@@ -392,7 +392,18 @@ async function openPage(): Promise<void> {
   const tab = await chrome.tabs.get(tabId)
 
   if (isManifestUrl(tab.url)) {
-    await chrome.tabs.reload(tabId)
+    // Đã ở đúng trang ⇒ CHỈ đưa tab lên trước. KHÔNG reload.
+    //
+    // "Open page" là hành động ĐIỀU HƯỚNG, mà điều hướng không được xoá
+    // trạng thái trang: reload sẽ xoá sạch những gì operator đã gõ trên form
+    // manifest — mà đó đúng là việc operator phải làm TAY sau khi extension
+    // tạo nháp. Nút này cũng là thứ operator bấm giữa lúc đang điền.
+    //
+    // Reload trước đây có mục đích khác: lấy content script MỚI sau khi
+    // extension được reload. Trường hợp đó đã có đường thoát riêng: lần chạy
+    // báo "Could not reach the page … reload it …" ⇒ operator reload trang
+    // khai báo rồi thử lại.
+    await chrome.tabs.update(tabId, { active: true })
   } else {
     await chrome.tabs.update(tabId, {
       url: MANIFEST_URL,
@@ -636,6 +647,14 @@ onUnmounted(() => {
       </p>
       <p v-else-if="result.billCreated" class="bill-line">
         The manifest bill was created on the site, but saving it did not finish.
+      </p>
+      <!--
+        Danh sách manifest trên site là SPA ⇒ bill vừa tạo qua API KHÔNG có
+        trong danh sách cho tới khi trang được tải lại. Nút "Open page" không
+        reload nữa (reload sẽ xoá trạng thái form) ⇒ phải nói rõ điều đó.
+      -->
+      <p v-if="result.written" class="bill-line">
+        Refresh the manifest list on the site to see the new draft.
       </p>
       <p v-if="result.billNo" class="bill-line">Bill number: {{ result.billNo }}</p>
       <p v-if="result.written" class="double-write">

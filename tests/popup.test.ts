@@ -34,7 +34,7 @@ let sentTypes: string[]
 /** Ghi lại TOÀN BỘ message đã gửi đi — để assert payload (vd `allowWrite`). */
 let sentMessages: SentMessage[]
 /** Ghi lại mọi lần ĐIỀU HƯỚNG tab — để assert tab nào bị đổi URL. */
-let tabUpdates: { tabId: number; url?: string }[]
+let tabUpdates: { tabId: number; url?: string; active?: boolean }[]
 /** Ghi lại mọi lần TẠO tab mới — để assert không mở tab mới. */
 let createdTabs: (string | undefined)[]
 /** Ghi lại mọi lần TẢI LẠI tab — để assert tab đang ở trang khai báo được reload. */
@@ -100,8 +100,8 @@ beforeEach(() => {
         createdTabs.push(props.url)
         return undefined
       },
-      update: async (tabId: number, props: { url?: string }) => {
-        tabUpdates.push({ tabId, url: props.url })
+      update: async (tabId: number, props: { url?: string; active?: boolean }) => {
+        tabUpdates.push({ tabId, url: props.url, active: props.active })
         return undefined
       },
     },
@@ -368,7 +368,7 @@ describe('popup — lỗi vận chuyển', () => {
       await clickPreview(wrapper)
 
       expect(wrapper.find('.error').text()).toBe(
-        'Could not reach the page. Open the manifest declaration page and try again.',
+        'Could not reach the page. Open the manifest declaration page, reload it, and try again.',
       )
       // Chi tiết kỹ thuật phải nằm ở console — không bị nuốt.
       expect(errorSpy).toHaveBeenCalled()
@@ -456,6 +456,28 @@ describe('popup — hiện kết quả của lần chạy', () => {
     )
     expect(wrapper.find('.double-write').text()).toContain(
       'Do not create another manifest for this bill number.',
+    )
+  })
+
+  it('ghi thành công ⇒ báo operator phải tải lại danh sách manifest trên site', async () => {
+    // Danh sách manifest trên site là SPA ⇒ bill vừa tạo qua API KHÔNG có
+    // trong danh sách cho tới khi trang được tải lại. Nút "Open page" KHÔNG
+    // reload nữa ⇒ phải nói rõ điều đó.
+    sendMessage = async () => successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+    await clickPreview(wrapper)
+
+    const billStatus = wrapper.find('.bill-status')
+    expect(billStatus.exists()).toBe(true)
+    expect(billStatus.text()).toContain(
+      'The manifest was created on the site and saved as a draft (暂存).',
+    )
+    expect(billStatus.text()).toContain(
+      'Refresh the manifest list on the site to see the new draft.',
     )
   })
 
@@ -1448,14 +1470,14 @@ describe('popup — nút Open page', () => {
     await flushPromises()
 
     // Tab active (id = 1 trong stub) phải bị đổi URL sang trang khai 预配舱单.
-    expect(tabUpdates).toEqual([{ tabId: 1, url: MANIFEST_URL }])
+    expect(tabUpdates).toEqual([{ tabId: 1, url: MANIFEST_URL, active: true }])
     // KHÔNG được mở thêm tab mới — người dùng chọn điều hướng tab hiện tại.
     expect(createdTabs).toEqual([])
     // Tab KHÔNG đang ở trang khai báo ⇒ không reload.
     expect(tabReloads).toEqual([])
   })
 
-  it('tab ĐANG ở trang khai báo ⇒ tải lại tab, KHÔNG điều hướng', async () => {
+  it('tab ĐANG ở trang khai báo ⇒ đưa tab lên trước, KHÔNG reload, KHÔNG điều hướng', async () => {
     activeTabUrl = MANIFEST_URL
     const wrapper = mount(PopupApp)
     await flushPromises()
@@ -1463,9 +1485,12 @@ describe('popup — nút Open page', () => {
     await buttonByText(wrapper, 'Open page').trigger('click')
     await flushPromises()
 
-    // Đã ở đúng trang ⇒ reload để thấy dữ liệu mới, KHÔNG điều hướng lại.
-    expect(tabReloads).toEqual([1])
-    expect(tabUpdates).toEqual([])
+    // "Open page" là hành động ĐIỀU HƯỚNG ⇒ không được xoá trạng thái
+    // trang: reload sẽ xoá sạch những gì operator đã gõ trên form manifest
+    // (mà chính operator phải điền tay sau khi extension tạo nháp).
+    expect(tabReloads).toEqual([])
+    // Đã ở đúng trang ⇒ chỉ đưa tab lên trước, KHÔNG đổi URL.
+    expect(tabUpdates).toEqual([{ tabId: 1, url: undefined, active: true }])
     expect(createdTabs).toEqual([])
   })
 
@@ -1482,7 +1507,7 @@ describe('popup — nút Open page', () => {
     await flushPromises()
 
     // KHÔNG phải trang khai báo ⇒ phải điều hướng tab, KHÔNG reload.
-    expect(tabUpdates).toEqual([{ tabId: 1, url: MANIFEST_URL }])
+    expect(tabUpdates).toEqual([{ tabId: 1, url: MANIFEST_URL, active: true }])
     expect(tabReloads).toEqual([])
     expect(createdTabs).toEqual([])
   })
@@ -1497,7 +1522,7 @@ describe('popup — nút Open page', () => {
     await buttonByText(wrapper, 'Open page').trigger('click')
     await flushPromises()
 
-    expect(tabUpdates).toEqual([{ tabId: 1, url: MANIFEST_URL }])
+    expect(tabUpdates).toEqual([{ tabId: 1, url: MANIFEST_URL, active: true }])
     expect(tabReloads).toEqual([])
     expect(createdTabs).toEqual([])
   })

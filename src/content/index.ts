@@ -68,29 +68,63 @@ function errorResult(message: string): CreateResult {
 let inFlight: Promise<CreateResult> | null = null
 
 /**
- * Key lưu tập số bill đã tạo trong tab này (trong `sessionStorage`).
+ * Key lưu tập số bill đã tạo — đường DỰ PHÒNG (trong `sessionStorage`).
  *
  * Có namespace để không đụng dữ liệu của site trên cùng origin.
  */
 const CREATED_BILL_NOS_KEY = 'manifest-autofill:created-bill-nos'
 
 /**
+ * Tiền tố key của chốt trong `chrome.storage.local` — MỘT key cho MỘT số bill.
+ *
+ * Vì sao KHÔNG gom tất cả số bill vào MỘT record: hai tab ghi cùng lúc sẽ
+ * phải đọc-cộng-rồi-ghi ⇒ entry của nhau có thể bị mất. Mỗi số bill một key
+ * ⇒ hai tab ghi SONG SONG không đụng entry của nhau.
+ *
+ * Số bill trong key là số ĐÃ GHI LÊN SITE (giữ hậu tố piece) — đúng bằng
+ * thứ mà chốt kiểm, KHÔNG chuẩn hoá lần nữa.
+ */
+const CREATED_BILL_NO_PREFIX = 'manifest-autofill:created-bill-no:'
+
+/**
  * Tập số bill đã tạo trên site — bộ nhớ TRONG RAM của content script.
  *
- * Lưu thêm vào `sessionStorage` (xem `rememberCreatedBillNo`) ⇒ chốt còn
- * đúng sau khi operator reload trang. Bộ nhớ trong RAM giữ chốt hoạt động
- * ngay cả khi `sessionStorage` bị chặn.
+ * CHỈ là đường DỰ PHÒNG cuối: RAM thuộc RIÊNG tab này ⇒ không chặn được
+ * tab khác. Chốt THẬT nằm ở `chrome.storage.local` (xem `loadCreatedBillNos`).
  */
 const createdBillNos = new Set<string>()
 
 /**
- * Đọc tập số bill đã tạo — hợp nhất bộ nhớ trong RAM với `sessionStorage`.
+ * Area `chrome.storage.local` — nơi chốt PHẢI nằm để chung cho mọi tab.
  *
- * `sessionStorage` là nơi duy nhất sống sót qua lần reload trang, nên nó
- * mới là nguồn sự thật; bộ nhớ trong RAM chỉ bổ sung cho lúc nó bị chặn.
+ * `sessionStorage` và bộ nhớ RAM đều thuộc RIÊNG một tab ⇒ chốt ở đó KHÔNG
+ * chặn được trường hợp operator mở trang khai báo ở tab THỨ HAI (hoặc đóng
+ * tab đầu rồi mở lại) và chạy lại đúng số bill đó — lúc đó site sẽ có bill
+ * THỨ HAI cho cùng một số bill.
+ *
+ * `chrome.storage.local` thì CHUNG cho mọi tab của extension trong cùng một
+ * profile, và sống sót qua lần đóng tab.
+ *
+ * KHÔNG có background service worker (extension cố tình không có) ⇒ content
+ * script tự đọc/ghi trực tiếp, không cần trung gian.
+ *
+ * Trả `undefined` khi không dùng được (policy chặn, hoặc test không stub) ⇒
+ * người gọi rơi về `sessionStorage` + bộ nhớ RAM.
  */
-function loadCreatedBillNos(): Set<string> {
-  const billNos = new Set<string>(createdBillNos)
+function localStorageArea(): chrome.storage.LocalStorageArea | undefined {
+  if (typeof chrome === 'undefined') return undefined
+  const local = chrome.storage?.local
+  if (!local || typeof local.get !== 'function') return undefined
+  return local
+}
+
+/**
+ * Đọc tập số bill đã tạo trong `sessionStorage` — đường DỰ PHÒNG.
+ *
+ * `sessionStorage` bị chặn (policy riêng tư, sandbox) ⇒ không có gì để đọc.
+ */
+function readSessionBillNos(): Set<string> {
+  const billNos = new Set<string>()
   try {
     const raw = sessionStorage.getItem(CREATED_BILL_NOS_KEY)
     if (!raw) return billNos
@@ -100,8 +134,44 @@ function loadCreatedBillNos(): Set<string> {
       if (typeof value === 'string' && value !== '') billNos.add(value)
     }
   } catch {
-    // `sessionStorage` bị chặn (policy riêng tư, sandbox) ⇒ dùng bộ nhớ RAM.
+    // `sessionStorage` bị chặn ⇒ không có gì để đọc.
   }
+  return billNos
+}
+
+/**
+ * Đọc tập số bill đã có manifest trên site.
+ *
+ * Nguồn chính: `chrome.storage.local` — CHUNG cho mọi tab. Đọc `get(null)`
+ * (toàn bộ store) rồi chỉ giữ các key có tiền tố của extension.
+ *
+ * KHÔNG hợp nhất bộ nhớ RAM ở đây: store CHUNG là nguồn SỰ THẬT, và nếu
+ * hợp nhất RAM thì đường thoát "xoá storage rồi chạy lại" (nói trong message
+ * từ chối) sẽ KHÔNG ăn trong tab đang mở ⇒ lời nói dối.
+ *
+ * KHÔNG có `chrome.storage.local` (bị policy chặn) hoặc đọc lỗi ⇒ rơi về
+ * `sessionStorage` + bộ nhớ RAM, đúng như trước đây. Không bao giờ ném lỗi:
+ * thiếu chốt thì đáng lẽ phải chạy tiếp, chứ không phải báo lỗi.
+ */
+async function loadCreatedBillNos(): Promise<Set<string>> {
+  const local = localStorageArea()
+  if (local) {
+    try {
+      const raw = (await local.get(null)) as Record<string, unknown>
+      const billNos = new Set<string>()
+      for (const key of Object.keys(raw)) {
+        if (!key.startsWith(CREATED_BILL_NO_PREFIX)) continue
+        const blNo = key.slice(CREATED_BILL_NO_PREFIX.length)
+        if (blNo !== '') billNos.add(blNo)
+      }
+      return billNos
+    } catch (e) {
+      // Storage bị chặn / lỗi ⇒ rơi xuống `sessionStorage` + RAM.
+      console.warn('[manifest-autofill] could not read the created bill numbers', e)
+    }
+  }
+  const billNos = new Set<string>(createdBillNos)
+  for (const blNo of readSessionBillNos()) billNos.add(blNo)
   return billNos
 }
 
@@ -113,12 +183,37 @@ function loadCreatedBillNos(): Set<string> {
  * sẽ tạo bill THỨ HAI cho cùng một số bill.
  *
  * Số bill rỗng KHÔNG được ghi — không có số bill thì không chặn được gì.
+ *
+ * Chốt KHÔNG hết hạn: nó nói "trên site ĐÃ CÓ bill với số này" — đó là một
+ * sự thật về site, không phải một trạng thái tạm. Đổi lại,
+ * `chrome.storage.local` sống sót qua lần restart trình duyệt (khác
+ * `sessionStorage` cũ) ⇒ một chốt CŨ chỉ là điều phiền to, còn một chốt
+ * THIẾU là một chứng từ hải quan trùng. Nên giữ chốt, và để operator tự
+ * xoá khi cần (message từ chối có nói đường thoát).
  */
-function rememberCreatedBillNo(blNo: string): void {
+async function rememberCreatedBillNo(blNo: string): Promise<void> {
   if (blNo === '') return
+  // Bộ nhớ RAM LUÔN được ghi ⇒ nếu `chrome.storage.local` đọc hỏng thì chốt
+  // vẫn còn trong tab này.
   createdBillNos.add(blNo)
+  const local = localStorageArea()
+  if (local) {
+    try {
+      // Giá trị = thời điểm ghi (epoch ms). Chỉ để biết chốt được ghi lúc
+      // nào — chốt không hết hạn nên giá trị này không dùng để quyết định gì.
+      await local.set({ [CREATED_BILL_NO_PREFIX + blNo]: Date.now() })
+      // Ghi được vào store CHUNG ⇒ KHÔNG cần bản sao trong `sessionStorage`
+      // (bản sao đó theo tab, và làm đường thoát "xoá storage" không ăn).
+      return
+    } catch (e) {
+      console.warn('[manifest-autofill] could not persist the created bill number', blNo, e)
+      // Rơi xuống `sessionStorage` + RAM.
+    }
+  }
+  const billNos = readSessionBillNos()
+  billNos.add(blNo)
   try {
-    sessionStorage.setItem(CREATED_BILL_NOS_KEY, JSON.stringify([...loadCreatedBillNos()]))
+    sessionStorage.setItem(CREATED_BILL_NOS_KEY, JSON.stringify([...billNos]))
   } catch {
     // Không ghi được thì chốt vẫn còn trong RAM của content script.
     console.warn('[manifest-autofill] could not persist the created bill number', blNo)
@@ -148,11 +243,16 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
   // và KHÔNG BAO GIỜ tự submit ⇒ operator tự điền lại dòng cho từng piece.
   const billKey = billNoAsWritten(request.blNo)
 
-  // Site ĐÃ có manifest cho số bill này trong tab này ⇒ từ chối, KHÔNG chạy
-  // gì thêm. Chặn TRƯỚC mọi lần gọi mạng.
-  if (allowWrite && loadCreatedBillNos().has(billKey)) {
+  // Site ĐÃ có manifest cho số bill này ⇒ từ chối, KHÔNG chạy gì thêm.
+  // Chặn TRƯỚC mọi lần gọi mạng.
+  //
+  // Hạn chế ĐÃ BIẾT (chốt này KHÔNG kín): hai tab chạy CÙNG một số bill đúng
+  // lúc vẫn có thể cùng vượt qua — cả hai đọc trước khi ai kịp ghi. Chốt
+  // chặn được trường hợp PHỔ BIẾN (chạy lại ở tab khác, hoặc sau khi đóng
+  // tab), không chặn được cái tranh chấp đúng giây đó.
+  if (allowWrite && (await loadCreatedBillNos()).has(billKey)) {
     return errorResult(
-      'A manifest was already created on the site for this bill of lading number. Check the site and finish that manifest by hand — the extension does not create a second manifest for the same bill.',
+      'A manifest was already created on the site for this bill of lading number. Check the site and finish that manifest by hand — the extension does not create a second manifest for the same bill. If the site no longer has that manifest, clear the storage of the Manifest Autofill extension for this browser and run again.',
     )
   }
 
@@ -181,7 +281,10 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
   })
 
   // Site ĐÃ xác nhận có bill ⇒ ghi nhớ, kể cả khi bước lưu chưa xong.
-  if (result.billCreated === true) rememberCreatedBillNo(billKey)
+  //
+  // PHẢI chờ ghi xong: nếu không, chốt có thể tới sau khi popup đã nhận câu
+  // trả lời ⇒ operator thấy "xong" rồi mở tab khác chạy lại thì vẫn lọt.
+  if (result.billCreated === true) await rememberCreatedBillNo(billKey)
 
   return result
 }

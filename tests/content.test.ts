@@ -15,11 +15,14 @@ const BL_NO = 'ONEYSHAGT1569600'
 /**
  * Message từ chối khi site ĐÃ có manifest cho số bill này (FIX 1).
  *
- * Không còn "reload trang" trong message: chốt nằm trong `sessionStorage` nên
- * SỐNG SÓT qua reload ⇒ đường thoát đó không còn đúng.
+ * Không còn "reload trang" trong message: chốt nằm trong `chrome.storage.local`
+ * nên SỐNG SÓT qua reload ⇒ đường thoát đó không còn đúng.
+ *
+ * Câu cuối là đường thoát cho operator đã XOÁ nháp trên site: chốt bền ⇒
+ * không còn cách nào khác để chạy lại số bill đó.
  */
 const DUPLICATE_MESSAGE =
-  'A manifest was already created on the site for this bill of lading number. Check the site and finish that manifest by hand — the extension does not create a second manifest for the same bill.'
+  'A manifest was already created on the site for this bill of lading number. Check the site and finish that manifest by hand — the extension does not create a second manifest for the same bill. If the site no longer has that manifest, clear the storage of the Manifest Autofill extension for this browser and run again.'
 
 /** Message từ chối khi opt-in ĐÃ LƯU đang tắt (FIX 2). */
 const OPT_IN_OFF_MESSAGE =
@@ -33,6 +36,14 @@ const WRONG_PAGE_MESSAGE =
 const INVALID_REQUEST_MESSAGE =
   'The extension received an invalid request — reload the manifest page and try again.'
 
+/**
+ * Key của chốt trong `chrome.storage.local` — MỘT key cho MỘT số bill.
+ *
+ * Số bill là số ĐÃ GHI LÊN SITE (giữ hậu tố piece) — cùng một số bill thì
+ * cùng một key.
+ */
+const localKeyOf = (blNo: string) => `manifest-autofill:created-bill-no:${blNo}`
+
 let listener: Listener | undefined
 /** Mở chốt để `fetch` treo cho tới khi test kết thúc. */
 let release: (() => void) | undefined
@@ -44,6 +55,18 @@ let fetchMock: ReturnType<typeof vi.fn>
  * tắt thì sửa biến này trước khi gửi message.
  */
 let settings: Record<string, unknown>
+/**
+ * Store của `chrome.storage.local` — CHUNG cho MỌI tab của extension.
+ *
+ * Đây là nơi chốt "số bill đã có manifest trên site" được ghi ⇒ nó phải sống
+ * lâu hơn một tab. Test phải xoá nó giữa các test, nếu không chốt của test
+ * trước lọt vào test sau.
+ */
+let localStore: Record<string, unknown>
+/** `set` của `chrome.storage.local` — để assert ĐÚNG key đã ghi. */
+let localSet: ReturnType<typeof vi.fn>
+/** `get` của `chrome.storage.local` — để assert đã đọc storage. */
+let localGet: ReturnType<typeof vi.fn>
 
 /** Một lần gọi fetch đã bắt. */
 interface RecordedCall {
@@ -149,8 +172,23 @@ beforeEach(async () => {
   vi.resetModules()
   listener = undefined
   release = undefined
-  // Chốt "bill đã tạo" nằm trong `sessionStorage` ⇒ nó SỐNG SÓT qua test ⇒
-  // phải xoá, nếu không test sau thừa hưởng chốt của test trước.
+  // Chốt "bill đã tạo" nằm trong `chrome.storage.local` ⇒ nó SỐNG SÓT qua
+  // test ⇒ phải xoá, nếu không test sau thừa hưởng chốt của test trước.
+  localStore = {}
+  localGet = vi.fn(async (keys?: string | string[] | null) => {
+    if (keys === null || keys === undefined) return { ...localStore }
+    const wanted = typeof keys === 'string' ? [keys] : keys
+    const out: Record<string, unknown> = {}
+    for (const key of wanted) {
+      if (key in localStore) out[key] = localStore[key]
+    }
+    return out
+  })
+  localSet = vi.fn(async (values: Record<string, unknown>) => {
+    Object.assign(localStore, values)
+  })
+  // `sessionStorage` vẫn phải xoá: đường DỰ PHÒNG (khi storage bị chặn) dùng
+  // nó, và xoá nó cũng làm "tab mới" trong test chống chạy chồng.
   sessionStorage.clear()
 
   // Opt-in ĐÃ LƯU mặc định là bật — các test ghi lên site cần nó.
@@ -177,6 +215,10 @@ beforeEach(async () => {
     storage: {
       sync: {
         get: async () => ({ ...settings }),
+      },
+      local: {
+        get: (keys?: string | string[] | null) => localGet(keys),
+        set: (values: Record<string, unknown>) => localSet(values),
       },
     },
   })
@@ -514,6 +556,115 @@ describe('content script — chạy manifest qua API', () => {
     expect(second.message).toBe(DUPLICATE_MESSAGE)
     expect(second.billCreated).toBe(false)
     expect(second.written).toBe(false)
+  })
+
+  it('chốt được ghi vào `chrome.storage.local` theo key RIÊNG cho từng số bill', async () => {
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, allowWrite: true })
+    expect(first.written).toBe(true)
+
+    // Chốt phải nằm trong `chrome.storage.local` (CHUNG cho mọi tab) chứ không
+    // phải trong RAM/`sessionStorage` của riêng tab này.
+    expect(localSet).toHaveBeenCalledWith({
+      [localKeyOf(BL_NO)]: expect.any(Number),
+    })
+    expect(localStore[localKeyOf(BL_NO)]).toEqual(expect.any(Number))
+  })
+
+  it('chốt của piece GIỮ hậu tố ⇒ khác key với mã gốc', async () => {
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    await send({ type: MSG_CREATE_MANIFEST, blNo: `${BL_NO}P1`, allowWrite: true })
+
+    // Key là số bill ĐÃ GHI LÊN SITE (giữ hậu tố piece) — KHÔNG phải mã gốc.
+    expect(localSet).toHaveBeenCalledWith({
+      [localKeyOf(`${BL_NO}P1`)]: expect.any(Number),
+    })
+    expect(localStore[localKeyOf(BL_NO)]).toBeUndefined()
+  })
+
+  it('TAB KHÁC chạy lại cùng số bill ⇒ bị từ chối, KHÔNG tạo bill thứ hai', async () => {
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, allowWrite: true })
+    expect(first.written).toBe(true)
+    const postsAfterFirst = fake.calls.filter((call) => call.method === 'POST').length
+
+    // TAB MỚI: tab khác có `sessionStorage` RIÊNG ⇒ xoá nó đi, và nạp lại
+    // module content script (mỗi module có bộ nhớ RAM riêng).
+    sessionStorage.clear()
+    // Query `?tab2` ⇒ một instance module RIÊNG (khác instance ở `beforeEach`).
+    //
+    // Specifier phải có kiểu `string` (không phải literal) vì TypeScript không
+    // tìm được module có query ⇒ lỗi "Cannot find module".
+    const tab2Module: string = '../src/content/index?tab2'
+    await import(tab2Module)
+
+    const second = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, allowWrite: true })
+
+    // Chốt nằm trong `chrome.storage.local` ⇒ tab mới vẫn thấy ⇒ từ chối.
+    expect(second.ok).toBe(false)
+    expect(second.message).toBe(DUPLICATE_MESSAGE)
+    expect(second.billCreated).toBe(false)
+    expect(second.written).toBe(false)
+
+    // KHÔNG POST thêm — phải bị chặn TRƯỚC khi chạm network.
+    expect(fake.calls.filter((call) => call.method === 'POST')).toHaveLength(postsAfterFirst)
+  })
+
+  it('operator XOÁ storage của extension ⇒ chạy lại được (đường thoát)', async () => {
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, allowWrite: true })
+    expect(first.written).toBe(true)
+
+    // Operator xoá nháp trên site rồi xoá storage của extension ⇒ phải chạy
+    // lại được. Nếu chốt còn nằm trong bộ nhớ RAM của tab này thì đường thoát
+    // trong message từ chối sẽ là lời nói dối.
+    for (const key of Object.keys(localStore)) delete localStore[key]
+
+    const second = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, allowWrite: true })
+    expect(second.ok).toBe(true)
+    expect(second.written).toBe(true)
+  })
+
+  it('KHÔNG có `chrome.storage.local` ⇒ rơi về `sessionStorage`, KHÔNG ném lỗi', async () => {
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    // Storage bị policy chặn ⇒ không có `storage.local`.
+    vi.stubGlobal('chrome', {
+      runtime: {
+        onMessage: {
+          addListener: (fn: Listener) => {
+            listener = fn
+          },
+        },
+      },
+      storage: {
+        sync: {
+          get: async () => ({ ...settings }),
+        },
+      },
+    })
+    vi.resetModules()
+    await import('../src/content/index')
+
+    const first = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, allowWrite: true })
+    expect(first.written).toBe(true)
+    expect(localSet).not.toHaveBeenCalled()
+
+    // Đường dự phòng vẫn chốt được (trong `sessionStorage` của tab này).
+    const postsAfterFirst = fake.calls.filter((call) => call.method === 'POST').length
+    const second = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, allowWrite: true })
+    expect(second.ok).toBe(false)
+    expect(second.message).toBe(DUPLICATE_MESSAGE)
+    expect(fake.calls.filter((call) => call.method === 'POST')).toHaveLength(postsAfterFirst)
   })
 
   it('opt-in ĐÃ LƯU đang tắt ⇒ từ chối, KHÔNG chạm network', async () => {
