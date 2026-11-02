@@ -188,72 +188,51 @@ export function buildManifestBody(
   const notify = contactOf(data, 2)
 
   return {
-    // Cargo rows travel through their own endpoint (`cargo/add/`); container
-    // rows ride along with the bill save (`cntr_list`).
     cdgoods: (data.cdgoods ?? []).map((goods) => buildCargoPayload(goods, '')),
     cntr_list: (data.cdCon ?? []).map((container) => buildContainerPayload(container, ctx, '')),
-    // The site assigns the bill number.
     bill_no: '',
     bill_nbr: billNbrOf(data, operatorBlNo),
     e_ship_nam: str(data.shipName),
     out_voyage_no: str(data.voyage),
     trust_cod: str(ctx.findTrustCode(data.sea_order?.sea_order_bind?.supplyId)),
     pay_way_id: payWayOf(data.payType)?.code ?? '',
-    // 交货条款 — take the API value DIRECTLY.
-    //
-    // The site's `getDrType/` dict carries only Chinese labels, no code ⇒ a
-    // lookup would always miss ⇒ the extension does not fetch that dict at
-    // all and uses the API's `transportTerms` as is.
     dr_type_str: str(data.transportTerms),
-    // 提单签发地 — the API has no data for it.
     sign_place_cod: '',
     sign_place_str: '',
     start_port_cod: str(data.loadCode),
-    // Port names: the API's `nameEn` (English). The site's `getPort()`
-    // dictionary only holds Chinese names ⇒ it stays a fallback for when the
-    // API has no port data.
     start_port_nam: str(data.loadPortData?.nameEn) || str(ctx.findPort(data.loadCode ?? undefined)),
     dischrg_port_cod: aimCode,
     dischrg_port_nam:
       str(data.aimPortData?.nameEn) || str(ctx.findPort(aimCode ?? undefined)),
-    // 中转港 — the API has no data for it.
     trans_port_cod: '',
     trans_port_nam: '',
     dest_port_cod: uploadCode,
     dest_port_nam: str(data.uploadPortData?.nameEn) || str(ctx.findPort(uploadCode)),
-    // 发货人
     e_shipper_nam: str(shipper?.master),
-    shipper_add_str: str(shipper?.address),
+    shipper_add_str: str(shipper?.address?.slice(-70)),
     shipper_country_cod: str(shipper?.country),
     shipper_te_str: str(shipper?.phone),
-    // The API has no email/fax ⇒ always blank.
     shipper_em_str: '',
     shipper_fx_str: '',
-    // AEO: the API's `firmCode` is the company registration code (USCI/TIN),
-    // NOT an AEO code ⇒ leave AEO blank.
     shipper_aeo: '',
-    // 收货人
     e_consignee_nam: str(consignee?.master),
-    consignee_add_str: str(consignee?.address),
+    consignee_add_str: str(consignee?.address?.slice(-70)),
     consignee_country_cod: str(consignee?.country),
     consignee_te_str: str(consignee?.phone),
     consignee_em_str: '',
     consignee_fx_str: '',
     consignee_aeo: '',
-    // 通知人 — the site has no AEO field for this party ⇒ no AEO key.
     e_notify_nam: str(notify?.master),
-    notify_add_str: str(notify?.address),
+    notify_add_str: str(notify?.address?.slice(-70)),
     notify_country_cod: str(notify?.country),
     notify_te_str: str(notify?.phone),
     notify_em_str: '',
     notify_fx_str: '',
-    // Total pieces / total gross weight / total volume: the site computes them.
     total_piece_num: '',
     total_gweight_ton: '',
     total_gvol_num: '',
     mandatory_check: '',
     soft_check: '',
-    // "0" = create the bill; "2" = 发送 (never used here).
     is_all: '0',
   }
 }
