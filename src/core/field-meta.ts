@@ -1,19 +1,3 @@
-/**
- * Metadata about the site's fields — the single source of truth for the API
- * path.
- *
- * This module answers the four questions that both `payload.ts` (builds the
- * body) and `manifest-run.ts` (builds the report) need, and they must get
- * the same answers:
- * - which fields the site requires, and which are required only for a given
- *   cargo kind;
- * - which fields the site clears and disables per cargo kind;
- * - what each field is called (the display label is the site's Chinese name);
- * - why a field was left blank (the note that tells the operator what to do).
- *
- * Must not import from `protocol.ts` (`protocol.ts` → `manifest-run.ts` →
- * `field-meta.ts`) — importing it the other way round creates a cycle.
- */
 import type { ManifestCargo, ManifestContact } from './types'
 
 export function isBlank(value: unknown): boolean {
@@ -22,7 +6,6 @@ export function isBlank(value: unknown): boolean {
 
 export interface MappingContext {
   findTrustCode(supplyId?: number): string | undefined
-  /** Chinese port name — the site's `getPort()` dict stores the Chinese name in `E_PORT_NAM`. */
   findPort(code?: string): string | undefined
   findCntrType(raw?: number | string | null): string | undefined
   findCntrSize(raw?: number | string | null): string | undefined
@@ -86,6 +69,27 @@ export function deriveCargoKind(goods: ManifestCargo): CargoKind {
   if (cold) return 'R'
   return 'S'
 }
+
+// Map container status to the site's container status.
+export const containerTypeMap = {
+  '0': '20GP',
+  '1': '40GP',
+  '2': '40HQ',
+  '3': '20FR',
+  '4': '40FR',
+  '5': '20RF',
+  '6': '40RF',
+  '7': '20OT',
+  '8': '40OT',
+  '9': '40OH',
+  '10': '20TK',
+  '11': '40TK',
+  '12': '20HT',
+  '13': '40HT',
+  '14': '45HQ',
+  '15': '20GD',
+  '16': '40GD'
+};
 
 /**
  * Field BẮT BUỘC của site ở form đầu (FACT 1 của plan live-site-alignment).

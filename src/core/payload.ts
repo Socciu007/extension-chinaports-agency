@@ -1,20 +1,3 @@
-/**
- * Dựng body cho API của site (`/api/booking/exportManifestDataMaintain/…`).
- *
- * Module này **KHÔNG gọi mạng** — chỉ biến dữ liệu manifest (API bên ngoài)
- * sang đúng hình dạng mà site POST đi:
- *
- * - mọi key trong body phải **chữ thường** (site gọi helper `keyToLowercase`
- *   trước khi POST) ⇒ xem `lowerKeys()`;
- * - thiếu dữ liệu ⇒ `""` cho field CHUỖI (header toàn chuỗi) và `0` cho
- *   field SỐ (dòng hàng / container) — KHÔNG `null`, KHÔNG `undefined`, KHÔNG
- *   bỏ hẳn key (site cần đủ key trong body);
- * - các field loại (付款方式, 货物标识, 货主箱标志) là **MÃ** của site
- *   (`P`/`C`, `S`/`D`/`R`/`G`, `Y`/`N`), KHÔNG phải nhãn tiếng Trung.
- *
- * `buildManifestBody` dựng BODY 45 key (43 key header + `cdgoods` +
- * `cntr_list`) — đây chính là hình dạng `ManifestData`.
- */
 import {
   contactRole,
   deriveCargoKind,
@@ -22,6 +5,7 @@ import {
   payWayOf,
   TEMP_FIELDS,
   type MappingContext,
+  containerTypeMap,
 } from './field-meta'
 import { billNoAsWritten } from './bill-no'
 import type {
@@ -194,7 +178,7 @@ export function buildManifestBody(
     bill_nbr: billNbrOf(data, operatorBlNo),
     e_ship_nam: str(data.shipName),
     out_voyage_no: str(data.voyage),
-    trust_cod: str(ctx.findTrustCode(data.sea_order?.sea_order_bind?.supplyId)),
+    trust_cod: 'ONE',
     pay_way_id: payWayOf(data.payType)?.code ?? '',
     dr_type_str: str(data.transportTerms) === '1' ? 'CY/CY' : 'CY/CY',
     sign_place_cod: '',
@@ -280,31 +264,22 @@ export function buildCargoPayload(goods: ManifestCargo, billNo: string): Record<
   return payload
 }
 
-/**
- * Dựng 1 dòng container.
- *
- * `ctx` cần cho `findCntrSize`/`findCntrType`: dict của site chỉ chứa chuỗi
- * "20"/"GP" còn `vC`/`cType` của API là mã số ⇒ thường tra không được ⇒ để
- * rỗng, KHÔNG đoán.
- */
+// Build a container row to the manifest body.
 export function buildContainerPayload(
   container: ManifestContainer,
   ctx: MappingContext,
   billNo: string,
 ): Record<string, unknown> {
   return {
-    // Mã bill do server gán — lấy NGUYÊN VEN (không uppercase).
     bill_no: billNo,
     cntr_no: str(container.boxNub),
-    cntr_size_cod: str(ctx.findCntrSize(container.vC ?? undefined)),
-    cntr_type_cod: str(ctx.findCntrType(container.cType ?? undefined)),
-    // 箱状态 — API không có dữ liệu.
-    cntr_ef_id: '',
+    cntr_size_cod: str(containerTypeMap[container.cType as keyof typeof containerTypeMap]).slice(0, 2),
+    cntr_type_cod: str(containerTypeMap[container.cType as keyof typeof containerTypeMap]).slice(-2),
+    cntr_ef_id: container.containnerMark ? 'L' : 'F',
     seal_no: str(container.sealNUb),
     piece_num: int(container.amount),
     weigh_ton: num(container.weight),
     volume_num: num(container.volume),
-    // 货主箱标志 — site lưu MÃ: 货主箱='Y', 非货主箱='N'.
     soc_id: container.self === true ? 'Y' : container.self === false ? 'N' : '',
   }
 }

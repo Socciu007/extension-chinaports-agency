@@ -292,7 +292,7 @@ async function sendSiteJson(
   return payload
 }
 
-async function fetchSiteJson(
+export async function fetchSiteJson(
   path: string,
   options: SiteFetchOptions = {},
   params?: Record<string, string>,

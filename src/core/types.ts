@@ -54,11 +54,9 @@ export interface ManifestContainer {
   id?: number
   boxNub?: string | null
   sealNUb?: string | null
-  /** 箱型: 2 = 20GP … */
+  containnerMark?: boolean | null
   cType?: number | string | null
-  /** Kích thước: 0 = 20' … */
   vC?: number | string | null
-  /** true = 货主箱 */
   self?: boolean | null
   amount?: string | number | null
   weight?: string | number | null

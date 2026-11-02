@@ -466,7 +466,6 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
     createAttempted = true
     const created = await createManifestBill(body, siteOptions())
     steps.push('Created the manifest bill on the site')
-    // The site has confirmed the creation of the bill ⇒ the bill exists on the site, even if the step of reading the bill number below fails (special case).
     billCreated = true
 
     // Read the bill number — if there is no bill number, no cargo rows are sent (a cargo row attached to the wrong bill will not report any error).
@@ -481,6 +480,8 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
     steps.push('Read the bill number from the site')
 
     // Attach each cargo row to the bill.
+    console.log('body.cdgoods', body.cdgoods)
+    console.log('assignedBillNo', assignedBillNo)
     for (const row of body.cdgoods) {
       // Check the deadline before each row — many rows can exceed the deadline.
       checkDeadline('adding the cargo rows')

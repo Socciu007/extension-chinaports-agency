@@ -1,23 +1,4 @@
-/**
- * Các bước **ghi** tới API của site — tạo bill, thêm dòng hàng, lưu bill.
- *
- * Site không có endpoint riêng cho container: dòng container được gửi kèm
- * lúc lưu bill (biến `cntr_list`). Vì vậy thứ tự đúng là:
- *
- *   1) `createManifestBill`      → server gán một mã bill nội bộ
- *   2) `addCargoRow` (mỗi dòng) → dòng hàng gắn vào bill đó
- *   3) `saveManifestContainers`   → lưu bill kèm container
- *
- * Mọi body đi qua `lowerKeys` ở tầng này: site gọi helper `keyToLowercase`
- * trước khi POST nên key viết hoa sẽ bị site đọc sai.
- *
- * Mọi body cũng đi qua `toWireValue`: số KHÔNG parse được (`NaN`) đi ra là
- * `0` — cùng giá trị với case "API không có giá trị này" ⇒ field số giữ
- * nguyên kiểu JSON **number** (site validate bằng regex số, KHÔNG nhận
- * chuỗi rỗng). `NaN` chỉ có thể nằm ở field số của dòng hàng / container;
- * report (dựng trong content script) là nơi phân biệt hai lý do.
- */
-import { postSiteJson, SiteApiError, type SiteFetchOptions } from './site-api'
+import { postSiteJson, SiteApiError, type SiteFetchOptions, fetchSiteJson } from './site-api'
 import { lowerKeys, toWireValue } from './payload'
 import type { ManifestData } from './types'
 
@@ -93,26 +74,24 @@ export async function addCargoRow(
       'Cannot add a cargo row without a bill number — the site would attach the row to the wrong manifest.',
     )
   }
+
+  // Add api site get package_cod
+  if (cargo.package_str) {
+    const res : any = await fetchSiteJson(
+      'getPackageCode/',
+      { ...options, label: 'the package code list' },
+      { kw: cargo?.package_str as string || '', filter: 'E_PACKAGE_NAM' },
+    ).catch(() => null)
+    if (res && res.data && Array.isArray(res.data)) cargo.package_cod = res.data[0]?.PACKAGE_COD || ''
+  }
   return postSiteJson(
     CARGO_PATH,
-    toWireValue(lowerKeys({ ...cargo, bill_no: billNo })),
+    toWireValue(lowerKeys({ ...cargo, bill_no: Number(billNo) })),
     withLabel(options, CARGO_LABEL),
   )
 }
 
-/**
- * Bước 3 — lưu bill kèm container (`is_all` = "1" = 暂存).
- *
- * KHÔNG dùng `is_all` = "2" (发送) — extension không bao giờ tự gửi tờ khai.
- *
- * Body được **copy** (`{...body}`) rồi sửa: hàm nhận body của caller, mutate
- * nó sẽ làm hỏng lần POST sau (tổng đã bị xoá, `is_all` đã đổi).
- *
- * - `cdgoods` bị xoá — dòng hàng đã lưu riêng qua `cargo/add/`, gửi lại sẽ
- *   đè mất dòng đó;
- * - 3 key `total_*` bị xoá — site tự tính (xem `SITE_COMPUTED_KEYS`);
- * - `cntr_list` lấy từ body, mỗi dòng mang `bill_no` do server gán.
- */
+// Step 3 — save the manifest bill with containers.
 export function saveManifestContainers(
   body: ManifestData,
   billNo: string,
@@ -123,8 +102,8 @@ export function saveManifestContainers(
   for (const key of SITE_COMPUTED_KEYS) delete payload[key]
   delete payload[CARGO_LIST_KEY]
   payload.bill_no = billNo
-  // payload.is_all = '1'
-  payload.cntr_list = (body.cntr_list ?? []).map((row) => ({ ...row, bill_no: billNo }))
+  payload.is_all = '1'
+  payload.cntr_list = (body.cntr_list ?? []).map((row) => ({ ...row, bill_no: Number(billNo) }))
 
   return postSiteJson(
     BILL_PATH,
@@ -133,42 +112,16 @@ export function saveManifestContainers(
   )
 }
 
-/**
- * Key chứa mã bill — thứ tự ưu tiên từ cao xuống thấp.
- *
- * KHÔNG có `id`: key đó quá generic — envelope có `data = {id: 123}` sẽ bị
- * đọc nhầm là mã bill ⇒ dòng hàng gắn vào bill khác/rác.
- */
-const BILL_NO_KEYS = ['bill_no', 'billNo', 'bill_id', 'billId']
-
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
   return value as Record<string, unknown>
 }
 
-/**
- * Lấy mã bill từ envelope `{code, data, msg}` của site.
- *
- * Tra `data` TRƯỚC top-level: site bọc kết quả trong `data`, còn top-level
- * chỉ là envelope. Mã bill lấy NGUYÊN VEN (không trim, không uppercase) vì
- * đó chính là giá trị server gán và dùng lại ở các bước sau.
- *
- * Không tìm thấy mã bill ⇒ ném lỗi: "chưa có mã bill" là LỖI (dòng hàng sẽ
- * không gắn được vào bill nào), không phải một giá trị rỗng hợp lệ.
- */
-export function extractBillNo(response: unknown): string {
-  const envelope = asRecord(response)
+// Extract the bill number from the site response.
+export function extractBillNo(response: any): string {
+  const envelope = asRecord(response.data)
 
-  for (const candidate of [asRecord(envelope?.data), envelope]) {
-    if (!candidate) continue
-    for (const key of BILL_NO_KEYS) {
-      const value = candidate[key]
-      // `trim()` CHỈ dùng để kiểm tra "rỗng hay không" — giá trị trả về là
-      // nguyên bản của server.
-      if (typeof value === 'string' && value.trim() !== '') return String(value)
-      if (typeof value === 'number' && Number.isFinite(value)) return String(value)
-    }
-  }
+  if (envelope?.bill_no && Array.isArray(envelope.bill_no) && !!envelope.bill_no.length) return envelope.bill_no[0] as string
 
   throw new SiteApiError(
     'bad_response',
