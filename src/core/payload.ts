@@ -196,7 +196,7 @@ export function buildManifestBody(
     out_voyage_no: str(data.voyage),
     trust_cod: str(ctx.findTrustCode(data.sea_order?.sea_order_bind?.supplyId)),
     pay_way_id: payWayOf(data.payType)?.code ?? '',
-    dr_type_str: str(data.transportTerms),
+    dr_type_str: str(data.transportTerms) === '1' ? 'CY/CY' : 'CY/CY',
     sign_place_cod: '',
     sign_place_str: '',
     start_port_cod: str(data.loadCode),
@@ -237,45 +237,34 @@ export function buildManifestBody(
   }
 }
 
-/**
- * Dựng body thêm 1 dòng hàng.
- *
- * - số (包装件数, 毛重, 体积, 净重) là **number**, không phải chuỗi;
- * - mọi chuỗi của site được UPPERCASE (site làm vậy khi gửi);
- * - field bị site xoá theo loại hàng vẫn PHẢI có trong body (giá trị `""`).
- */
+// Add a cargo row to the manifest body.
 export function buildCargoPayload(goods: ManifestCargo, billNo: string): Record<string, unknown> {
   const kind = deriveCargoKind(goods)
 
   const payload: Record<string, unknown> = {
-    // Mã bill do server gán (`e.bill_no = P.BILL_NO`) — KHÔNG phải dữ liệu
-    // người dùng nhập nên KHÔNG uppercase: lấy NGUYÊN VEN.
     bill_no: billNo,
     piece_num: int(goods.amount),
     gweight_ton: num(goods.weight),
     gvol_num: num(goods.volume),
     nweight_ton: num(goods.grossWeight),
     cargo_kind_cod: kind,
-    cargo_hs_cod: upper(goods.hscode),
-    // API không có loại bao bì thật: `unit` chỉ là đơn vị đếm "PACKAGES".
+    cargo_hs_cod: upper(goods.hscode) || '',
     package_cod: '',
-    package_str: '',
-    // 唛头 — `shantou` là field 唛头 thật, `sign` là field khác (fallback).
+    package_str: upper(goods.unit) || '',
     mark_str: upper(firstNonBlank(goods.shantou, goods.sign) || 'N/M'),
     e_cargo_nam: upper(goods.name),
-    dang_class_nam: upper(goods.dangerClass),
+    dang_class_nam: upper(goods.dangerClass) || '',
     dang_page_no: '',
-    dang_un_no: upper(goods.unNub),
-    dang_lable_str: upper(goods.dangerCode),
-    dang_flash_point: upper(goods.dangerPoint),
+    dang_un_no: upper(goods.unNub) || '',
+    dang_lable_str: upper(goods.dangerCode) || '',
+    dang_flash_point: upper(goods.dangerPoint) || '',
     dang_ems_no: '',
     dang_mfag_no: '',
     dang_contactstr: '',
-    danger_contact_nam: upper(goods.exigencyName),
-    danger_te_str: upper(goods.exigencyPhone),
-    danger_em_str: upper(goods.exigencyEmail),
-    danger_fx_str: upper(goods.exigencyFax),
-    // Nhiệt độ — API không có dữ liệu.
+    danger_contact_nam: upper(goods.exigencyName) || '',
+    danger_te_str: upper(goods.exigencyPhone) || '',
+    danger_em_str: upper(goods.exigencyEmail) || '',
+    danger_fx_str: upper(goods.exigencyFax) || '',
     temp_id: '',
     set_temp_num: '',
   }

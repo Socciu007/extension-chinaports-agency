@@ -67,20 +67,7 @@ function withLabel(options: SiteFetchOptions | undefined, label: string): SiteFe
   return { ...options, label: options?.label ?? label }
 }
 
-/**
- * Bước 1 — tạo bill (chưa lưu, chưa gắn hàng).
- *
- * Chỉ gửi 43 key HEADER của body: `cdgoods` và `cntr_list` bị xoá (dòng hàng
- * đi qua `cargo/add/` riêng — gửi kèm sẽ tạo trùng dòng; dòng container đi
- * kèm lúc lưu bill).
- *
- * Body do `buildManifestBody` dựng đã có sẵn `bill_no: ''` và
- * `is_all: '0'` ("0" = tạo bill) ⇒ không sửa gì thêm.
- *
- * `toWireValue` đổi mọi số KHÔNG parse được (`NaN`) thành `0` — cùng giá
- * trị với case "API không có giá trị này" ⇒ field số giữ nguyên kiểu JSON
- * **number** (site validate bằng regex số, KHÔNG nhận chuỗi rỗng).
- */
+// Step 1 — create the manifest bill.
 export function createManifestBill(
   body: ManifestData,
   options?: SiteFetchOptions,
@@ -94,21 +81,13 @@ export function createManifestBill(
   )
 }
 
-/**
- * Bước 2 — gắn một dòng hàng vào bill đã tạo.
- *
- * `bill_no` do hàm này gán từ tham số `billNo` — KHÔNG lấy từ `cargo` (cargo
- * có thể mang mã cũ) và không để caller tự điền. Mã bill lấy NGUYÊN VEN
- * (không trim, không uppercase).
- */
+// Step 2 — attach a cargo row to the manifest bill.
 export async function addCargoRow(
   cargo: Record<string, unknown>,
   billNo: string,
   options?: SiteFetchOptions,
 ): Promise<unknown> {
   if (billNo.trim() === '') {
-    // Gửi `bill_no: ''` lên site ⇒ dòng hàng bị gắn vào bill khác/rác mà
-    // không có bất kỳ lỗi nào báo ra ⇒ chặn ngay tại đây.
     throw new SiteApiError(
       'bad_request',
       'Cannot add a cargo row without a bill number — the site would attach the row to the wrong manifest.',
@@ -143,10 +122,8 @@ export function saveManifestContainers(
   delete payload.cdgoods
   for (const key of SITE_COMPUTED_KEYS) delete payload[key]
   delete payload[CARGO_LIST_KEY]
-  // Mã bill do server gán — lấy NGUYÊN VEN (không uppercase, không trim).
   payload.bill_no = billNo
-  // "1" = 暂存 (KHÔNG phải "2" = 发送).
-  payload.is_all = '1'
+  // payload.is_all = '1'
   payload.cntr_list = (body.cntr_list ?? []).map((row) => ({ ...row, bill_no: billNo }))
 
   return postSiteJson(
