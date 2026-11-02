@@ -52,17 +52,12 @@ export function describeApiError(error: unknown): string {
   return 'Something went wrong while fetching the manifest data.'
 }
 
-// Chuẩn hoá 3 mảng của API về mảng rỗng khi thiếu.
+// Normalize the 3 arrays of the API to empty arrays when missing.
 function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : []
 }
 
-/**
- * Bóc envelope của API ⇒ dữ liệu RAW (đã chuẩn hoá 3 mảng).
- *
- * Tách riêng khỏi `parseEnvelope` vì `fetchManifest` cần CẢ dữ liệu raw (để
- * lấy `blNo` của API) LẪN body của site.
- */
+// Parse the API response into a ManifestApiData object.
 function parseEnvelopeData(json: unknown): ManifestApiData {
   if (typeof json !== 'object' || json === null || Array.isArray(json)) {
     throw new ManifestApiError('bad_response', 'The API response is not a JSON object')
@@ -95,20 +90,13 @@ function parseEnvelopeData(json: unknown): ManifestApiData {
   }
 }
 
-/** Tuỳ chọn của `parseEnvelope` — dict của site + số bill của operator. */
+// Options for `parseEnvelope` — site dict + operator bill number.
 export interface ParseEnvelopeOptions {
-  /** Dict của site — BẮT BUỘC (tên cảng, mã 承运人…). */
   ctx: MappingContext
-  /** Số bill do operator gõ (giữ hậu tố piece) — ghi vào `bill_nbr`. */
   operatorBlNo?: string
 }
 
-/**
- * Bóc envelope của API ⇒ BODY của site (45 key).
- *
- * `ctx` (dict của site) phải được load TRƯỚC khi gọi hàm này: body cần tên
- * cảng và mã 承运人 từ dict.
- */
+// Unwrap the API envelope ⇒ the site body (45 keys).
 export function parseEnvelope(json: unknown, options: ParseEnvelopeOptions): ManifestData {
   const raw = parseEnvelopeData(json)
   return buildManifestBody(raw, options.ctx, options.operatorBlNo)
@@ -120,11 +108,9 @@ export interface FetchManifestOptions extends ParseEnvelopeOptions {
   timeoutMs?: number
 }
 
-/** Kết quả của `fetchManifest` — body của site + số bill của API. */
+// Result of `fetchManifest` — site body + API bill number.
 export interface FetchManifestResult {
-  /** Body của site (45 key) — sẽ gửi lên site. */
   body: ManifestData
-  /** Số bill API trả về (để báo khi khác số bill ghi lên site). */
   apiBillNo: string
 }
 

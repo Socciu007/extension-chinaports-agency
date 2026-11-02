@@ -271,16 +271,14 @@ describe('runManifest — dựng payload và report', () => {
     expect(Math.max(...dictIndexes)).toBeLessThan(apiIndex)
   })
 
-  it('dựng tên cảng tiếng Trung (KHÔNG dùng nameEn)', async () => {
+  it('dựng tên cảng tiếng Anh (`nameEn`)', async () => {
     const h = harness()
     await run(h)
 
     // Header đi lên site ở bước TẠO bill (POST đầu tiên).
     const createPost = postsOf(h)[0]
-    expect(createPost?.body?.start_port_nam).toBe('上海')
-    expect(createPost?.body?.dischrg_port_nam).toBe('勿拉湾')
-    expect(createPost?.body?.start_port_nam).not.toBe('SHANGHAI')
-    expect(createPost?.body?.dischrg_port_nam).not.toBe('BELAWAN')
+    expect(createPost?.body?.start_port_nam).toBe('SHANGHAI')
+    expect(createPost?.body?.dischrg_port_nam).toBe('BELAWAN')
   })
 
   it('付款方式 đảo chiều: payType false ⇒ "P" (预付)', async () => {

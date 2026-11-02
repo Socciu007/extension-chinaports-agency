@@ -37,11 +37,11 @@ describe('contactRole', () => {
   it('2 = 通知人', () => {
     expect(contactRole({ type: 2 })).toBe(2)
   })
-  it('số 0 KHÔNG khớp 发货人 ⇒ null', () => {
-    expect(contactRole({ type: 0 })).toBeNull()
+  it('số 0 cũng khớp 发货人', () => {
+    expect(contactRole({ type: 0 })).toBe(0)
   })
-  it('số 1 KHÔNG khớp 收货人 ⇒ null', () => {
-    expect(contactRole({ type: 1 })).toBeNull()
+  it('số 1 cũng khớp 收货人', () => {
+    expect(contactRole({ type: 1 })).toBe(1)
   })
   it('undefined thì null', () => {
     expect(contactRole({})).toBeNull()

@@ -1,15 +1,18 @@
 /**
- * Metadata về các field của site — nguồn sự thật DUY NHẤT của đường API.
+ * Metadata about the site's fields — the single source of truth for the API
+ * path.
  *
- * Module này trả lời bốn câu hỏi mà cả `payload.ts` (dựng body) và
- * `manifest-run.ts` (dựng report) đều cần, và phải trả lời GIỐNG NHAU:
- * - site BẮT BUỘC field nào, và field nào chỉ bắt buộc với loại hàng nào;
- * - loại hàng nào thì site xoá & disable field nào;
- * - mỗi field tên gì (nhãn hiển thị lấy theo tên tiếng Trung của site);
- * - vì sao một ô bị bỏ trống (note để operator biết phải làm gì).
+ * This module answers the four questions that both `payload.ts` (builds the
+ * body) and `manifest-run.ts` (builds the report) need, and they must get
+ * the same answers:
+ * - which fields the site requires, and which are required only for a given
+ *   cargo kind;
+ * - which fields the site clears and disables per cargo kind;
+ * - what each field is called (the display label is the site's Chinese name);
+ * - why a field was left blank (the note that tells the operator what to do).
  *
- * Không được import từ `protocol.ts` (`protocol.ts` → `manifest-run.ts` →
- * `field-meta.ts`) ⇒ import kiểu ngược lại sẽ tạo vòng.
+ * Must not import from `protocol.ts` (`protocol.ts` → `manifest-run.ts` →
+ * `field-meta.ts`) — importing it the other way round creates a cycle.
  */
 import type { ManifestCargo, ManifestContact } from './types'
 
@@ -19,17 +22,16 @@ export function isBlank(value: unknown): boolean {
 
 export interface MappingContext {
   findTrustCode(supplyId?: number): string | undefined
-  /** Tên cảng tiếng Trung — dict `getPort()` của site lưu tên Trung ở `E_PORT_NAM`. */
+  /** Chinese port name — the site's `getPort()` dict stores the Chinese name in `E_PORT_NAM`. */
   findPort(code?: string): string | undefined
   findCntrType(raw?: number | string | null): string | undefined
   findCntrSize(raw?: number | string | null): string | undefined
 }
 
 /**
- * 付款方式 của site — site lưu MÃ, KHÔNG lưu nhãn hiển thị.
+ * 付款方式 of the site — the site stores the CODE, not the display label.
  *
- * Đường API chỉ có hai mã: 预付='P' và 到付='C' (không có 'F'/免费).
- * `payWayOf` bên dưới ánh xạ `payType` của API sang đúng mã ấy.
+ * The API path has only two codes: 预付='P' and 到付='C' (no 'F'/免费).
  */
 const PAY_WAY_OPTIONS: Record<'P' | 'C', { label: string; code: string }> = {
   P: { label: '预付', code: 'P' },
@@ -37,12 +39,12 @@ const PAY_WAY_OPTIONS: Record<'P' | 'C', { label: string; code: string }> = {
 }
 
 /**
- * Map `payType` của API sang option của site.
+ * Map the API's `payType` to the site's payment method.
  *
- * - `true` / `1` → 到付 (site lưu mã "C");
- * - `false` / `0` → 预付 (site lưu mã "P");
- * - còn lại (`null`/`undefined`, hoặc giá trị lạ như `2`, `-1`) → `undefined`:
- *   KHÔNG đoán, bỏ trống 付款方式. Lý do cụ thể do caller ghi vào note.
+ * - `true` / `1` → 到付 (the site stores the code "C");
+ * - `false` / `0` → 预付 (the site stores the code "P");
+ * - anything else (`null`/`undefined`, or a stray value like `2`) →
+ *   `undefined`: never guess, leave 付款方式 blank. The caller writes the note.
  */
 export function payWayOf(
   payType: boolean | number | null | undefined,
@@ -55,17 +57,17 @@ export function payWayOf(
 export type ContactRole = 0 | 1 | 2
 
 /**
- * Vai trò của một bên — CHỈ khớp khi `type` đúng bằng vai trò.
+ * Role of a contact party.
  *
- * - `false` → 0 (发货人);
- * - `true` → 1 (收货人);
+ * - `false` or `0` → 0 (发货人);
+ * - `true` or `1` → 1 (收货人);
  * - `2` → 2 (通知人);
- * - mọi giá trị khác (kể cả `0` / `1`) → `null` ⇒ KHÔNG khớp bên nào.
+ * - anything else → `null`, so it matches no party.
  */
 export function contactRole(contact: ManifestContact): ContactRole | null {
   const t = contact.type
-  if (t === false) return 0
-  if (t === true) return 1
+  if (t === false || t === 0) return 0
+  if (t === true || t === 1) return 1
   if (t === 2) return 2
   return null
 }

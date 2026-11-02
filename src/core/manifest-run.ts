@@ -22,7 +22,7 @@
  * - KHÔNG gọi `send/`, `upload/`, `deleteBill/`, `downloadTemplate/` của site;
  * - manifest chỉ được lưu dạng NHÁP (`is_all` = "1"), KHÔNG "2" (发送);
  * - mã bill do server gán lấy NGUYÊN VEN (không trim, không uppercase);
- * - tên cảng lấy từ `PortData.name` (tiếng Trung), KHÔNG dùng `nameEn`.
+ * - tên cảng lấy từ `PortData.nameEn` (tiếng Anh); dict `getPort()` chỉ là dự phòng (tên Trung).
  */
 import { describeApiError, fetchManifest, ManifestApiError } from './api'
 import { HTTP_TIMEOUT_MS } from './http'
@@ -432,8 +432,8 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
       })
     }
 
-    // The site dictionaries are loaded FIRST — the body needs the Chinese port
-    // names and the carrier code from the dictionaries at the moment it is built.
+    // The site dictionaries are loaded FIRST — the body needs the carrier code
+    // and the port-name fallback from the dictionaries at the moment it is built.
     checkDeadline('loading the site dictionaries')
     const dicts = await loadSiteDicts(siteOptions())
     const ctx = createMappingContext(dicts)

@@ -7,10 +7,8 @@ export interface PortInfo {
 export interface ManifestContact {
   id?: number
   /**
-   * Vai trò của bên: `false` = 发货人, `true` = 收货人, `2` = 通知人.
-   *
-   * KHÔNG chuẩn hoá `0`/`1` thành vai trò — chỉ đúng ba giá trị trên mới
-   * khớp (xem `contactRole`).
+   * Role of the contact party: `false` or `0` = 发货人, `true` or `1` = 收货人,
+   * `2` = 通知人 (see `contactRole`).
    */
   type?: boolean | number
   master?: string | null

@@ -144,10 +144,10 @@ export function toWireValue(value: unknown): unknown {
 }
 
 /**
- * Contact theo vai trò (0 = 发货人, 1 = 收货人, 2 = 通知人).
+ * Contact by role (0 = 发货人, 1 = 收货人, 2 = 通知人).
  *
- * Chỉ khớp khi `type` đúng bằng vai trò: `false` = 发货人, `true` = 收货人,
- * `2` = 通知人 (xem `contactRole`).
+ * Matches when `type` equals the role: `false` or `0` = 发货人, `true` or
+ * `1` = 收货人, `2` = 通知人 (see `contactRole`).
  */
 function contactOf(data: ManifestApiData, role: 0 | 1 | 2): ManifestContact | undefined {
   const contacts = data.cabContacts ?? []
@@ -155,63 +155,49 @@ function contactOf(data: ManifestApiData, role: 0 | 1 | 2): ManifestContact | un
 }
 
 /**
- * Số bill ghi vào 提单号 trên site.
+ * The bill number written to 提单号 on the site.
  *
- * Số bill CÓ THỂ mang hậu tố piece (`P1`, `P12`) — đó là số bill trên SITE
- * mà operator gõ. API của dadaex chỉ trả mã gốc (`normalizeBlNo` bỏ hậu
- * tố khi tra cứu) ⇒ ghi mã gốc vào 提单号 là ĐỔI ÂM THẦM số bill trên tờ
- * khai.
+ * The bill number MAY carry a piece suffix (`P1`, `P12`) — that is the number
+ * the operator typed, i.e. the bill number ON THE SITE. The dadaex API only
+ * returns the bare code (`normalizeBlNo` drops the suffix when looking up),
+ * so writing the bare code to 提单号 would SILENTLY change the bill number on
+ * the manifest.
  *
- * Vì vậy: lấy số bill của OPERATOR (giữ hậu tố, trim + upper-case cho đúng
- * dạng viết HOA của số bill — xem `billNoAsWritten`); chỉ khi operator không
- * gõ gì thì mới lấy `blNo` của API.
+ * Hence: take the OPERATOR's number (keeping the suffix, trimmed +
+ * upper-cased to match how the site writes bill numbers — see
+ * `billNoAsWritten`); only when the operator typed nothing do we fall back to
+ * the API's `blNo`.
  */
 function billNbrOf(data: ManifestApiData, operatorBlNo?: string): string {
   const written = billNoAsWritten(operatorBlNo ?? '')
   return written !== '' ? written : billNoAsWritten(data.blNo ?? '')
 }
 
-/**
- * Dựng BODY của site — 45 key (43 key header + `cdgoods` + `cntr_list`).
- *
- * Body ĐÚNG theo mẫu thật của site (key đã lowercase): đủ key, giá trị thiếu
- * ⇒ `""`, `is_all` = `"0"` (tạo bill — KHÔNG phải `"2"` = 发送).
- *
- * `operatorBlNo` là số bill do OPERATOR gõ (giữ hậu tố piece) — xem
- * `billNbrOf`.
- */
+// Build the site body for the manifest API.
 export function buildManifestBody(
   data: ManifestApiData,
   ctx: MappingContext,
   operatorBlNo?: string,
 ): ManifestData {
-  // 交货地: chỉ điền khi KHÁC cảng卸货港.
-  //
-  // Trong dữ liệu thật, API copy `uploadCode` sang `aimPortCode` (cùng cảng
-  // 卸货港) ⇒ điền 交货地 bằng giá trị đó không mang thêm thông tin nào, và
-  // mẫu thật của site để trống CẢ HAI. Khi 交货地 khác 卸货港 thì đó mới là
-  // dữ liệu thật mà operator cần.
   const aimCode = str(data.aimPortCode)
   const uploadCode = str(data.uploadCode)
-  const hasDestPort = aimCode !== '' && aimCode !== uploadCode
 
-  // 3 bên — khớp theo VAI TRÒ của contact (KHÔNG theo thứ tự trong mảng).
+  // The 3 parties — matched by the contact's ROLE, not by its order in the array.
   const shipper = contactOf(data, 0)
   const consignee = contactOf(data, 1)
   const notify = contactOf(data, 2)
 
   return {
-    // Dòng hàng / dòng container — dòng hàng đi qua endpoint riêng
-    // (`cargo/add/`), dòng container đi kèm lúc lưu bill (`cntr_list`).
+    // Cargo rows travel through their own endpoint (`cargo/add/`); container
+    // rows ride along with the bill save (`cntr_list`).
     cdgoods: (data.cdgoods ?? []).map((goods) => buildCargoPayload(goods, '')),
     cntr_list: (data.cdCon ?? []).map((container) => buildContainerPayload(container, ctx, '')),
-    // Site tự gán số bill.
+    // The site assigns the bill number.
     bill_no: '',
     bill_nbr: billNbrOf(data, operatorBlNo),
     e_ship_nam: str(data.shipName),
     out_voyage_no: str(data.voyage),
     trust_cod: str(ctx.findTrustCode(data.sea_order?.sea_order_bind?.supplyId)),
-    // 付款方式: site lưu MÃ (预付='P', 到付='C'), KHÔNG phải nhãn tiếng Trung.
     pay_way_id: payWayOf(data.payType)?.code ?? '',
     // 交货条款 — take the API value DIRECTLY.
     //
@@ -219,38 +205,32 @@ export function buildManifestBody(
     // lookup would always miss ⇒ the extension does not fetch that dict at
     // all and uses the API's `transportTerms` as is.
     dr_type_str: str(data.transportTerms),
-    // 提单签发地 — API không có dữ liệu.
+    // 提单签发地 — the API has no data for it.
     sign_place_cod: '',
     sign_place_str: '',
-    // Tên cảng: site lưu TÊN TIẾNG TRUNG — dict `getPort()` của site chỉ có tên
-    // Trung (`E_PORT_NAM`).
-    // `PortData.name` là tên Trung, `PortData.nameEn` là tên Anh ⇒ KHÔNG dùng
-    // `nameEn` ở đây.
-    //
-    // Ưu tiên tên từ API, rồi mới tới dict `getPort()` — dict là nguồn dự
-    // phòng cho lúc API không có dữ liệu cảng.
     start_port_cod: str(data.loadCode),
-    start_port_nam: str(data.loadPortData?.name) || str(ctx.findPort(data.loadCode ?? undefined)),
-    dischrg_port_cod: uploadCode,
+    // Port names: the API's `nameEn` (English). The site's `getPort()`
+    // dictionary only holds Chinese names ⇒ it stays a fallback for when the
+    // API has no port data.
+    start_port_nam: str(data.loadPortData?.nameEn) || str(ctx.findPort(data.loadCode ?? undefined)),
+    dischrg_port_cod: aimCode,
     dischrg_port_nam:
-      str(data.uploadPortData?.name) || str(ctx.findPort(data.uploadCode ?? undefined)),
-    // 中转港 — API không có dữ liệu.
+      str(data.aimPortData?.nameEn) || str(ctx.findPort(aimCode ?? undefined)),
+    // 中转港 — the API has no data for it.
     trans_port_cod: '',
     trans_port_nam: '',
-    dest_port_cod: hasDestPort ? aimCode : '',
-    dest_port_nam: hasDestPort
-      ? str(data.aimPortData?.name) || str(ctx.findPort(aimCode))
-      : '',
+    dest_port_cod: uploadCode,
+    dest_port_nam: str(data.uploadPortData?.nameEn) || str(ctx.findPort(uploadCode)),
     // 发货人
     e_shipper_nam: str(shipper?.master),
     shipper_add_str: str(shipper?.address),
     shipper_country_cod: str(shipper?.country),
     shipper_te_str: str(shipper?.phone),
-    // API không có email/fax ⇒ luôn để trống.
+    // The API has no email/fax ⇒ always blank.
     shipper_em_str: '',
     shipper_fx_str: '',
-    // AEO: `firmCode` của API là mã đăng ký doanh nghiệp (USCI/TIN), KHÔNG
-    // phải mã AEO ⇒ không điền AEO.
+    // AEO: the API's `firmCode` is the company registration code (USCI/TIN),
+    // NOT an AEO code ⇒ leave AEO blank.
     shipper_aeo: '',
     // 收货人
     e_consignee_nam: str(consignee?.master),
@@ -260,20 +240,20 @@ export function buildManifestBody(
     consignee_em_str: '',
     consignee_fx_str: '',
     consignee_aeo: '',
-    // 通知人 — site KHÔNG có field AEO cho bên này ⇒ KHÔNG ghi key AEO.
+    // 通知人 — the site has no AEO field for this party ⇒ no AEO key.
     e_notify_nam: str(notify?.master),
     notify_add_str: str(notify?.address),
     notify_country_cod: str(notify?.country),
     notify_te_str: str(notify?.phone),
     notify_em_str: '',
     notify_fx_str: '',
-    // Tổng số lượng / tổng trọng lượng / tổng thể tích: site tự tính.
+    // Total pieces / total gross weight / total volume: the site computes them.
     total_piece_num: '',
     total_gweight_ton: '',
     total_gvol_num: '',
     mandatory_check: '',
     soft_check: '',
-    // "0" = tạo bill; "2" = 发送 (KHÔNG dùng ở đây).
+    // "0" = create the bill; "2" = 发送 (never used here).
     is_all: '0',
   }
 }

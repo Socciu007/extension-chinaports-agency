@@ -22,7 +22,7 @@ const CODE_KEYS = [
   'TRUST_COD',
   'PORT_COD',
 ]
-// Key containing the display name — `E_PORT_NAM` is the Chinese port name of the site.
+// Key containing the display name — `E_PORT_NAM` is the Chinese port name of the site. The port dictionary is only a fallback: the API path writes the English name (`nameEn`).
 const NAME_KEYS = [
   'name',
   'label',
@@ -89,6 +89,7 @@ export function pickArray(payload: unknown, keys: string[]): unknown[] {
 
 // Preferred keys for a specific endpoint.
 // Because the site's dict uses specific keys (`PORT_COD`/`E_PORT_NAM`), if we let the generic keys (`code`/`name`/`cnName`…) be searched first, a port record with an additional `name` field will cause `findPort` to return the English name, but the site only suggests the Chinese port name (`上海/CNSHA`) ⇒ the suggestion does not match.
+// The dict therefore holds the CHINESE port name and is only a fallback — the API path writes the English name (`nameEn`).
 export interface DictKeyPreference {
   codeKeys?: string[]
   nameKeys?: string[]
