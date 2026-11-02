@@ -61,8 +61,6 @@ interface SiteFakeOptions {
  * Fetch giả của site.
  *
  * - GET `getTrustCode/` ⇒ `{code:'MAEU', id:'2'}` (khớp `supplyId: 2` của fixture);
- * - GET `getDrType/` ⇒ mảng CHUỖI thuần (`['FOB','CIF']`) — dict của site chỉ
- *   có nhãn, KHÔNG có mã ⇒ body KHÔNG dùng dict này nữa;
  * - GET còn lại ⇒ rỗng (dict container và dict cảng cố tình để trống);
  * - POST `cargo/add/` ⇒ dòng hàng;
  * - POST `{base}/` ⇒ lần đầu là TẠO bill, sau đó là LƯU bill.
@@ -95,9 +93,6 @@ function siteFetch(
       }
       if (target.includes('getTrustCode/')) {
         return okResponse({ code: 2000, data: [{ code: 'MAEU', id: '2' }] })
-      }
-      if (target.includes('getDrType/')) {
-        return okResponse({ code: 2000, data: ['FOB', 'CIF'] })
       }
       return okResponse({ code: 2000, data: [] })
     }
@@ -300,7 +295,7 @@ describe('runManifest — dựng payload và report', () => {
     const h = harness()
     await run(h)
 
-    // Fixture: `transportTerms` = "1"; dict `getDrType/` của site chỉ có nhãn.
+    // Fixture: `transportTerms` = "1"; body lấy thẳng giá trị của API.
     expect(postsOf(h)[0]?.body?.dr_type_str).toBe('1')
   })
 

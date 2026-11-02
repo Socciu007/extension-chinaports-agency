@@ -28,7 +28,6 @@ const PORT_NAMES: Record<string, string> = {
 /** `ctx` giả lập — dict của site trong test này chỉ có tên cảng. */
 const ctx: MappingContext = {
   findTrustCode: (supplyId) => (supplyId === 2 ? 'ONE' : undefined),
-  findDrType: () => undefined,
   findPort: (code) => PORT_NAMES[code ?? ''],
   findCntrType: () => undefined,
   findCntrSize: () => undefined,
@@ -333,7 +332,8 @@ describe('buildManifestBody — 付款方式', () => {
  * 交货条款 — lấy THẲNG giá trị của API.
  *
  * Dict `getDrType/` của site chỉ có nhãn tiếng Trung (không có mã) ⇒ tra
- * dict là tra hụt ⇒ body lấy thẳng `transportTerms` của API.
+ * dict là tra hụt ⇒ extension KHÔNG gọi dict đó nữa, body lấy thẳng
+ * `transportTerms` của API.
  */
 describe('buildManifestBody — 交货条款', () => {
   it('lấy thẳng `transportTerms` của API, KHÔNG tra dict', () => {
@@ -342,13 +342,12 @@ describe('buildManifestBody — 交货条款', () => {
     expect(body.dr_type_str).toBe('1')
   })
 
-  it('giữ nguyên giá trị của API kể cả khi dict CÓ mã tương ứng', () => {
-    const withDict: MappingContext = {
-      ...ctx,
-      findDrType: (code) => (code === '1' ? 'CY/CY' : undefined),
-    }
-    const body = buildManifestBody(manifest, withDict)
+  it('giữ nguyên giá trị của API — KHÔNG còn đường tra dict nào', () => {
+    // `MappingContext` KHÔNG còn `findDrType` ⇒ body KHÔNG THỂ tra dict cho
+    // 交货条款 ⇒ giá trị của API đi thẳng vào body.
+    const body = buildManifestBody(manifest, ctx)
     expect(body.dr_type_str).toBe('1')
+    expect(ctx).not.toHaveProperty('findDrType')
   })
 
   it('không có dữ liệu ⇒ để trống', () => {

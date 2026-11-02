@@ -19,7 +19,6 @@ export function isBlank(value: unknown): boolean {
 
 export interface MappingContext {
   findTrustCode(supplyId?: number): string | undefined
-  findDrType(code?: string): string | undefined
   /** Tên cảng tiếng Trung — dict `getPort()` của site lưu tên Trung ở `E_PORT_NAM`. */
   findPort(code?: string): string | undefined
   findCntrType(raw?: number | string | null): string | undefined

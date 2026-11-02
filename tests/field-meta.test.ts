@@ -17,12 +17,11 @@ import {
  * Ngữ cảnh giả lập — chỉ dùng để kiểm tra KIỂU của `MappingContext`.
  *
  * Đây là STUB: mọi hàm tra cứu trả `undefined` hết, giống hệt site không có
- * dữ liệu từ điển. Code THẬT vẫn đọc `ctx` (trust code, loại hàng, tên cảng,
+ * dữ liệu từ điển. Code THẬT vẫn đọc `ctx` (trust code, tên cảng,
  * kiểu/kích cước container) ⇒ `ctx` KHÔNG được xoá.
  */
 const ctx: MappingContext = {
   findTrustCode: () => undefined,
-  findDrType: () => undefined,
   findPort: () => undefined,
   findCntrType: () => undefined,
   findCntrSize: () => undefined,

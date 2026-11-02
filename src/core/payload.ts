@@ -213,8 +213,11 @@ export function buildManifestBody(
     trust_cod: str(ctx.findTrustCode(data.sea_order?.sea_order_bind?.supplyId)),
     // 付款方式: site lưu MÃ (预付='P', 到付='C'), KHÔNG phải nhãn tiếng Trung.
     pay_way_id: payWayOf(data.payType)?.code ?? '',
-    // 交货条款 — lấy THẲNG giá trị của API: dict `getDrType/` của site chỉ
-    // có nhãn tiếng Trung, KHÔNG có mã ⇒ tra dict là tra hụt.
+    // 交货条款 — take the API value DIRECTLY.
+    //
+    // The site's `getDrType/` dict carries only Chinese labels, no code ⇒ a
+    // lookup would always miss ⇒ the extension does not fetch that dict at
+    // all and uses the API's `transportTerms` as is.
     dr_type_str: str(data.transportTerms),
     // 提单签发地 — API không có dữ liệu.
     sign_place_cod: '',

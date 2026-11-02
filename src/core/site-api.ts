@@ -126,7 +126,6 @@ export function normalizeDictOptions(
 
 export interface SiteDicts {
   trustCodes: DictOption[]
-  drTypes: DictOption[]
   ports: DictOption[]
   cntrTypes: DictOption[]
   cntrSizes: DictOption[]
@@ -334,9 +333,10 @@ export async function postSiteJson(
 }
 
 export async function loadSiteDicts(options: SiteFetchOptions = {}): Promise<SiteDicts> {
-  const [trustRaw, drRaw, cntrRaw, portRaw] = await Promise.all([
+  // The site's `getDrType/` dict is NOT fetched: 交货条款 comes straight from
+  // the API (`transportTerms`) and nothing else looks the value up.
+  const [trustRaw, cntrRaw, portRaw] = await Promise.all([
     fetchSiteJson('getTrustCode/', { ...options, label: 'the trust code list' }, { kw: '' }),
-    fetchSiteJson('getDrType/', { ...options, label: 'the cargo type list' }, { kw: '' }),
     fetchSiteJson('getCntrCode/', { ...options, label: 'the container type list' }),
     fetchSiteJson(
       'getPort/',
@@ -347,7 +347,6 @@ export async function loadSiteDicts(options: SiteFetchOptions = {}): Promise<Sit
 
   return {
     trustCodes: normalizeDictOptions(trustRaw),
-    drTypes: normalizeDictOptions(drRaw),
     ports: normalizeDictOptions(portRaw, {
       codeKeys: ['PORT_COD'],
       nameKeys: ['E_PORT_NAM'],
@@ -363,12 +362,6 @@ export function createMappingContext(dicts: SiteDicts): MappingContext {
       if (supplyId === undefined) return undefined
       const hit = dicts.trustCodes.find((o) => o.id === String(supplyId) || o.code === String(supplyId))
       return hit?.code
-    },
-
-    findDrType(code) {
-      if (!code) return undefined
-      const hit = dicts.drTypes.find((o) => o.code === code || o.id === code)
-      return hit?.name
     },
 
     findPort(code) {

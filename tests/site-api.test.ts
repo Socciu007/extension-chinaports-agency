@@ -45,7 +45,7 @@ describe('normalizeDictOptions', () => {
     expect(options[0]).toMatchObject({ code: 'CNSHA', name: '上海' })
   })
 
-  it('đọc mảng chuỗi thuần của getDrType', () => {
+  it('đọc mảng chuỗi thuần', () => {
     const options = normalizeDictOptions(['FOB', 'CIF'])
     expect(options[0]).toMatchObject({ code: 'FOB', name: 'FOB' })
   })
@@ -89,7 +89,6 @@ describe('readCookieToken', () => {
 describe('createMappingContext', () => {
   const dicts = {
     trustCodes: normalizeDictOptions([{ id: 2, TRUST_COD: 'MAEU' }]),
-    drTypes: normalizeDictOptions(['FOB', 'CIF']),
     ports: normalizeDictOptions([{ E_PORT_NAM: '上海', PORT_COD: 'CNSHA' }]),
     // `getCntrCode/` trả **chuỗi thuần** (FACT 6.2) — không có id số.
     cntrTypes: normalizeDictOptions(['40', 'HQ']),
@@ -99,11 +98,6 @@ describe('createMappingContext', () => {
   it('tìm 承运人 theo supplyId', () => {
     const ctx = createMappingContext(dicts)
     expect(ctx.findTrustCode(2)).toBe('MAEU')
-  })
-
-  it('tìm 交货条款 theo mã', () => {
-    const ctx = createMappingContext(dicts)
-    expect(ctx.findDrType('FOB')).toBe('FOB')
   })
 
   it('tìm cảng theo mã', () => {
@@ -134,7 +128,7 @@ describe('loadSiteDicts', () => {
   const okResponse = (body: unknown) =>
     ({ ok: true, status: 200, json: async () => body }) as unknown as Response
 
-  it('gọi đúng 4 endpoint, getPort kèm kw + filter', async () => {
+  it('gọi đúng 3 endpoint, getPort kèm kw + filter', async () => {
     const calls: string[] = []
     const inits: CapturedInit[] = []
     const fakeFetch = (async (url: string, init?: CapturedInit) => {
@@ -142,18 +136,16 @@ describe('loadSiteDicts', () => {
       inits.push(init ?? {})
       const body = url.includes('getTrustCode')
         ? { code: 2000, data: [{ id: 2, TRUST_COD: 'MAEU' }] }
-        : url.includes('getDrType')
-          ? { code: 2000, data: ['FOB', 'CIF'] }
-          : url.includes('getPort')
-            ? { code: 2000, data: [{ E_PORT_NAM: '上海', PORT_COD: 'CNSHA' }] }
-            : {
-                // `getCntrCode/` trả **chuỗi thuần**, tên key **ngược** (FACT 6.2).
-                code: 2000,
-                data: {
-                  cntr_type: ['40', 'HQ'],
-                  cntr_size: ['20', '45'],
-                },
-              }
+        : url.includes('getPort')
+          ? { code: 2000, data: [{ E_PORT_NAM: '上海', PORT_COD: 'CNSHA' }] }
+          : {
+              // `getCntrCode/` trả **chuỗi thuần**, tên key **ngược** (FACT 6.2).
+              code: 2000,
+              data: {
+                cntr_type: ['40', 'HQ'],
+                cntr_size: ['20', '45'],
+              },
+            }
       return okResponse(body)
     }) as unknown as typeof fetch
 
@@ -163,18 +155,18 @@ describe('loadSiteDicts', () => {
       cookieString: 'token=abc',
     })
 
-    expect(calls).toHaveLength(4)
+    expect(calls).toHaveLength(3)
     // URL phải chính xác — `new URLSearchParams({kw: ''})` → `"kw="`.
     expect(calls).toContain('/api/test/getTrustCode/?kw=')
-    expect(calls).toContain('/api/test/getDrType/?kw=')
     expect(calls).toContain('/api/test/getCntrCode/')
     expect(
       calls.some((u) => u.startsWith('/api/test/getPort/') && u.includes('filter=E_PORT_NAM')),
     ).toBe(true)
+    // Dict 交货条款 KHÔNG được gọi nữa — 交货条款 lấy thẳng từ API.
+    expect(calls.some((u) => u.includes('getDrType'))).toBe(false)
     // Không gọi dict 包装 — không ai dùng (C-2).
     expect(calls.some((u) => u.includes('getPackageCode'))).toBe(false)
     expect(dicts.trustCodes[0]?.code).toBe('MAEU')
-    expect(dicts.drTypes[0]?.name).toBe('FOB')
     expect(dicts.ports[0]?.name).toBe('上海')
     expect(dicts.cntrTypes[0]?.name).toBe('40')
     expect(dicts.cntrSizes[0]?.name).toBe('20')
@@ -193,7 +185,7 @@ describe('loadSiteDicts', () => {
       cookieString: 'token=abc',
     })
 
-    expect(inits).toHaveLength(4)
+    expect(inits).toHaveLength(3)
     // Cookie của site phải được gửi kèm (API cùng origin của site).
     expect(inits.every((i) => i.credentials === 'include')).toBe(true)
     expect(inits.every((i) => i.method === 'GET')).toBe(true)
@@ -213,7 +205,7 @@ describe('loadSiteDicts', () => {
       cookieString: '',
     })
 
-    expect(inits).toHaveLength(4)
+    expect(inits).toHaveLength(3)
     expect(inits.every((i) => new Headers(i.headers).get('authorization') === null)).toBe(true)
   })
 
@@ -304,7 +296,6 @@ describe('envelope khoá theo mã thành công 2000', () => {
       cookieString: 'token=abc',
     })
     expect(dicts.trustCodes).toHaveLength(0)
-    expect(dicts.drTypes).toHaveLength(0)
     expect(dicts.ports).toHaveLength(0)
     expect(dicts.cntrTypes).toHaveLength(0)
     expect(dicts.cntrSizes).toHaveLength(0)

@@ -101,7 +101,6 @@ const jsonResponse = (body: unknown) =>
  * - API manifest (URL có `dadaex` hoặc KHÔNG có `/api/booking/`)
  *   ⇒ `{status: 1, data: <fixture>}`;
  * - GET `getTrustCode/` ⇒ `{code:'MAEU', id:'2'}`;
- * - GET `getDrType/`   ⇒ `{code:'1', name:'FOB'}`;
  * - GET còn lại         ⇒ rỗng;
  * - POST `cargo/add/`   ⇒ dòng hàng;
  * - POST endpoint bill  ⇒ TẠO bill (`is_all` = "0") hoặc LƯU bill (`is_all` = "1").
@@ -129,9 +128,6 @@ function fakeFetch(options: { failSave?: boolean } = {}): {
     if (method === 'GET') {
       if (target.includes('getTrustCode/')) {
         return jsonResponse({ code: 2000, data: [{ code: 'MAEU', id: '2' }] })
-      }
-      if (target.includes('getDrType/')) {
-        return jsonResponse({ code: 2000, data: [{ code: '1', name: 'FOB' }] })
       }
       return jsonResponse({ code: 2000, data: [] })
     }

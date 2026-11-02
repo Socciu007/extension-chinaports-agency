@@ -14,7 +14,6 @@ import fixture from './fixtures/manifest-ONEYSHAGT1569600.json'
 /** `ctx` giả lập — dict của site trong test này chỉ có tên cảng. */
 const ctx: MappingContext = {
   findTrustCode: (supplyId) => (supplyId === 2 ? 'ONE' : undefined),
-  findDrType: () => undefined,
   findPort: () => undefined,
   findCntrType: () => undefined,
   findCntrSize: () => undefined,
