@@ -174,39 +174,17 @@ async function loadCreatedBillNos(): Promise<Set<string>> {
   return billNos
 }
 
-/**
- * Ghi nhớ một số bill ĐÃ có manifest trên site.
- *
- * Ghi khi site ĐÃ XÁC NHẬN tạo bill (`billCreated`), KHÔNG chỉ khi lưu xong
- * (`written`): nếu bước gắn dòng hàng hỏng, site vẫn còn bill đó ⇒ chạy lại
- * sẽ tạo bill THỨ HAI cho cùng một số bill.
- *
- * Số bill rỗng KHÔNG được ghi — không có số bill thì không chặn được gì.
- *
- * Chốt KHÔNG hết hạn: nó nói "trên site ĐÃ CÓ bill với số này" — đó là một
- * sự thật về site, không phải một trạng thái tạm. Đổi lại,
- * `chrome.storage.local` sống sót qua lần restart trình duyệt (khác
- * `sessionStorage` cũ) ⇒ một chốt CŨ chỉ là điều phiền to, còn một chốt
- * THIẾU là một chứng từ hải quan trùng. Nên giữ chốt, và để operator tự
- * xoá khi cần (message từ chối có nói đường thoát).
- */
+// Remember a bill that has been created on the site.
 async function rememberCreatedBillNo(blNo: string): Promise<void> {
   if (blNo === '') return
-  // Bộ nhớ RAM LUÔN được ghi ⇒ nếu `chrome.storage.local` đọc hỏng thì chốt
-  // vẫn còn trong tab này.
   createdBillNos.add(blNo)
   const local = localStorageArea()
   if (local) {
     try {
-      // Giá trị = thời điểm ghi (epoch ms). Chỉ để biết chốt được ghi lúc
-      // nào — chốt không hết hạn nên giá trị này không dùng để quyết định gì.
       await local.set({ [CREATED_BILL_NO_PREFIX + blNo]: Date.now() })
-      // Ghi được vào store CHUNG ⇒ KHÔNG cần bản sao trong `sessionStorage`
-      // (bản sao đó theo tab, và làm đường thoát "xoá storage" không ăn).
       return
     } catch (e) {
       console.warn('[manifest-autofill] could not persist the created bill number', blNo, e)
-      // Rơi xuống `sessionStorage` + RAM.
     }
   }
   const billNos = readSessionBillNos()
@@ -214,14 +192,11 @@ async function rememberCreatedBillNo(blNo: string): Promise<void> {
   try {
     sessionStorage.setItem(CREATED_BILL_NOS_KEY, JSON.stringify([...billNos]))
   } catch {
-    // Không ghi được thì chốt vẫn còn trong RAM của content script.
     console.warn('[manifest-autofill] could not persist the created bill number', blNo)
   }
 }
 
-/**
- * Run manifest according to the request from the popup.
-**/
+// Run manifest according to the request from the popup.
 async function handleCreate(request: CreateRequest): Promise<CreateResult> {
   // If not on the manifest page, return an error.
   if (!isManifestPage()) {
@@ -230,35 +205,16 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
     )
   }
 
-  // Key chốt = số bill ĐÃ GHI LÊN SITE (giữ hậu tố piece) — KHÔNG phải mã
-  // gốc mà API tra cứu.
-  //
-  // `…P1` và `…P2` là HAI bản ghi KHÁC NHAU trên site ⇒ phải là hai chốt
-  // riêng; gộp chúng thì piece thứ hai bị từ chối với lý do sai.
-  //
-  // Hệ quả (đã chấp nhận): extension chỉ có dữ liệu ở mức MÃ GỐC ⇒ cả hai
-  // bản ghi mang CÙNG dòng hàng / container. Extension chỉ lưu NHÁP (暂存)
-  // và KHÔNG BAO GIỜ tự submit ⇒ operator tự điền lại dòng cho từng piece.
+  // Check if the bill has already been created on the site.
   const billKey = billNoAsWritten(request.blNo)
-
-  // Site ĐÃ có manifest cho số bill này ⇒ từ chối, KHÔNG chạy gì thêm.
-  // Chặn TRƯỚC mọi lần gọi mạng.
-  //
-  // Hạn chế ĐÃ BIẾT (chốt này KHÔNG kín): hai tab chạy CÙNG một số bill đúng
-  // lúc vẫn có thể cùng vượt qua — cả hai đọc trước khi ai kịp ghi. Chốt
-  // chặn được trường hợp PHỔ BIẾN (chạy lại ở tab khác, hoặc sau khi đóng
-  // tab), không chặn được cái tranh chấp đúng giây đó.
   if ((await loadCreatedBillNos()).has(billKey)) {
     return errorResult(
       'A manifest was already created on the site for this bill of lading number. Check the site and finish that manifest by hand — the extension does not create a second manifest for the same bill. If the site no longer has that manifest, clear the storage of the Manifest Autofill extension for this browser and run again.',
     )
   }
 
+  // Check if the create on site setting is enabled.
   const settings = await readSettings()
-
-  // Chốt ghi lên site: popup KHÔNG phải nguồn sự thật — setting ĐÃ LƯU mới
-  // là. `readSettings()` trả `DEFAULT_SETTINGS` khi đọc hỏng ⇒ `createOnSite`
-  // = `false` ⇒ fail closed.
   if (settings.createOnSite !== true) {
     return errorResult(
       'Creating the manifest on the site is turned off in the extension settings.',
@@ -277,10 +233,6 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
     // `sendSiteJson`) mới dùng đúng token mới nhất.
   })
 
-  // Site ĐÃ xác nhận có bill ⇒ ghi nhớ, kể cả khi bước lưu chưa xong.
-  //
-  // PHẢI chờ ghi xong: nếu không, chốt có thể tới sau khi popup đã nhận câu
-  // trả lời ⇒ operator thấy "xong" rồi mở tab khác chạy lại thì vẫn lọt.
   if (result.billCreated === true) await rememberCreatedBillNo(billKey)
 
   return result
@@ -289,12 +241,9 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const type = (message as { type?: string } | undefined)?.type
   if (type !== MSG_CREATE_MANIFEST) return false
+  console.log('Input from popup:', message)
 
-  // Message sai hình dạng ⇒ từ chối NGAY, trước mọi lần gọi mạng.
-  //
-  // Kiểm TRƯỚC chốt "đang chạy": message hỏng thì lý do đúng là "request
-  // không hợp lệ", không phải "đang có lần chạy" — báo sai lý do khiến
-  // operator tưởng phải chờ một lần chạy không hề tồn tại.
+  // Check input from popup
   if (!isCreateRequest(message)) {
     sendResponse(
       errorResult(
@@ -314,7 +263,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   const run: Promise<CreateResult> = handleCreate(message)
     .catch((e: unknown) => {
-      // Chi tiết kỹ thuật chỉ nằm ở console; người dùng chỉ thấy câu ngắn.
       console.error('[manifest-autofill] unexpected error', e)
       return errorResult('Something went wrong while running the manifest.')
     })
@@ -327,7 +275,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     try {
       sendResponse(result)
     } catch (e) {
-      // Tab đã điều hướng đi ⇒ port đã đóng ⇒ không còn ai nghe.
       console.debug('[manifest-autofill] sendResponse failed — the tab probably navigated away', e)
     }
   })

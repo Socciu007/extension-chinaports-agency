@@ -66,37 +66,13 @@ import type { ManifestCargo, ManifestContainer } from './types'
 export const DEFAULT_DEADLINE_MS = 240_000
 
 export interface ManifestRunOptions {
-  /**
-   * Số bill của OPERATOR — giữ hậu tố piece (`P1`, `P12`).
-   *
-   * `fetchManifest` bỏ hậu tố khi TRA CỨU (API chỉ nhận mã gốc), còn số
-   * bill GHI LÊN SITE giữ nguyên hậu tố.
-   */
   blNo: string
-  /** Base URL của API manifest bên ngoài. */
   apiBase?: string
-  /** Base URL của API site. */
   siteApiBase?: string
-  /** `fetch` cho API manifest (test inject). */
   fetchImpl?: typeof fetch
-  /** `fetch` cho API site (test inject). */
   siteFetchImpl?: typeof fetch
-  /**
-   * Cookie của site (chứa `token` cho header `Authorization`) — CHỈ dùng để
-   * inject trong test.
-   *
-   * Production CỐ TÌNH không truyền giá trị này ⇒ `sendSiteJson` đọc lại
-   * `document.cookie` ở MỖI request: site có thể xoay token giữa hai lần gọi
-   * ⇒ ảnh chụp cookie lúc bắt đầu sẽ gửi token CŨ. Đừng "dọn" option này đi.
-   */
   cookieString?: string
-  /**
-   * Timeout cho MỖI request (ms).
-   *
-   * Mặc định = `min(HTTP_TIMEOUT_MS, phần hạn còn lại của lần chạy)`.
-   */
   timeoutMs?: number
-  /** Hạn của cả lần chạy (ms). Mặc định `DEFAULT_DEADLINE_MS`. */
   deadlineMs?: number
 }
 
@@ -330,13 +306,7 @@ function reportContainers(rows: Record<string, unknown>[]): ReportItem[] {
   )
 }
 
-/**
- * Câu mô tả trạng thái trên site — luôn nói rõ extension đã làm gì.
- *
- * Ba cờ có ý nghĩa khác nhau: `createAttempted` (đã CỐ gửi yêu cầu tạo bill —
- * không đảm bảo site đã nhận), `billCreated` (bill ĐÃ được tạo) và `written`
- * (đã lưu xong).
- */
+// A sentence describing the state on the site — always mentioning what the extension has done.
 function partialStateSentence(
   createAttempted: boolean,
   billCreated: boolean,
@@ -345,7 +315,7 @@ function partialStateSentence(
 ): string {
   if (!createAttempted) return 'Nothing was created on the site.'
   if (!billCreated) {
-    return 'The manifest bill may already exist on the site — the site did not confirm the creation. Check the site before trying again.'
+    return 'The manifest bill may already exist on the site.'
   }
   if (rowsAdded < cargoRows) {
     return `The manifest bill was created on the site and ${rowsAdded} of ${cargoRows} cargo rows were added. ${NEVER_DELETES_BILLS}`
@@ -380,16 +350,10 @@ function describeError(error: unknown): string {
   return 'Something went wrong while running the manifest.'
 }
 
-/**
- * Chạy toàn bộ luồng manifest.
- *
- * KHÔNG reject — lỗi nào cũng được đổi thành `ManifestRunResult` với
- * `ok: false` và `message` tiếng Anh.
- */
+// Run the entire manifest flow.
 export async function runManifest(options: ManifestRunOptions): Promise<ManifestRunResult> {
   const steps: string[] = []
   const items: ReportItem[] = []
-  /** Hạn của lần chạy — tính một lần, lúc bắt đầu run. */
   const deadlineAt = Date.now() + (options?.deadlineMs ?? DEFAULT_DEADLINE_MS)
 
   let cargoRows = 0
@@ -400,37 +364,25 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
   let createAttempted = false
   let rowsAdded = 0
 
-  /** Phần hạn còn lại của lần chạy (ms) — luôn ít nhất 1 ms. */
+  // Remaining time of the run (ms) — at least 1 ms.
   const remaining = (): number => Math.max(1, deadlineAt - Date.now())
-  /**
-   * Timeout cho MỖI request.
-   *
-   * - `options.timeoutMs` do caller truyền ⇒ dùng NGUYÊN VẸN (một số tình
-   *   huống cần một request được phép vượt hạn của lần chạy);
-   * - mặc định ⇒ `min(HTTP_TIMEOUT_MS, phần hạn còn lại)` ⇒ một request treo
-   *   KHÔNG giữ cả lần chạy (mặc định 4 phút) bị treo.
-   */
+  // Timeout for each request.
   const requestTimeout = (): number =>
     options.timeoutMs ?? Math.min(HTTP_TIMEOUT_MS, remaining())
-  /** Options cho mọi request tới API của site. */
+  // Options for all requests to the site API.
   const siteOptions = (): SiteFetchOptions => ({
     baseUrl: options.siteApiBase,
     fetchImpl: options.siteFetchImpl,
     cookieString: options.cookieString,
     timeoutMs: requestTimeout(),
   })
-  /** Chặn nếu đã hết hạn — trước MỖI bước gọi mạng. */
+  // Check if the run has reached its deadline — before each network call.
   const checkDeadline = (step: string): void => {
     if (Date.now() >= deadlineAt) {
       throw new ManifestRunError('deadline', `The run reached its time limit before "${step}".`)
     }
   }
-  /**
-   * Dựng `ManifestRunResult` từ trạng thái hiện tại của lần chạy.
-   *
-   * Số field BẮT BUỘC bị trống được tính ĐÚNG MỘT LẦN ở đây ⇒ `blocked` và
-   * `message` không thể lệch nhau.
-   */
+  // Build the result from the current state of the run.
   const buildResult = (overrides: Partial<ManifestRunResult> = {}): ManifestRunResult => {
     const requiredCount = items.filter((item) => item.required === true).length
     const result: ManifestRunResult = {
@@ -445,8 +397,8 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
     }
     if (billNo !== undefined) result.billNo = billNo
     Object.assign(result, overrides)
-    // Message mặc định khi còn field BẮT BUỘC bị trống. Message do caller
-    // truyền qua `overrides.message` được giữ nguyên.
+    // Default message when there are required fields missing. The message
+    // passed through `overrides.message` is kept.
     if (result.message === undefined && requiredCount > 0) {
       result.message = blockedMessage(requiredCount)
     }
@@ -467,7 +419,7 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
       fetchImpl: options.fetchImpl,
       timeoutMs: requestTimeout(),
     })
-    steps.push('Fetched the manifest data')
+    steps.push('Fetched the manifest data from external API (eb)')
 
     checkDeadline('loading the site dictionaries')
     const dicts = await loadSiteDicts(siteOptions())
@@ -478,12 +430,9 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
     const containers: ManifestContainer[] = data.cdCon ?? []
 
     const header = buildHeaderPayload(data, ctx, options.blNo)
-    // Số bill GHI LÊN SITE có thể khác số bill API trả về (hậu tố piece) ⇒
-    // phải nói cho operator biết, không để họ tưởng extension ghi sai.
+    // The bill number as written by the operator.
     const writtenBillNo = header.bill_nbr ?? ''
-    // Số bill của API cũng đi qua `billNoAsWritten` (trim + upper-case) — cùng
-    // hình dạng với số GHI LÊN SITE ⇒ so sánh KHÔNG báo nhầm chỉ vì khác
-    // chữ HOA.
+    // The bill number from the external API also goes through `billNoAsWritten` (trim + upper-case) — same format as the bill number written on the site ⇒ comparison without mistaking because of different capitalization.
     const apiBillNo = billNoAsWritten(data.blNo ?? '')
     if (writtenBillNo !== '' && writtenBillNo !== apiBillNo) {
       steps.push(billNoMismatchStep(writtenBillNo, apiBillNo))
@@ -494,24 +443,19 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
 
     cargoRows = cargoPayloads.length
     containerRows = containerPayloads.length
-    // Lý do "không parse được" phải nằm ở REPORT (đi qua ranh giới message
-    // content → popup: Chrome JSON-serialise message ⇒ `NaN` thành `null`,
-    // không phải `NaN`), KHÔNG ở payload gửi lên site.
     items.push(...reportHeader(header))
     items.push(...reportCargo(cargoPayloads, kinds))
     items.push(...reportContainers(containerPayloads))
 
-    // 1) Tạo bill — server gán mã bill nội bộ.
+    // Create the manifest bill — the server assigns the internal bill number.
     checkDeadline('creating the manifest bill')
     createAttempted = true
     const created = await createManifestBill(header, siteOptions())
     steps.push('Created the manifest bill on the site')
-    // Site ĐÃ xác nhận tạo bill ⇒ bill tồn tại trên site, kể cả khi bước
-    // đọc mã bill bên dưới thất bại (trường hợp đặc biệt).
+    // The site has confirmed the creation of the bill ⇒ the bill exists on the site, even if the step of reading the bill number below fails (special case).
     billCreated = true
 
-    // 2) Đọc mã bill — KHÔNG có mã thì KHÔNG gửi dòng hàng nào (một dòng
-    //    hàng gắn sai bill sẽ không báo lỗi nào).
+    // Read the bill number — if there is no bill number, no cargo rows are sent (a cargo row attached to the wrong bill will not report any error).
     let assignedBillNo: string
     try {
       assignedBillNo = extractBillNo(created)
@@ -522,18 +466,16 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
     billNo = assignedBillNo
     steps.push('Read the bill number from the site')
 
-    // 3) Gắn từng dòng hàng vào bill.
+    // Attach each cargo row to the bill.
     for (const row of cargoPayloads) {
-      // Kiểm tra hạn trước TỪNG dòng — nhiều dòng có thể vượt hạn.
+      // Check the deadline before each row — many rows can exceed the deadline.
       checkDeadline('adding the cargo rows')
       await addCargoRow(row, assignedBillNo, siteOptions())
       rowsAdded += 1
     }
     steps.push(`Added ${rowsAdded} cargo row(s) to the bill`)
 
-    // 4) Lưu bill kèm container (`is_all` = "1" = 暂存).
-    //    `saveManifestContainers` tự copy header, tự gán `bill_no`, tự đặt
-    //    `is_all`, tự thêm `cntr_list` và tự bỏ 3 key tổng do site tính.
+    // Save the manifest bill with its containers (`is_all` = "1" = 暂存).
     checkDeadline('saving the manifest')
     const containersWithBill = containerPayloads.map((row) => ({
       ...row,

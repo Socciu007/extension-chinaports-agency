@@ -4,17 +4,13 @@ import type { MappingContext } from './field-meta'
 export const DEFAULT_SITE_API_BASE = '/api/booking/exportManifestDataMaintain'
 
 export interface DictOption {
-  /** mã dùng để đối chiếu (UN/LOCODE, mã cảng, mã 箱型…) */
-  code: string
-  /** nhãn hiển thị trong dropdown của site */
-  name: string
-  /** id trong DB của site (dùng cho 承运人 / 箱型 / 尺寸) */
-  id?: string
-  /** bản gốc, để đối chiếu theo key khác nếu cần */
-  raw: Record<string, unknown>
+  code: string // used to compare (UN/LOCODE, port code, container type code…)
+  name: string // display name in the site's dropdown
+  id?: string // id in the site's database (used for carrier / container type / size)
+  raw: Record<string, unknown> // original data, to compare with other keys if needed
 }
 
-/** Key chứa mã — `TRUST_COD`/`PORT_COD` là key thật của site (FACT 4). */
+// Key containing the code — `TRUST_COD`/`PORT_COD` are the actual keys of the site (FACT 4).
 const CODE_KEYS = [
   'code',
   'unCode',
@@ -26,7 +22,7 @@ const CODE_KEYS = [
   'TRUST_COD',
   'PORT_COD',
 ]
-/** Key chứa tên hiển thị — `E_PORT_NAM` là tên cảng tiếng Trung của site. */
+// Key containing the display name — `E_PORT_NAM` is the Chinese port name of the site.
 const NAME_KEYS = [
   'name',
   'label',
@@ -47,7 +43,7 @@ function pickString(source: Record<string, unknown>, keys: string[]): string | u
   return undefined
 }
 
-/** Tìm mảng đầu tiên trong payload (hỗ trợ `{data:[…]}`, `{list:[…]}`, …). */
+// Find the first array in the payload (supports `{data:[…]}`, `{list:[…]}`, …).
 function asArray(payload: unknown): unknown[] {
   if (Array.isArray(payload)) return payload
   if (typeof payload !== 'object' || payload === null) return []
@@ -64,12 +60,7 @@ function asArray(payload: unknown): unknown[] {
   return []
 }
 
-/**
- * Bóc vỏ envelope `{code, data, msg}` của site.
- * Đã kiểm chứng ngày 2026-10-27 trên site thật:
- *   GET /api/booking/exportManifestDataMaintain/getTrustCode/
- *   → {"code":4000,"data":null,"msg":"身份认证信息未提供。"}   (HTTP 200!)
- */
+// Unwrap the site envelope `{code, data, msg}`.
 function unwrapEnvelope(payload: unknown): unknown {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return payload
   const source = payload as Record<string, unknown>
@@ -77,7 +68,7 @@ function unwrapEnvelope(payload: unknown): unknown {
   return payload
 }
 
-/** Lấy mảng theo key cụ thể; nếu không có thì lùi về `asArray`. */
+// Get the array by specific key; if not found, fall back to `asArray`.
 export function pickArray(payload: unknown, keys: string[]): unknown[] {
   for (const candidate of [unwrapEnvelope(payload), payload]) {
     if (typeof candidate !== 'object' || candidate === null) continue
@@ -96,18 +87,10 @@ export function pickArray(payload: unknown, keys: string[]): unknown[] {
   return asArray(payload)
 }
 
-/**
- * Key ưu tiên cho một endpoint cụ thể.
- *
- * Vì dict của site dùng key riêng (`PORT_COD`/`E_PORT_NAM`), nếu để các key
- * generic (`code`/`name`/`cnName`…) được tra TRƯỚC thì một bản ghi port sau
- * này có thêm field `name` sẽ khiến `findPort` trả tên tiếng Anh, còn site
- * chỉ gợi ý tên cảng tiếng Trung (`上海/CNSHA`) ⇒ không khớp suggestion.
- */
+// Preferred keys for a specific endpoint.
+// Because the site's dict uses specific keys (`PORT_COD`/`E_PORT_NAM`), if we let the generic keys (`code`/`name`/`cnName`…) be searched first, a port record with an additional `name` field will cause `findPort` to return the English name, but the site only suggests the Chinese port name (`上海/CNSHA`) ⇒ the suggestion does not match.
 export interface DictKeyPreference {
-  /** key chứa mã — tra TRƯỚC `CODE_KEYS` */
   codeKeys?: string[]
-  /** key chứa tên — tra TRƯỚC `NAME_KEYS` */
   nameKeys?: string[]
 }
 
@@ -120,7 +103,6 @@ export function normalizeDictOptions(
   const result: DictOption[] = []
 
   for (const entry of asArray(unwrapEnvelope(payload))) {
-    // `getDrType/` trả về mảng chuỗi thuần: mã cũng chính là nhãn hiển thị.
     if (typeof entry === 'string') {
       const code = entry.trim()
       if (code === '') continue
@@ -150,7 +132,7 @@ export interface SiteDicts {
   cntrSizes: DictOption[]
 }
 
-/** Đọc cookie `token` của site (JWT gửi qua header `Authorization: JWT <token>`). */
+// Read the `token` cookie of the site (JWT sent via header `Authorization: JWT <token>`).
 export function readCookieToken(cookieString: string): string | undefined {
   for (const part of cookieString.split(';')) {
     const [name, ...rest] = part.split('=')
@@ -166,40 +148,11 @@ export interface SiteFetchOptions {
   baseUrl?: string
   fetchImpl?: typeof fetch
   cookieString?: string
-  /** Thời gian chờ tối đa (ms) cho mỗi request — hết giờ thì báo lỗi `timeout`. */
   timeoutMs?: number
-  /**
-   * Nhãn của endpoint trong message lỗi.
-   *
-   * Mặc định là `path` — nhưng endpoint tạo bill có `path` RỖNG, nên message
-   * sẽ có hai dấu cách; endpoint đó truyền nhãn riêng.
-   *
-   * `loadSiteDicts` KHÔNG dùng nhãn này — nó tự gán nhãn riêng cho từng dict.
-   */
   label?: string
-  /**
-   * Header thêm cho request — nhận được cả 3 dạng của `HeadersInit`
-   * (object thuần, `Headers` instance, mảng cặp `[[name, value]]`).
-   *
-   * Thứ tự ưu tiên khi trùng tên: cookie `token` của site > `Content-Type`
-   * do tầng POST tự đặt > header của caller. `Accept` luôn do tầng này đặt.
-   */
   headers?: HeadersInit
 }
 
-/**
- * Phân loại lỗi của API site — cùng hình dạng với `ApiErrorKind` của
- * `src/core/api.ts`:
- *
- * - `session`      — site trả `code: 4000`: session thiếu/hết hạn
- * - `site`         — site trả mã khác 2000 (lỗi phía site)
- * - `network`      — request không hoàn tất (offline, DNS, CORS)
- * - `http`         — site đã trả lời nhưng status không phải 2xx
- * - `bad_response` — body không phải JSON, hoặc không phải envelope của site
- * - `bad_request`  — extension KHÔNG gửi được request hợp lệ (body không
- *   serialize được, thiếu mã bill) ⇒ site chưa hề bị gọi
- * - `timeout`      — site không trả lời trong thời gian chờ
- */
 export type SiteApiErrorKind =
   | 'session'
   | 'site'
@@ -209,13 +162,8 @@ export type SiteApiErrorKind =
   | 'bad_request'
   | 'timeout'
 
-/** Lỗi từ API của site — luôn mang `kind` để tầng UI map sang thông báo. */
 export class SiteApiError extends Error {
   readonly kind: SiteApiErrorKind
-  /**
-   * Mã số của lỗi: mã envelope của site (`site`/`session`) hoặc HTTP status
-   * (`http`); `undefined` khi không có mã nào (`network`/`bad_response`).
-   */
   readonly code: number | undefined
 
   constructor(kind: SiteApiErrorKind, message: string, code?: number) {
@@ -226,17 +174,7 @@ export class SiteApiError extends Error {
   }
 }
 
-/**
- * Chuỗi hiển thị cho người dùng, theo từng `kind` — tiếng Anh.
- * Tầng UI phải map theo `kind`, KHÔNG hiển thị thẳng `error.message`
- * vì message là chi tiết kỹ thuật, không phải thông báo cho người dùng.
- *
- * Nhánh `session` có thêm gợi ý về cookie `HttpOnly`: extension xác thực bằng
- * cookie `token` của site đọc qua `document.cookie` ⇒ nếu site đánh dấu cookie
- * đó là `HttpOnly` thì extension KHÔNG BAO GIỜ đọc được, và operator sẽ bị
- * bắt vòng lặp "đăng nhập lại" dù đã đăng nhập. Gợi ý được viết theo kiểu
- * "có thể" vì không truyền được trạng thái đọc token xuống đây.
- */
+// A string to display to the user, according to the `kind` — English.
 export function describeSiteError(error: unknown): string {
   if (error instanceof SiteApiError) {
     switch (error.kind) {
@@ -259,25 +197,10 @@ export function describeSiteError(error: unknown): string {
   return 'Something went wrong while talking to the site.'
 }
 
-/**
- * Mã thành công của API site là **2000** (FACT 6.4 — bundle site:
- * `2e3==e.code ? … : …`). Mã `200` KHÔNG phải mã của site.
- */
 const SITE_OK_CODE = 2000
-/** Mã của site khi session thiếu/hết hạn. */
 const SITE_SESSION_CODE = 4000
 
-/**
- * Site báo lỗi NGAY TRONG HTTP 200.
- * Đã kiểm chứng 2026-10-27 trên site thật:
- *   GET /api/booking/exportManifestDataMaintain/getTrustCode/
- *   → HTTP 200 {"code":4000,"data":null,"msg":"身份认证信息未提供。"}
- *
- * Vì vậy phải kiểm tra theo **mã thành công của site** (`2000`), không kiểm
- * tra `data === null`: một envelope thành công với `data: null` chỉ nghĩa là
- * dict rỗng, còn một lỗi phía site (`code: 5000`) có thể đi kèm `data` khác
- * null — bỏ qua nó thì extension im lặng báo "không tìm thấy…" cho mọi field.
- */
+// Assert that the payload is a site envelope `{code, data, msg}`.
 function assertSiteEnvelope(label: string, payload: unknown): void {
   if (typeof payload !== 'object' || payload === null) {
     throw new SiteApiError(
@@ -303,15 +226,7 @@ function assertSiteEnvelope(label: string, payload: unknown): void {
   throw new SiteApiError('site', `The site rejected the request to ${label} (code ${source.code}).`, source.code)
 }
 
-/**
- * Gửi một request tới API của site và trả về envelope đã kiểm tra.
- *
- * Toàn bộ phần chung của GET và POST nằm ở đây: dựng URL (+ query), đọc
- * cookie `token`, header, timeout cứng, phân loại lỗi, kiểm tra envelope
- * `{code, data, msg}`. Tách riêng để POST không phải copy-paste khối phân loại
- * lỗi — hai đường phải báo lỗi giống hệt nhau, nếu không thì caller gặp
- * lỗi "session" ở GET nhưng lại gặp lỗi chung chung ở POST.
- */
+// Send a request to the site API and return the validated envelope.
 async function sendSiteJson(
   path: string,
   init: RequestInit,
@@ -320,24 +235,20 @@ async function sendSiteJson(
 ): Promise<unknown> {
   const base = options.baseUrl ?? DEFAULT_SITE_API_BASE
   const doFetch = options.fetchImpl ?? fetch
-  // Nhãn trong message lỗi — `path` rỗng (endpoint tạo bill) tạo ra message
-  // có hai dấu cách, nên endpoint đó truyền nhãn riêng.
+  // The label in the error message — the empty `path` (create bill endpoint) creates a message with two spaces, so the endpoint passes a label separately.
   const label = options.label ?? path
-  // Service worker của MV3 không có `document` ⇒ không có `document.cookie`.
+  // The service worker of MV3 does not have `document` ⇒ there is no `document.cookie`.
   const token = readCookieToken(
     options.cookieString ?? (typeof document !== 'undefined' ? document.cookie : ''),
   )
 
-  // `Headers` nhận được cả 3 dạng của `HeadersInit` (object thuần, `Headers`
-  // instance, mảng cặp) và gộp các header trùng tên (không phân biệt hoa/thường)
-  // ⇒ không header nào của caller bị rơi, không gửi 2 header cùng tên.
+  // `Headers` can receive all three forms of `HeadersInit` (plain object, `Headers` instance, array of pairs) and merge headers with the same name (case-insensitive) 
+  // ⇒ no header of the caller is lost, no two headers with the same name are sent.
   const headers = new Headers(options.headers)
   for (const [name, value] of new Headers(init.headers)) {
     headers.set(name, value)
   }
   headers.set('Accept', 'application/json')
-  // Token trong cookie của site là nguồn xác thực ⇒ ghi đè `Authorization` mà
-  // caller đưa vào. Không có token trong cookie thì giữ nguyên của caller.
   if (token) headers.set('Authorization', `JWT ${token}`)
 
   const query = params ? `?${new URLSearchParams(params).toString()}` : ''
@@ -349,11 +260,7 @@ async function sendSiteJson(
       url,
       {
         ...init,
-        // Đưa thẳng `Headers` instance cho `fetch` — chính `Headers` đã lo
-        // chuẩn hoá tên header và gộp header trùng tên (không phân biệt
-        // hoa/thường) ⇒ không thể gửi 2 header cùng tên.
         headers,
-        // API cùng origin của site ⇒ cookie phải đi kèm mọi request.
         credentials: 'include',
       },
       { fetchImpl: doFetch, timeoutMs: options.timeoutMs },
@@ -393,17 +300,7 @@ async function fetchSiteJson(
   return sendSiteJson(path, { method: 'GET' }, options, params)
 }
 
-/**
- * POST JSON tới API của site.
- *
- * Body phải có key **chữ thường** — site gọi helper `keyToLowercase` trước
- * khi POST. Tầng gọi (`site-write.ts`) chịu trách nhiệm lowercase trước khi
- * gọi hàm này.
- *
- * Trả về **envelope đã kiểm tra** `{code, data, msg}` — KHÔNG tự bóc `data`:
- * mỗi endpoint trả về một shape khác nhau (bill, dòng hàng, kết quả lưu),
- * caller tự quyết định lấy gì.
- */
+// POST JSON to the site API.
 export async function postSiteJson(
   path: string,
   body: unknown,
@@ -413,8 +310,6 @@ export async function postSiteJson(
   try {
     serialized = JSON.stringify(body)
   } catch (e) {
-    // Body cyclic (hoặc có BigInt) ⇒ serialize lỗi. Không để `TypeError` thô
-    // thoát ra ngoài — mọi lỗi của tầng này phải là `SiteApiError`.
     throw new SiteApiError(
       'bad_request',
       `The request body for ${options.label ?? path} could not be serialized as JSON: ${(e as Error).message}`,
@@ -439,15 +334,10 @@ export async function postSiteJson(
 }
 
 export async function loadSiteDicts(options: SiteFetchOptions = {}): Promise<SiteDicts> {
-  // 4 endpoint, đúng như site gọi (FACT 4). `getPackageCode/` **không** gọi:
-  // sau C-2 thì PACKAGE_STR/PACKAGE_COD đều để trống ⇒ dict 包装 không có ai dùng.
   const [trustRaw, drRaw, cntrRaw, portRaw] = await Promise.all([
     fetchSiteJson('getTrustCode/', { ...options, label: 'the trust code list' }, { kw: '' }),
     fetchSiteJson('getDrType/', { ...options, label: 'the cargo type list' }, { kw: '' }),
     fetchSiteJson('getCntrCode/', { ...options, label: 'the container type list' }),
-    // `getPort/` chỉ là fallback: nó lọc theo tên cảng tiếng Trung nên có thể
-    // lỗi mà không được làm hỏng phần còn lại của dict (tên cảng chính đến
-    // từ API dadaex).
     fetchSiteJson(
       'getPort/',
       { ...options, label: 'the port list' },
@@ -458,8 +348,6 @@ export async function loadSiteDicts(options: SiteFetchOptions = {}): Promise<Sit
   return {
     trustCodes: normalizeDictOptions(trustRaw),
     drTypes: normalizeDictOptions(drRaw),
-    // Dict cảng: key thật của site là `PORT_COD`/`E_PORT_NAM` — ưu tiên chúng
-    // để tên cảng tiếng Trung luôn thắng key generic (`name`/`code`).
     ports: normalizeDictOptions(portRaw, {
       codeKeys: ['PORT_COD'],
       nameKeys: ['E_PORT_NAM'],

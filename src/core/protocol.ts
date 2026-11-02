@@ -48,16 +48,8 @@ export interface ReportItem {
 
 export interface CreateRequest {
   type: typeof MSG_CREATE_MANIFEST
-  /**
-   * Số bill của OPERATOR — giữ hậu tố piece (`P1`, `P12`).
-   *
-   * `runManifest` bỏ hậu tố khi TRA CỨU API (API chỉ nhận mã gốc), còn số
-   * bill GHI LÊN SITE giữ nguyên hậu tố.
-   */
   blNo: string
-  /** Base URL của API manifest bên ngoài. */
   apiBase?: string
-  /** Base URL của API của site. */
   siteApiBase?: string
 }
 

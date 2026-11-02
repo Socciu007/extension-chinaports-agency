@@ -2,11 +2,8 @@ import { DEFAULT_API_BASE } from './api'
 import { DEFAULT_SITE_API_BASE } from './site-api'
 
 export interface ExtensionSettings {
-  /** endpoint lấy dữ liệu manifest từ dadaex */
   apiBase: string
-  /** base path của API dict của chính site */
   siteApiBase: string
-  /** có tạo manifest TRÊN SITE hay không (mặc định: KHÔNG) */
   createOnSite: boolean
 }
 

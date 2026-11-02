@@ -17,12 +17,7 @@ import { blockingFields } from '../core/report'
 import { MANIFEST_ROUTE, MANIFEST_URL, routeOfHash } from '../core/site-url'
 import './styles.css'
 
-/**
- * Origin của trang khai 预配舱单.
- *
- * Lấy từ `MANIFEST_URL` để không lặp lại chuỗi origin ở nhiều chỗ — content
- * script chỉ được inject vào đúng origin này.
- */
+// Origin of the manifest declaration page.
 const MANIFEST_ORIGIN = new URL(MANIFEST_URL).origin
 
 /**
@@ -216,11 +211,8 @@ async function activeTabId(): Promise<number | undefined> {
 }
 
 /**
- * Chạy manifest — hành động DUY NHẤT của extension.
- *
- * Ghi lên site (tạo bill + gắn hàng + lưu nháp) ⇒ CHỈ chạy khi operator đã
- * opt-in "Create the manifest on the site". Nếu không thì lần chạy bị bỏ qua,
- * không gửi message nào — y hệt nút đang bị disable.
+ * Run the manifest — the only action of the extension.
+ * Write to the site (create bill + attach cargo + save as draft)
  */
 async function run(): Promise<void> {
   if (busy.value) return

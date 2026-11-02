@@ -22,11 +22,7 @@ export class ManifestApiError extends Error {
   }
 }
 
-/**
- * Chuỗi hiển thị cho người dùng, theo từng `kind` — tiếng Anh.
- * Tầng UI phải map theo `kind`, KHÔNG hiển thị thẳng `error.message`
- * vì message là chi tiết kỹ thuật, không phải thông báo cho người dùng.
- */
+// A string to display to the user, according to the `kind` — English.
 export function describeApiError(error: unknown): string {
   if (error instanceof ManifestApiError) {
     switch (error.kind) {
@@ -45,36 +41,12 @@ export function describeApiError(error: unknown): string {
   return 'Something went wrong while fetching the manifest data.'
 }
 
-/**
- * blNo trên site có thể kèm hậu tố piece dạng `P1`, `P12`.
- * API của dadaex chỉ nhận mã gốc — đã kiểm chứng:
- * `CHN4139065P1` → status 0 (data_not_found),
- * `CHN4139065`  → status 1 nhưng `data=null` (tồn tại bill nhưng không có manifest).
- *
- * Chỉ bỏ hậu tố khi nó đứng sau một chữ số, nên mã gốc thật sự kết thúc
- * bằng `P<digits>` (ví dụ `ABCP12`) không bị đụng tới.
- */
+// Remove the piece suffix from the bill number.
 export function normalizeBlNo(raw: string): string {
   return raw.trim().toUpperCase().replace(/(?<=\d)P\d+$/, '')
 }
 
-/**
- * Số bill THEO ĐÚNG CÁCH OPERATOR GÕ — đúng thứ ghi vào 提单号 trên site.
- *
- * KHÁC `normalizeBlNo`: KHÔNG bỏ hậu tố piece (`P1`, `P12`). Số bill trên
- * site CÓ THỂ kèm hậu tố piece (operator gõ `CHN4139065P1`), còn API của
- * dadaex chỉ nhận mã gốc ⇒ hai số khác nhau, đừng gộp.
- *
- * `normalizeBlNo` là key TRA CỨU; hàm này là key ĐÃ GHI LÊN SITE — chốt
- * trùng bill và bằng chứng "bill đã có trên site" phải dùng hàm này.
- *
- * Số bill trong ngành này luôn VIẾT HOA (mã API của dadaex cũng vậy) ⇒
- * chuẩn hoá input của operator cho khớp: số ghi lên site, key chốt trùng
- * bill và mã của API phải so sánh được với nhau.
- *
- * KHÔNG phải vì site tự upper-case mọi field — site chỉ upper-case giá trị
- * của DÒNG HÀNG; field header giữ nguyên chữ (xem `upper()` ở `payload.ts`).
- */
+// The bill number as written by the operator.
 export function billNoAsWritten(raw: string): string {
   return raw.trim().toUpperCase()
 }
