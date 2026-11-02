@@ -40,28 +40,34 @@ const PAY_WAY_OPTIONS: Record<'P' | 'C', { label: string; code: string }> = {
 /**
  * Map `payType` của API sang option của site.
  *
- * - `true` / `1` → 预付 (site lưu mã "P");
- * - `false` / `0` → 到付 (site lưu mã "C");
+ * - `true` / `1` → 到付 (site lưu mã "C");
+ * - `false` / `0` → 预付 (site lưu mã "P");
  * - còn lại (`null`/`undefined`, hoặc giá trị lạ như `2`, `-1`) → `undefined`:
  *   KHÔNG đoán, bỏ trống 付款方式. Lý do cụ thể do caller ghi vào note.
  */
 export function payWayOf(
   payType: boolean | number | null | undefined,
 ): { label: string; code: string } | undefined {
-  if (payType === true || payType === 1) return PAY_WAY_OPTIONS.P
-  if (payType === false || payType === 0) return PAY_WAY_OPTIONS.C
+  if (payType === true || payType === 1) return PAY_WAY_OPTIONS.C
+  if (payType === false || payType === 0) return PAY_WAY_OPTIONS.P
   return undefined
 }
 
 export type ContactRole = 0 | 1 | 2
 
+/**
+ * Vai trò của một bên — CHỈ khớp khi `type` đúng bằng vai trò.
+ *
+ * - `false` → 0 (发货人);
+ * - `true` → 1 (收货人);
+ * - `2` → 2 (通知人);
+ * - mọi giá trị khác (kể cả `0` / `1`) → `null` ⇒ KHÔNG khớp bên nào.
+ */
 export function contactRole(contact: ManifestContact): ContactRole | null {
   const t = contact.type
-  if (t === true) return 1
   if (t === false) return 0
+  if (t === true) return 1
   if (t === 2) return 2
-  if (t === 1) return 1
-  if (t === 0) return 0
   return null
 }
 
@@ -84,7 +90,7 @@ export function deriveCargoKind(goods: ManifestCargo): CargoKind {
  * Field BẮT BUỘC của site ở form đầu (FACT 1 của plan live-site-alignment).
  *
  * `START_PORT_COD`/`DISCHRG_PORT_COD` cũng BẮT BUỘC, và ở đường API chúng
- * được điền thẳng bởi `buildHeaderPayload` (mã cảng lấy từ `loadCode`/
+ * được điền thẳng bởi `buildManifestBody` (mã cảng lấy từ `loadCode`/
  * `uploadCode`) ⇒ cần nằm trong danh sách này để report báo "còn trống" khi
  * API không có mã cảng.
  *

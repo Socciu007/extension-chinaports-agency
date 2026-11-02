@@ -38,9 +38,11 @@ describe('contactRole', () => {
   it('2 = 通知人', () => {
     expect(contactRole({ type: 2 })).toBe(2)
   })
-  it('số 0/1 cũng hợp lệ', () => {
-    expect(contactRole({ type: 0 })).toBe(0)
-    expect(contactRole({ type: 1 })).toBe(1)
+  it('số 0 KHÔNG khớp 发货人 ⇒ null', () => {
+    expect(contactRole({ type: 0 })).toBeNull()
+  })
+  it('số 1 KHÔNG khớp 收货人 ⇒ null', () => {
+    expect(contactRole({ type: 1 })).toBeNull()
   })
   it('undefined thì null', () => {
     expect(contactRole({})).toBeNull()
@@ -66,20 +68,22 @@ describe('payWayOf', () => {
   /**
    * Cực tính 付款方式 là quyết định KHÓ ghi đè — đường API gửi MÃ của site
    * (`P`/`C`) chứ không phải nhãn tiếng Trung ⇒ phải chốt được ngay tại đây.
+   *
+   * CHIỀU ĐẢO: `true` ⇒ 到付 (mã "C"), `false` ⇒ 预付 (mã "P").
    */
-  it('true ⇒ 预付 (mã "P")', () => {
-    expect(payWayOf(true)?.code).toBe('P')
-    expect(payWayOf(true)?.label).toBe('预付')
+  it('true ⇒ 到付 (mã "C")', () => {
+    expect(payWayOf(true)?.code).toBe('C')
+    expect(payWayOf(true)?.label).toBe('到付')
   })
-  it('false ⇒ 到付 (mã "C")', () => {
-    expect(payWayOf(false)?.code).toBe('C')
-    expect(payWayOf(false)?.label).toBe('到付')
+  it('false ⇒ 预付 (mã "P")', () => {
+    expect(payWayOf(false)?.code).toBe('P')
+    expect(payWayOf(false)?.label).toBe('预付')
   })
-  it('1 ⇒ 预付 (mã "P")', () => {
-    expect(payWayOf(1)?.code).toBe('P')
+  it('1 ⇒ 到付 (mã "C")', () => {
+    expect(payWayOf(1)?.code).toBe('C')
   })
-  it('0 ⇒ 到付 (mã "C")', () => {
-    expect(payWayOf(0)?.code).toBe('C')
+  it('0 ⇒ 预付 (mã "P")', () => {
+    expect(payWayOf(0)?.code).toBe('P')
   })
   it('2 (giá trị lạ) ⇒ KHÔNG đoán, bỏ trống', () => {
     expect(payWayOf(2)).toBeUndefined()

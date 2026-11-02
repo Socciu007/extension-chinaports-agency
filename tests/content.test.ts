@@ -197,10 +197,20 @@ beforeEach(async () => {
   // `fetch` treo mãi ⇒ lần chạy đầu vẫn đang chạy ⇒ lần chạy thứ hai phải
   // bị chặn. Hết test thì mở chốt để chuỗi promise settle và timer timeout
   // trong `http.ts` được clear.
+  //
+  // Lần chạy đầu gọi NHIỀU request (dict của site được load trước khi fetch
+  // manifest) ⇒ chốt phải mở TẤT CẢ request đang treo, không chỉ cái mới
+  // nhất — nếu không thì lần chạy đầu treo mãi và chốt "đang chạy" không
+  // bao giờ được mở lại.
+  const pending: Array<(error: Error) => void> = []
   fetchMock = vi.fn(
     async () =>
       new Promise((_resolve, reject) => {
-        release = () => reject(new Error('test: fetch released'))
+        pending.push(reject)
+        release = () => {
+          const error = new Error('test: fetch released')
+          for (const rejectPending of pending.splice(0)) rejectPending(error)
+        }
       }),
   )
   vi.stubGlobal('fetch', fetchMock)
@@ -258,10 +268,18 @@ describe('content script — chống chạy chồng', () => {
       'A manifest run is already in progress — wait for it to finish.',
     )
 
-    // Chỉ MỘT lần gọi API: lần chạy thứ hai phải bị chặn TRƯỚC khi chạm
+    // Chỉ MỘT lần chạy: lần chạy thứ hai phải bị chặn TRƯỚC khi chạm
     // network — nếu không thì site bị tạo bill hai lần ⇒ dòng hàng TRÙNG.
+    //
+    // Lần chạy đầu gọi mạng NHIỀU lần (dict của site load trước khi fetch
+    // manifest) ⇒ điều cần chốt là lần chạy thứ hai KHÔNG gọi thêm request
+    // nào, không phải một con số tuyệt đối.
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled())
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    const callsAfterFirstRun = fetchMock.mock.calls.length
+    expect(callsAfterFirstRun).toBeGreaterThan(0)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(fetchMock).toHaveBeenCalledTimes(callsAfterFirstRun)
   })
 
   it('sau khi run đầu kết thúc thì một run MỚI chạy được', async () => {
@@ -270,7 +288,8 @@ describe('content script — chống chạy chồng', () => {
     expect(ret1).toBe(true)
 
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled())
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    const callsAfterFirstRun = fetchMock.mock.calls.length
 
     // Lần đầu kết thúc (fetch bị lỗi) ⇒ chốt được mở lại ⇒ lần chạy SAU đó
     // phải chạy lại bình thường.
@@ -282,7 +301,9 @@ describe('content script — chống chạy chồng', () => {
     const ret2 = listener?.({ type: MSG_CREATE_MANIFEST, blNo: BL_NO }, {}, send2)
     expect(ret2).toBe(true)
 
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() =>
+      expect(fetchMock.mock.calls.length).toBeGreaterThan(callsAfterFirstRun),
+    )
   })
 })
 

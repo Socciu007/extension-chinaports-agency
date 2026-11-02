@@ -18,7 +18,8 @@
  * report (dựng trong content script) là nơi phân biệt hai lý do.
  */
 import { postSiteJson, SiteApiError, type SiteFetchOptions } from './site-api'
-import { lowerKeys, toWireValue, type HeaderPayload } from './payload'
+import { lowerKeys, toWireValue } from './payload'
+import type { ManifestData } from './types'
 
 /** Endpoint tạo bill và lưu bill — path rỗng ⇒ URL kết thúc bằng `/`. */
 export const BILL_PATH = ''
@@ -52,6 +53,15 @@ const SITE_COMPUTED_KEYS = ['total_piece_num', 'total_gweight_ton', 'total_gvol_
  */
 const CARGO_LIST_KEY = 'cargo_list'
 
+/**
+ * Key của body mà KHÔNG được gửi kèm lúc tạo bill.
+ *
+ * `cdgoods` (dòng hàng) đi qua endpoint riêng `cargo/add/`; gửi kèm ở đây
+ * sẽ tạo TRÙNG dòng hàng. `cntr_list` (dòng container) chỉ đi kèm lúc LƯU
+ * bill.
+ */
+const ROW_KEYS = ['cdgoods', 'cntr_list']
+
 /** Gắn nhãn endpoint cho message lỗi (path rỗng ⇒ nhãn phải riêng). */
 function withLabel(options: SiteFetchOptions | undefined, label: string): SiteFetchOptions {
   return { ...options, label: options?.label ?? label }
@@ -60,7 +70,11 @@ function withLabel(options: SiteFetchOptions | undefined, label: string): SiteFe
 /**
  * Bước 1 — tạo bill (chưa lưu, chưa gắn hàng).
  *
- * Header do `buildHeaderPayload` dựng đã có sẵn `bill_no: ''` và
+ * Chỉ gửi 43 key HEADER của body: `cdgoods` và `cntr_list` bị xoá (dòng hàng
+ * đi qua `cargo/add/` riêng — gửi kèm sẽ tạo trùng dòng; dòng container đi
+ * kèm lúc lưu bill).
+ *
+ * Body do `buildManifestBody` dựng đã có sẵn `bill_no: ''` và
  * `is_all: '0'` ("0" = tạo bill) ⇒ không sửa gì thêm.
  *
  * `toWireValue` đổi mọi số KHÔNG parse được (`NaN`) thành `0` — cùng giá
@@ -68,9 +82,11 @@ function withLabel(options: SiteFetchOptions | undefined, label: string): SiteFe
  * **number** (site validate bằng regex số, KHÔNG nhận chuỗi rỗng).
  */
 export function createManifestBill(
-  header: HeaderPayload,
+  body: ManifestData,
   options?: SiteFetchOptions,
 ): Promise<unknown> {
+  const header: Record<string, unknown> = { ...body }
+  for (const key of ROW_KEYS) delete header[key]
   return postSiteJson(
     BILL_PATH,
     toWireValue(lowerKeys(header)),
@@ -110,27 +126,32 @@ export async function addCargoRow(
  *
  * KHÔNG dùng `is_all` = "2" (发送) — extension không bao giờ tự gửi tờ khai.
  *
- * Header được **copy** (`{...header}`) rồi sửa: hàm nhận header của caller,
- * mutate nó sẽ làm hỏng lần POST sau (tổng đã bị xoá, `is_all` đã đổi).
+ * Body được **copy** (`{...body}`) rồi sửa: hàm nhận body của caller, mutate
+ * nó sẽ làm hỏng lần POST sau (tổng đã bị xoá, `is_all` đã đổi).
+ *
+ * - `cdgoods` bị xoá — dòng hàng đã lưu riêng qua `cargo/add/`, gửi lại sẽ
+ *   đè mất dòng đó;
+ * - 3 key `total_*` bị xoá — site tự tính (xem `SITE_COMPUTED_KEYS`);
+ * - `cntr_list` lấy từ body, mỗi dòng mang `bill_no` do server gán.
  */
 export function saveManifestContainers(
-  header: HeaderPayload,
-  containers: Record<string, unknown>[],
+  body: ManifestData,
   billNo: string,
   options?: SiteFetchOptions,
 ): Promise<unknown> {
-  const body: Record<string, unknown> = { ...header }
-  for (const key of SITE_COMPUTED_KEYS) delete body[key]
-  delete body[CARGO_LIST_KEY]
+  const payload: Record<string, unknown> = { ...body }
+  delete payload.cdgoods
+  for (const key of SITE_COMPUTED_KEYS) delete payload[key]
+  delete payload[CARGO_LIST_KEY]
   // Mã bill do server gán — lấy NGUYÊN VEN (không uppercase, không trim).
-  body.bill_no = billNo
+  payload.bill_no = billNo
   // "1" = 暂存 (KHÔNG phải "2" = 发送).
-  body.is_all = '1'
-  body.cntr_list = containers
+  payload.is_all = '1'
+  payload.cntr_list = (body.cntr_list ?? []).map((row) => ({ ...row, bill_no: billNo }))
 
   return postSiteJson(
     BILL_PATH,
-    toWireValue(lowerKeys(body)),
+    toWireValue(lowerKeys(payload)),
     withLabel(options, BILL_LABEL),
   )
 }

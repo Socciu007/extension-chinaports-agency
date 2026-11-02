@@ -11,22 +11,26 @@
  *   bỏ hẳn key (site cần đủ key trong body);
  * - các field loại (付款方式, 货物标识, 货主箱标志) là **MÃ** của site
  *   (`P`/`C`, `S`/`D`/`R`/`G`, `Y`/`N`), KHÔNG phải nhãn tiếng Trung.
+ *
+ * `buildManifestBody` dựng BODY 45 key (43 key header + `cdgoods` +
+ * `cntr_list`) — đây chính là hình dạng `ManifestData`.
  */
 import {
   contactRole,
   deriveCargoKind,
   DANGER_FIELDS,
-  PARTY_CONTACT_CHANNELS,
   payWayOf,
   TEMP_FIELDS,
   type MappingContext,
 } from './field-meta'
-import { billNoAsWritten } from './api'
-import type { ManifestCargo, ManifestContact, ManifestContainer, ManifestData } from './types'
-
-export interface HeaderPayload {
-  [key: string]: string
-}
+import { billNoAsWritten } from './bill-no'
+import type {
+  ManifestApiData,
+  ManifestCargo,
+  ManifestContact,
+  ManifestContainer,
+  ManifestData,
+} from './types'
 
 /** Chuỗi đã trim; `null`/`undefined` ⇒ `""`. */
 function str(value: unknown): string {
@@ -140,60 +144,12 @@ export function toWireValue(value: unknown): unknown {
 }
 
 /**
- * Một bên trong body header (发货人 / 收货人 / 通知人).
+ * Contact theo vai trò (0 = 发货人, 1 = 收货人, 2 = 通知人).
  *
- * Mỗi field là TÊN FIELD (key) của site cho bên đó — KHÔNG phải giá trị.
- * Tên field có hậu tố `Key` để không nhầm với dữ liệu: `party.nameKey` là
- * `'e_shipper_nam'`, còn TÊN bên đó nằm ở `contact.master`.
- *
- * Kênh liên hệ (điện thoại / email / fax) KHÔNG nằm ở đây: chúng lấy theo
- * `role` từ `PARTY_CONTACT_CHANNELS` ⇒ không bao giờ lệch vị trí.
+ * Chỉ khớp khi `type` đúng bằng vai trò: `false` = 发货人, `true` = 收货人,
+ * `2` = 通知人 (xem `contactRole`).
  */
-interface Party {
-  role: 0 | 1 | 2
-  nameKey: string
-  addressKey: string
-  countryKey: string
-  /**
-   * Key AEO — TUỲ CHỌN vì site KHÔNG có field AEO cho 通知人.
-   *
-   * Form header của site chỉ có `SHIPPER_AEO` và `CONSIGNEE_AEO`; không hề
-   * có `NOTIFY_AEO` (FACT 1 của plan live-site-alignment) ⇒ bên 通知人 KHÔNG
-   * được có key AEO trong body.
-   */
-  aeoKey?: string
-}
-
-/**
- * Key của 3 bên trong body header.
- *
- * Vai trò lấy theo `type` của contact: 0 = 发货人, 1 = 收货人, 2 = 通知人.
- */
-const PARTIES: Party[] = [
-  {
-    role: 0,
-    nameKey: 'e_shipper_nam',
-    addressKey: 'shipper_add_str',
-    countryKey: 'shipper_country_cod',
-    aeoKey: 'shipper_aeo',
-  },
-  {
-    role: 1,
-    nameKey: 'e_consignee_nam',
-    addressKey: 'consignee_add_str',
-    countryKey: 'consignee_country_cod',
-    aeoKey: 'consignee_aeo',
-  },
-  {
-    role: 2,
-    nameKey: 'e_notify_nam',
-    addressKey: 'notify_add_str',
-    countryKey: 'notify_country_cod',
-  },
-]
-
-/** Contact theo vai trò (0 = 发货人, 1 = 收货人, 2 = 通知人). */
-function contactOf(data: ManifestData, role: 0 | 1 | 2): ManifestContact | undefined {
+function contactOf(data: ManifestApiData, role: 0 | 1 | 2): ManifestContact | undefined {
   const contacts = data.cabContacts ?? []
   return contacts.find((contact) => contactRole(contact) === role)
 }
@@ -210,13 +166,13 @@ function contactOf(data: ManifestData, role: 0 | 1 | 2): ManifestContact | undef
  * dạng viết HOA của số bill — xem `billNoAsWritten`); chỉ khi operator không
  * gõ gì thì mới lấy `blNo` của API.
  */
-function billNbrOf(data: ManifestData, operatorBlNo?: string): string {
+function billNbrOf(data: ManifestApiData, operatorBlNo?: string): string {
   const written = billNoAsWritten(operatorBlNo ?? '')
   return written !== '' ? written : billNoAsWritten(data.blNo ?? '')
 }
 
 /**
- * Dựng body tạo bill (header).
+ * Dựng BODY của site — 45 key (43 key header + `cdgoods` + `cntr_list`).
  *
  * Body ĐÚNG theo mẫu thật của site (key đã lowercase): đủ key, giá trị thiếu
  * ⇒ `""`, `is_all` = `"0"` (tạo bill — KHÔNG phải `"2"` = 发送).
@@ -224,11 +180,11 @@ function billNbrOf(data: ManifestData, operatorBlNo?: string): string {
  * `operatorBlNo` là số bill do OPERATOR gõ (giữ hậu tố piece) — xem
  * `billNbrOf`.
  */
-export function buildHeaderPayload(
-  data: ManifestData,
+export function buildManifestBody(
+  data: ManifestApiData,
   ctx: MappingContext,
   operatorBlNo?: string,
-): HeaderPayload {
+): ManifestData {
   // 交货地: chỉ điền khi KHÁC cảng卸货港.
   //
   // Trong dữ liệu thật, API copy `uploadCode` sang `aimPortCode` (cùng cảng
@@ -239,7 +195,16 @@ export function buildHeaderPayload(
   const uploadCode = str(data.uploadCode)
   const hasDestPort = aimCode !== '' && aimCode !== uploadCode
 
-  const payload: HeaderPayload = {
+  // 3 bên — khớp theo VAI TRÒ của contact (KHÔNG theo thứ tự trong mảng).
+  const shipper = contactOf(data, 0)
+  const consignee = contactOf(data, 1)
+  const notify = contactOf(data, 2)
+
+  return {
+    // Dòng hàng / dòng container — dòng hàng đi qua endpoint riêng
+    // (`cargo/add/`), dòng container đi kèm lúc lưu bill (`cntr_list`).
+    cdgoods: (data.cdgoods ?? []).map((goods) => buildCargoPayload(goods, '')),
+    cntr_list: (data.cdCon ?? []).map((container) => buildContainerPayload(container, ctx, '')),
     // Site tự gán số bill.
     bill_no: '',
     bill_nbr: billNbrOf(data, operatorBlNo),
@@ -248,7 +213,9 @@ export function buildHeaderPayload(
     trust_cod: str(ctx.findTrustCode(data.sea_order?.sea_order_bind?.supplyId)),
     // 付款方式: site lưu MÃ (预付='P', 到付='C'), KHÔNG phải nhãn tiếng Trung.
     pay_way_id: payWayOf(data.payType)?.code ?? '',
-    dr_type_str: str(ctx.findDrType(data.transportTerms ?? undefined)),
+    // 交货条款 — lấy THẲNG giá trị của API: dict `getDrType/` của site chỉ
+    // có nhãn tiếng Trung, KHÔNG có mã ⇒ tra dict là tra hụt.
+    dr_type_str: str(data.transportTerms),
     // 提单签发地 — API không có dữ liệu.
     sign_place_cod: '',
     sign_place_str: '',
@@ -264,44 +231,48 @@ export function buildHeaderPayload(
     dischrg_port_cod: uploadCode,
     dischrg_port_nam:
       str(data.uploadPortData?.name) || str(ctx.findPort(data.uploadCode ?? undefined)),
+    // 中转港 — API không có dữ liệu.
+    trans_port_cod: '',
+    trans_port_nam: '',
     dest_port_cod: hasDestPort ? aimCode : '',
     dest_port_nam: hasDestPort
       ? str(data.aimPortData?.name) || str(ctx.findPort(aimCode))
       : '',
-    // 中转港 — API không có dữ liệu.
-    trans_port_cod: '',
-    trans_port_nam: '',
-  }
-
-  for (const party of PARTIES) {
-    const contact = contactOf(data, party.role)
-    // Kênh liên hệ lấy theo VAI TRÒ (`role`), KHÔNG theo thứ tự trong mảng.
-    const channels = PARTY_CONTACT_CHANNELS[party.role]
-    payload[party.nameKey] = str(contact?.master)
-    payload[party.addressKey] = str(contact?.address)
-    payload[party.countryKey] = str(contact?.country)
-    payload[channels.phoneKey] = str(contact?.phone)
+    // 发货人
+    e_shipper_nam: str(shipper?.master),
+    shipper_add_str: str(shipper?.address),
+    shipper_country_cod: str(shipper?.country),
+    shipper_te_str: str(shipper?.phone),
     // API không có email/fax ⇒ luôn để trống.
-    payload[channels.emailKey] = ''
-    payload[channels.faxKey] = ''
+    shipper_em_str: '',
+    shipper_fx_str: '',
     // AEO: `firmCode` của API là mã đăng ký doanh nghiệp (USCI/TIN), KHÔNG
     // phải mã AEO ⇒ không điền AEO.
-    //
-    // Site KHÔNG có field AEO cho 通知人 ⇒ bên đó KHÔNG ghi key (đừng ghi
-    // key "undefined").
-    if (party.aeoKey !== undefined) payload[party.aeoKey] = ''
+    shipper_aeo: '',
+    // 收货人
+    e_consignee_nam: str(consignee?.master),
+    consignee_add_str: str(consignee?.address),
+    consignee_country_cod: str(consignee?.country),
+    consignee_te_str: str(consignee?.phone),
+    consignee_em_str: '',
+    consignee_fx_str: '',
+    consignee_aeo: '',
+    // 通知人 — site KHÔNG có field AEO cho bên này ⇒ KHÔNG ghi key AEO.
+    e_notify_nam: str(notify?.master),
+    notify_add_str: str(notify?.address),
+    notify_country_cod: str(notify?.country),
+    notify_te_str: str(notify?.phone),
+    notify_em_str: '',
+    notify_fx_str: '',
+    // Tổng số lượng / tổng trọng lượng / tổng thể tích: site tự tính.
+    total_piece_num: '',
+    total_gweight_ton: '',
+    total_gvol_num: '',
+    mandatory_check: '',
+    soft_check: '',
+    // "0" = tạo bill; "2" = 发送 (KHÔNG dùng ở đây).
+    is_all: '0',
   }
-
-  // Tổng số lượng / tổng trọng lượng / tổng thể tích: site tự tính.
-  payload.total_piece_num = ''
-  payload.total_gweight_ton = ''
-  payload.total_gvol_num = ''
-  payload.mandatory_check = ''
-  payload.soft_check = ''
-  // "0" = tạo bill; "2" = 发送 (KHÔNG dùng ở đây).
-  payload.is_all = '0'
-
-  return payload
 }
 
 /**

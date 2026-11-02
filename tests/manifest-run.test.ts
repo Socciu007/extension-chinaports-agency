@@ -5,15 +5,15 @@ import {
   DANGER_FIELDS,
   TEMP_FIELDS,
 } from '../src/core/field-meta'
-import type { ManifestCargo, ManifestData } from '../src/core/types'
+import type { ManifestApiData, ManifestCargo } from '../src/core/types'
 import fixture from './fixtures/manifest-ONEYSHAGT1569600.json'
 
 const SITE_BASE = 'https://site.test/api/booking/exportManifestDataMaintain'
 const API_BASE = 'https://api.test/manifest'
 const BL_NO = 'ONEYSHAGT1569600'
 
-/** Dữ liệu mẫu (phần `data` của envelope của API). */
-const manifest = fixture.data as ManifestData
+/** Dữ liệu mẫu (phần `data` của envelope của API) — hình dạng RAW. */
+const manifest = fixture.data as ManifestApiData
 
 /** Một lần gọi fetch đã bắt. */
 interface RecordedCall {
@@ -27,13 +27,17 @@ const okResponse = (body: unknown) =>
   ({ ok: true, status: 200, json: async () => body }) as unknown as Response
 
 /** Fetch giả của API manifest — luôn trả về envelope `{status, data}`. */
-function manifestFetch(envelope: unknown): {
+function manifestFetch(
+  envelope: unknown,
+  timeline: string[] = [],
+): {
   fetchImpl: typeof fetch
   calls: RecordedCall[]
 } {
   const calls: RecordedCall[] = []
   const fetchImpl = (async (url: string, init?: RequestInit) => {
     calls.push({ url: String(url), method: (init?.method ?? 'GET').toUpperCase() })
+    timeline.push(`api:${String(url)}`)
     return okResponse(envelope)
   }) as unknown as typeof fetch
   return { fetchImpl, calls }
@@ -57,12 +61,16 @@ interface SiteFakeOptions {
  * Fetch giả của site.
  *
  * - GET `getTrustCode/` ⇒ `{code:'MAEU', id:'2'}` (khớp `supplyId: 2` của fixture);
- * - GET `getDrType/` ⇒ `{code:'1', name:'FOB'}` (khớp `transportTerms: '1'`);
+ * - GET `getDrType/` ⇒ mảng CHUỖI thuần (`['FOB','CIF']`) — dict của site chỉ
+ *   có nhãn, KHÔNG có mã ⇒ body KHÔNG dùng dict này nữa;
  * - GET còn lại ⇒ rỗng (dict container và dict cảng cố tình để trống);
  * - POST `cargo/add/` ⇒ dòng hàng;
  * - POST `{base}/` ⇒ lần đầu là TẠO bill, sau đó là LƯU bill.
  */
-function siteFetch(options: SiteFakeOptions = {}): {
+function siteFetch(
+  options: SiteFakeOptions = {},
+  timeline: string[] = [],
+): {
   fetchImpl: typeof fetch
   calls: RecordedCall[]
 } {
@@ -79,6 +87,7 @@ function siteFetch(options: SiteFakeOptions = {}): {
         ? (JSON.parse(init.body) as Record<string, unknown>)
         : undefined
     calls.push({ url: target, method, body })
+    timeline.push(`site:${target}`)
 
     if (method === 'GET') {
       if (options.failGet && target.includes(options.failGet)) {
@@ -88,7 +97,7 @@ function siteFetch(options: SiteFakeOptions = {}): {
         return okResponse({ code: 2000, data: [{ code: 'MAEU', id: '2' }] })
       }
       if (target.includes('getDrType/')) {
-        return okResponse({ code: 2000, data: [{ code: '1', name: 'FOB' }] })
+        return okResponse({ code: 2000, data: ['FOB', 'CIF'] })
       }
       return okResponse({ code: 2000, data: [] })
     }
@@ -130,10 +139,14 @@ function harness(
 ): {
   api: { fetchImpl: typeof fetch; calls: RecordedCall[] }
   site: { fetchImpl: typeof fetch; calls: RecordedCall[] }
+  /** Thứ tự THỜI GIAN của mọi request (API + site). */
+  timeline: string[]
 } {
+  const timeline: string[] = []
   return {
-    api: manifestFetch(apiEnvelope),
-    site: siteFetch(siteOptions),
+    api: manifestFetch(apiEnvelope, timeline),
+    site: siteFetch(siteOptions, timeline),
+    timeline,
   }
 }
 
@@ -174,7 +187,7 @@ function cargoPostOf(h: ReturnType<typeof harness>): RecordedCall | undefined {
 }
 
 /** Fixture có 2 dòng hàng (dùng để kiểm tra lỗi giữa chừng). */
-function twoGoodsEnvelope(): { status: number; data: ManifestData } {
+function twoGoodsEnvelope(): { status: number; data: ManifestApiData } {
   const goods = manifest.cdgoods?.[0] as ManifestCargo
   return {
     status: 1,
@@ -209,7 +222,7 @@ function goodsOfKind(kind: 'D' | 'R' | 'G'): ManifestCargo {
 }
 
 /** Envelope chứa đúng một dòng hàng loại `kind`. */
-function kindEnvelope(kind: 'D' | 'R' | 'G'): { status: number; data: ManifestData } {
+function kindEnvelope(kind: 'D' | 'R' | 'G'): { status: number; data: ManifestApiData } {
   return { status: 1, data: { ...manifest, cdgoods: [goodsOfKind(kind)] } }
 }
 
@@ -220,7 +233,7 @@ function kindEnvelope(kind: 'D' | 'R' | 'G'): { status: number; data: ManifestDa
  * (电话 / EMAIL / 传真). Extension chỉ điền được 电话 ⇒ bên không có phone
  * thì cả ba kênh đều trống.
  */
-function partyWithoutPhoneEnvelope(): { status: number; data: ManifestData } {
+function partyWithoutPhoneEnvelope(): { status: number; data: ManifestApiData } {
   const contacts = (manifest.cabContacts ?? []).map((contact) =>
     contact.type === true ? { ...contact, phone: null } : contact,
   )
@@ -228,7 +241,7 @@ function partyWithoutPhoneEnvelope(): { status: number; data: ManifestData } {
 }
 
 /** Envelope có một dòng hàng mà số API trả về KHÔNG parse được. */
-function unparsableWeightEnvelope(): { status: number; data: ManifestData } {
+function unparsableWeightEnvelope(): { status: number; data: ManifestApiData } {
   const goods = manifest.cdgoods?.[0] as ManifestCargo
   return {
     status: 1,
@@ -247,6 +260,22 @@ function hasNullValue(value: unknown): boolean {
 }
 
 describe('runManifest — dựng payload và report', () => {
+  it('load dict của site TRƯỚC khi fetch manifest (body cần dict lúc dựng)', async () => {
+    const h = harness()
+    await run(h)
+
+    const apiIndex = h.timeline.findIndex((entry) => entry.startsWith('api:'))
+    // Chỉ tính các request GET tới site (dict) — các POST (tạo bill, gắn
+    // hàng, lưu bill) đi sau, đúng thứ tự của luồng.
+    const dictIndexes = h.timeline
+      .map((entry, index) => (entry.startsWith('site:') && entry.includes('/get') ? index : -1))
+      .filter((index) => index >= 0)
+    expect(apiIndex).toBeGreaterThan(-1)
+    expect(dictIndexes.length).toBeGreaterThan(0)
+    // Mọi request dict phải đi TRƯỚC request tới API manifest.
+    expect(Math.max(...dictIndexes)).toBeLessThan(apiIndex)
+  })
+
   it('dựng tên cảng tiếng Trung (KHÔNG dùng nameEn)', async () => {
     const h = harness()
     await run(h)
@@ -257,6 +286,33 @@ describe('runManifest — dựng payload và report', () => {
     expect(createPost?.body?.dischrg_port_nam).toBe('勿拉湾')
     expect(createPost?.body?.start_port_nam).not.toBe('SHANGHAI')
     expect(createPost?.body?.dischrg_port_nam).not.toBe('BELAWAN')
+  })
+
+  it('付款方式 đảo chiều: payType false ⇒ "P" (预付)', async () => {
+    const h = harness()
+    await run(h)
+
+    // Fixture: `payType: false` ⇒ 预付 ⇒ mã "P".
+    expect(postsOf(h)[0]?.body?.pay_way_id).toBe('P')
+  })
+
+  it('交货条款 lấy THẲNG giá trị của API (KHÔNG tra dict)', async () => {
+    const h = harness()
+    await run(h)
+
+    // Fixture: `transportTerms` = "1"; dict `getDrType/` của site chỉ có nhãn.
+    expect(postsOf(h)[0]?.body?.dr_type_str).toBe('1')
+  })
+
+  it('bước TẠO bill KHÔNG gửi kèm dòng hàng / dòng container', async () => {
+    const h = harness()
+    await run(h)
+
+    const createPost = postsOf(h)[0]
+    expect(createPost?.body).not.toHaveProperty('cdgoods')
+    expect(createPost?.body).not.toHaveProperty('cntr_list')
+    // Chỉ 43 key header.
+    expect(Object.keys(createPost?.body ?? {})).toHaveLength(43)
   })
 
   it('báo field BẮT BUỘC bị trống với `warn`', async () => {

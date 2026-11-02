@@ -8,7 +8,7 @@ import {
   saveManifestContainers,
   extractBillNo,
 } from '../src/core/site-write'
-import type { HeaderPayload } from '../src/core/payload'
+import type { ManifestData } from '../src/core/types'
 
 /** Phần `init` mà module đưa cho fetch — dùng để ghim shape của request. */
 interface CapturedInit {
@@ -75,14 +75,53 @@ function sentHeaders(init: HeadersInit | undefined): [string, string][] {
   return Object.entries((init ?? {}) as Record<string, string>)
 }
 
-/** Header mẫu — giống hình dạng `buildHeaderPayload` dựng ra. */
-function sampleHeader(): HeaderPayload {
+/**
+ * BODY mẫu — giống hình dạng `buildManifestBody` dựng ra (45 key).
+ *
+ * `cdgoods` / `cntr_list` là dòng hàng / dòng container; bước tạo bill KHÔNG
+ * được gửi chúng kèm.
+ */
+function sampleBody(): ManifestData {
   return {
+    cdgoods: [{ e_cargo_nam: 'SILENT DIESEL GENERATOR', piece_num: 114 }],
+    cntr_list: [{ cntr_no: 'X123' }],
     bill_no: '',
     bill_nbr: 'ONE-123',
-    e_shipper_nam: 'ACME TRADING',
+    e_ship_nam: 'ACME SHIP',
+    out_voyage_no: '0294S',
+    trust_cod: 'ONE',
+    pay_way_id: 'P',
+    dr_type_str: '1',
+    sign_place_cod: '',
+    sign_place_str: '',
     start_port_cod: 'CNSHA',
+    start_port_nam: '上海',
     dischrg_port_cod: 'IDBLW',
+    dischrg_port_nam: '勿拉湾',
+    trans_port_cod: '',
+    trans_port_nam: '',
+    dest_port_cod: '',
+    dest_port_nam: '',
+    e_shipper_nam: 'ACME TRADING',
+    shipper_add_str: 'SHANGHAI',
+    shipper_country_cod: 'CN',
+    shipper_te_str: '02152160262',
+    shipper_em_str: '',
+    shipper_fx_str: '',
+    shipper_aeo: '',
+    e_consignee_nam: 'ACME TRADING',
+    consignee_add_str: 'JAKARTA',
+    consignee_country_cod: 'ID',
+    consignee_te_str: '021-5452772',
+    consignee_em_str: '',
+    consignee_fx_str: '',
+    consignee_aeo: '',
+    e_notify_nam: 'ACME TRADING',
+    notify_add_str: 'JAKARTA',
+    notify_country_cod: 'ID',
+    notify_te_str: '021-5452772',
+    notify_em_str: '',
+    notify_fx_str: '',
     total_piece_num: '',
     total_gweight_ton: '',
     total_gvol_num: '',
@@ -282,23 +321,38 @@ describe('postSiteJson', () => {
 describe('createManifestBill', () => {
   it('POST tới endpoint bill với body là header', async () => {
     const { fetchImpl, calls } = captureFetch(() => okResponse({ code: 2000, data: {} }))
-    const header = sampleHeader()
+    const body = sampleBody()
 
-    await createManifestBill(header, { ...OPTIONS, fetchImpl })
+    await createManifestBill(body, { ...OPTIONS, fetchImpl })
 
     expect(calls[0]?.url).toBe('/api/test/')
     expect(calls[0]?.init.method).toBe('POST')
-    expect(JSON.parse(String(calls[0]?.init.body))).toEqual(header)
+    const sent = JSON.parse(String(calls[0]?.init.body)) as Record<string, unknown>
+    const { cdgoods: _cdgoods, cntr_list: _cntrList, ...header } = body
+    expect(sent).toEqual(header)
   })
 
-  it('không sửa header của caller', async () => {
+  it('KHÔNG gửi kèm `cdgoods` / `cntr_list` (dòng hàng đi qua cargo/add/)', async () => {
+    const { fetchImpl, calls } = captureFetch(() => okResponse({ code: 2000, data: {} }))
+
+    await createManifestBill(sampleBody(), { ...OPTIONS, fetchImpl })
+
+    const sent = JSON.parse(String(calls[0]?.init.body)) as Record<string, unknown>
+    expect(sent).not.toHaveProperty('cdgoods')
+    expect(sent).not.toHaveProperty('cntr_list')
+    expect(Object.keys(sent)).toHaveLength(43)
+  })
+
+  it('không sửa body của caller', async () => {
     const { fetchImpl } = captureFetch(() => okResponse({ code: 2000, data: {} }))
-    const header = sampleHeader()
+    const body = sampleBody()
 
-    await createManifestBill(header, { ...OPTIONS, fetchImpl })
+    await createManifestBill(body, { ...OPTIONS, fetchImpl })
 
-    expect(header.bill_no).toBe('')
-    expect(header.is_all).toBe('0')
+    expect(body.bill_no).toBe('')
+    expect(body.is_all).toBe('0')
+    expect(body.cdgoods).toHaveLength(1)
+    expect(body.cntr_list).toHaveLength(1)
   })
 })
 
@@ -369,59 +423,59 @@ describe('addCargoRow', () => {
 describe('saveManifestContainers', () => {
   it('body có bill_no (nguyên văn) + is_all "1" + cntr_list', async () => {
     const { fetchImpl, calls } = captureFetch(() => okResponse({ code: 2000, data: {} }))
-    const header = sampleHeader()
+    const body = sampleBody()
     const billNo = '  b-1  '
-    const containers = [{ cntr_no: 'X123', bill_no: 'b-1' }]
 
-    await saveManifestContainers(header, containers, billNo, { ...OPTIONS, fetchImpl })
+    await saveManifestContainers(body, billNo, { ...OPTIONS, fetchImpl })
 
-    const body = JSON.parse(String(calls[0]?.init.body)) as Record<string, unknown>
+    const sent = JSON.parse(String(calls[0]?.init.body)) as Record<string, unknown>
     expect(calls[0]?.url).toBe('/api/test/')
-    expect(body.bill_no).toBe(billNo)
-    expect(body.is_all).toBe('1')
-    expect(body.cntr_list).toEqual(containers)
+    expect(sent.bill_no).toBe(billNo)
+    expect(sent.is_all).toBe('1')
+    const list = sent.cntr_list as Record<string, unknown>[]
+    expect(list).toHaveLength(1)
+    expect(list[0]?.cntr_no).toBe('X123')
+    // Mỗi dòng container mang mã bill do server gán.
+    expect(list[0]?.bill_no).toBe(billNo)
   })
 
-  it('body KHÔNG có tổng do site tự tính, cũng không có cargo_list', async () => {
+  it('body KHÔNG có `cdgoods`, tổng do site tự tính, cũng không có cargo_list', async () => {
     const { fetchImpl, calls } = captureFetch(() => okResponse({ code: 2000, data: {} }))
-    const header = sampleHeader()
 
-    await saveManifestContainers(header, [], 'B-1', { ...OPTIONS, fetchImpl })
+    await saveManifestContainers(sampleBody(), 'B-1', { ...OPTIONS, fetchImpl })
 
-    const body = JSON.parse(String(calls[0]?.init.body)) as Record<string, unknown>
-    expect(body).not.toHaveProperty('total_piece_num')
-    expect(body).not.toHaveProperty('total_gweight_ton')
-    expect(body).not.toHaveProperty('total_gvol_num')
-    expect(body).not.toHaveProperty('cargo_list')
+    const sent = JSON.parse(String(calls[0]?.init.body)) as Record<string, unknown>
+    expect(sent).not.toHaveProperty('cdgoods')
+    expect(sent).not.toHaveProperty('total_piece_num')
+    expect(sent).not.toHaveProperty('total_gweight_ton')
+    expect(sent).not.toHaveProperty('total_gvol_num')
+    expect(sent).not.toHaveProperty('cargo_list')
   })
 
-  it('KHÔNG mutate header gốc', async () => {
+  it('KHÔNG mutate body gốc', async () => {
     const { fetchImpl } = captureFetch(() => okResponse({ code: 2000, data: {} }))
-    const header = sampleHeader()
+    const body = sampleBody()
 
-    await saveManifestContainers(header, [{ cntr_no: 'X123' }], 'B-1', { ...OPTIONS, fetchImpl })
+    await saveManifestContainers(body, 'B-1', { ...OPTIONS, fetchImpl })
 
-    expect(header.bill_no).toBe('')
-    expect(header.is_all).toBe('0')
-    expect(header).not.toHaveProperty('cntr_list')
-    // Tổng vẫn còn nguyên trong header gốc (chỉ bản copy bị xoá).
-    expect(header.total_piece_num).toBe('')
-    expect(header.total_gweight_ton).toBe('')
-    expect(header.total_gvol_num).toBe('')
+    expect(body.bill_no).toBe('')
+    expect(body.is_all).toBe('0')
+    expect(body.cntr_list[0]?.bill_no).toBeUndefined()
+    // Tổng vẫn còn nguyên trong body gốc (chỉ bản copy bị xoá).
+    expect(body.total_piece_num).toBe('')
+    expect(body.total_gweight_ton).toBe('')
+    expect(body.total_gvol_num).toBe('')
   })
 
   it('lowerKeys áp dụng ở tầng POST: key viết hoa thành chữ thường', async () => {
     const { fetchImpl, calls } = captureFetch(() => okResponse({ code: 2000, data: {} }))
+    const body = sampleBody()
+    body.cntr_list = [{ CNTR_NO: 'X123', cntr_size_cod: '40' }]
 
-    await saveManifestContainers(
-      sampleHeader(),
-      [{ CNTR_NO: 'X123', cntr_size_cod: '40' }],
-      'B-1',
-      { ...OPTIONS, fetchImpl },
-    )
+    await saveManifestContainers(body, 'B-1', { ...OPTIONS, fetchImpl })
 
-    const body = JSON.parse(String(calls[0]?.init.body)) as Record<string, unknown>
-    const list = body.cntr_list as Record<string, unknown>[]
+    const sent = JSON.parse(String(calls[0]?.init.body)) as Record<string, unknown>
+    const list = sent.cntr_list as Record<string, unknown>[]
     expect(list[0]?.cntr_no).toBe('X123')
     expect(list[0]).not.toHaveProperty('CNTR_NO')
   })

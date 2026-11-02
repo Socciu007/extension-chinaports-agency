@@ -1,5 +1,16 @@
 import { fetchJsonWithTimeout, HttpTimeoutError, type JsonResponse } from './http'
-import type { ManifestCargo, ManifestContainer, ManifestContact, ManifestData } from './types'
+import { billNoAsWritten, normalizeBlNo } from './bill-no'
+import type { MappingContext } from './field-meta'
+import { buildManifestBody } from './payload'
+import type {
+  ManifestApiData,
+  ManifestCargo,
+  ManifestContainer,
+  ManifestContact,
+  ManifestData,
+} from './types'
+
+export { normalizeBlNo, billNoAsWritten }
 
 export const DEFAULT_API_BASE = 'https://www.dadaex.cn/api/vn/insight/manifest'
 
@@ -41,21 +52,18 @@ export function describeApiError(error: unknown): string {
   return 'Something went wrong while fetching the manifest data.'
 }
 
-// Remove the piece suffix from the bill number.
-export function normalizeBlNo(raw: string): string {
-  return raw.trim().toUpperCase().replace(/(?<=\d)P\d+$/, '')
-}
-
-// The bill number as written by the operator.
-export function billNoAsWritten(raw: string): string {
-  return raw.trim().toUpperCase()
-}
-
+// Chuẩn hoá 3 mảng của API về mảng rỗng khi thiếu.
 function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : []
 }
 
-export function parseEnvelope(json: unknown): ManifestData {
+/**
+ * Bóc envelope của API ⇒ dữ liệu RAW (đã chuẩn hoá 3 mảng).
+ *
+ * Tách riêng khỏi `parseEnvelope` vì `fetchManifest` cần CẢ dữ liệu raw (để
+ * lấy `blNo` của API) LẪN body của site.
+ */
+function parseEnvelopeData(json: unknown): ManifestApiData {
   if (typeof json !== 'object' || json === null || Array.isArray(json)) {
     throw new ManifestApiError('bad_response', 'The API response is not a JSON object')
   }
@@ -78,7 +86,7 @@ export function parseEnvelope(json: unknown): ManifestData {
   if (Array.isArray(env.data)) {
     throw new ManifestApiError('bad_response', 'The API returned an array instead of a manifest object')
   }
-  const data = env.data as ManifestData
+  const data = env.data as ManifestApiData
   return {
     ...data,
     cabContacts: asArray<ManifestContact>(data.cabContacts),
@@ -87,16 +95,43 @@ export function parseEnvelope(json: unknown): ManifestData {
   }
 }
 
-export interface FetchManifestOptions {
+/** Tuỳ chọn của `parseEnvelope` — dict của site + số bill của operator. */
+export interface ParseEnvelopeOptions {
+  /** Dict của site — BẮT BUỘC (tên cảng, mã 承运人…). */
+  ctx: MappingContext
+  /** Số bill do operator gõ (giữ hậu tố piece) — ghi vào `bill_nbr`. */
+  operatorBlNo?: string
+}
+
+/**
+ * Bóc envelope của API ⇒ BODY của site (45 key).
+ *
+ * `ctx` (dict của site) phải được load TRƯỚC khi gọi hàm này: body cần tên
+ * cảng và mã 承运人 từ dict.
+ */
+export function parseEnvelope(json: unknown, options: ParseEnvelopeOptions): ManifestData {
+  const raw = parseEnvelopeData(json)
+  return buildManifestBody(raw, options.ctx, options.operatorBlNo)
+}
+
+export interface FetchManifestOptions extends ParseEnvelopeOptions {
   baseUrl?: string
   fetchImpl?: typeof fetch
   timeoutMs?: number
 }
 
+/** Kết quả của `fetchManifest` — body của site + số bill của API. */
+export interface FetchManifestResult {
+  /** Body của site (45 key) — sẽ gửi lên site. */
+  body: ManifestData
+  /** Số bill API trả về (để báo khi khác số bill ghi lên site). */
+  apiBillNo: string
+}
+
 export async function fetchManifest(
   blNo: string,
-  options: FetchManifestOptions = {},
-): Promise<ManifestData> {
+  options: FetchManifestOptions,
+): Promise<FetchManifestResult> {
   const base = options.baseUrl ?? DEFAULT_API_BASE
   const doFetch = options.fetchImpl ?? fetch
   const url = `${base}?blNo=${encodeURIComponent(normalizeBlNo(blNo))}`
@@ -116,5 +151,9 @@ export async function fetchManifest(
   if (res.invalidJson) {
     throw new ManifestApiError('bad_response', 'The manifest API response is not valid JSON')
   }
-  return parseEnvelope(res.data)
+  const raw = parseEnvelopeData(res.data)
+  return {
+    body: buildManifestBody(raw, options.ctx, options.operatorBlNo),
+    apiBillNo: billNoAsWritten(raw.blNo ?? ''),
+  }
 }

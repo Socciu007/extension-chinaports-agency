@@ -4,11 +4,15 @@
  *
  * Luồng:
  *
- *   1) `fetchManifest`      — lấy dữ liệu manifest từ API bên ngoài
- *   2) `loadSiteDicts`      — lấy dict của site (承运人, 交货条款, 箱型, 尺寸…)
- *   3) `build*Payload`      — dựng header + dòng hàng + dòng container
+ *   1) `loadSiteDicts`      — lấy dict của site (承运人, 箱型, 尺寸, cảng…)
+ *   2) `createMappingContext`— gói dict thành `ctx` cho việc tra cứu
+ *   3) `fetchManifest`      — lấy dữ liệu manifest từ API bên ngoài VÀ dựng
+ *                             luôn body của site (45 key)
  *   4) dựng report          — liệt kê field BỊ BỎ TRỐNG (kèm lý do)
  *   5) ghi lên site         — tạo bill → gắn dòng hàng → lưu bill + container
+ *
+ * Dict của site phải load TRƯỚC khi fetch: body cần tên cảng và mã 承运人
+ * từ dict ngay lúc dựng.
  *
  * `runManifest` KHÔNG BAO GIỜ reject: mọi lỗi được đổi thành
  * `ManifestRunResult` với `ok: false` + `message` tiếng Anh.
@@ -20,12 +24,11 @@
  * - mã bill do server gán lấy NGUYÊN VEN (không trim, không uppercase);
  * - tên cảng lấy từ `PortData.name` (tiếng Trung), KHÔNG dùng `nameEn`.
  */
-import { billNoAsWritten, describeApiError, fetchManifest, ManifestApiError } from './api'
+import { describeApiError, fetchManifest, ManifestApiError } from './api'
 import { HTTP_TIMEOUT_MS } from './http'
 import {
   BLANK_NOTES,
   DANGER_FIELDS,
-  deriveCargoKind,
   isBlankPayloadValue,
   isUnparsablePayloadValue,
   labelOf,
@@ -40,12 +43,6 @@ import {
   unparsableNumberNote,
   type CargoKind,
 } from './field-meta'
-import {
-  buildCargoPayload,
-  buildContainerPayload,
-  buildHeaderPayload,
-  type HeaderPayload,
-} from './payload'
 import type { FillScope, ReportItem } from './protocol'
 import {
   createMappingContext,
@@ -60,7 +57,7 @@ import {
   extractBillNo,
   saveManifestContainers,
 } from './site-write'
-import type { ManifestCargo, ManifestContainer } from './types'
+import type { ManifestCargoRow, ManifestContainerRow, ManifestData } from './types'
 
 /** Hạn mặc định của cả một lần chạy (4 phút). */
 export const DEFAULT_DEADLINE_MS = 240_000
@@ -257,18 +254,31 @@ function reportRow(spec: ReportRowSpec): ReportItem[] {
 }
 
 /**
- * Report của header — theo thứ tự key trong payload.
+ * Key của body KHÔNG phải field header — dòng hàng và dòng container.
+ *
+ * Report header chỉ liệt kê field HEADER ⇒ hai key này bị bỏ qua.
+ */
+const BODY_ROW_KEYS: ReadonlySet<string> = new Set(['cdgoods', 'cntr_list'])
+
+/**
+ * Report của header — theo thứ tự key trong body.
  *
  * Ngoài field BẮT BUỘC cố định, còn một quy tắc theo NHÓM: mỗi bên phải có
  * ÍT NHẤT một kênh liên hệ (电话 / EMAIL / 传真) — xem
  * `partiesWithoutContactChannel`.
  */
-function reportHeader(header: HeaderPayload): ReportItem[] {
+function reportHeader(body: ManifestData): ReportItem[] {
   // Tính MỘT LẦN: điều kiện là của BÊN, không phải của từng prop.
-  const withoutContact = partiesWithoutContactChannel(header)
+  const withoutContact = partiesWithoutContactChannel(body)
+  // Bỏ 2 key dòng hàng / dòng container — chúng không phải field header.
+  const values: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(body)) {
+    if (BODY_ROW_KEYS.has(key)) continue
+    values[key] = value
+  }
   return reportRow({
     scope: 'header',
-    values: header,
+    values,
     required: (prop) => REQUIRED_HEADER.includes(prop) || withoutContact.has(prop),
     note: (prop) =>
       withoutContact.has(prop)
@@ -277,13 +287,22 @@ function reportHeader(header: HeaderPayload): ReportItem[] {
   })
 }
 
+/**
+ * Loại hàng của một dòng — đọc từ `cargo_kind_cod` của CHÍNH dòng đó.
+ *
+ * Dòng hàng trong body đã mang mã loại của site (`S`/`D`/`R`/`G`) ⇒ không
+ * cần mảng loại hàng riêng.
+ */
+function cargoKindOf(row: Record<string, unknown>): CargoKind {
+  const code = row.cargo_kind_cod
+  if (code === 'D' || code === 'R' || code === 'G') return code
+  return 'S'
+}
+
 /** Report của các dòng hàng — theo thứ tự dòng, rồi thứ tự key trong dòng. */
-function reportCargo(
-  rows: Record<string, unknown>[],
-  kinds: CargoKind[],
-): ReportItem[] {
+function reportCargo(rows: ManifestCargoRow[]): ReportItem[] {
   return rows.flatMap((row, index) => {
-    const kind = kinds[index] ?? 'S'
+    const kind = cargoKindOf(row)
     return reportRow({
       scope: 'cargo',
       values: row,
@@ -295,7 +314,7 @@ function reportCargo(
 }
 
 /** Report của các dòng container — theo thứ tự dòng, rồi thứ tự key trong dòng. */
-function reportContainers(rows: Record<string, unknown>[]): ReportItem[] {
+function reportContainers(rows: ManifestContainerRow[]): ReportItem[] {
   return rows.flatMap((row, index) =>
     reportRow({
       scope: 'container',
@@ -413,44 +432,39 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
       })
     }
 
-    checkDeadline('fetching the manifest data')
-    const data = await fetchManifest(options.blNo, {
-      baseUrl: options.apiBase,
-      fetchImpl: options.fetchImpl,
-      timeoutMs: requestTimeout(),
-    })
-    steps.push('Fetched the manifest data from external API (eb)')
-
+    // The site dictionaries are loaded FIRST — the body needs the Chinese port
+    // names and the carrier code from the dictionaries at the moment it is built.
     checkDeadline('loading the site dictionaries')
     const dicts = await loadSiteDicts(siteOptions())
     const ctx = createMappingContext(dicts)
     steps.push('Loaded the site dictionaries')
 
-    const goods: ManifestCargo[] = data.cdgoods ?? []
-    const containers: ManifestContainer[] = data.cdCon ?? []
+    checkDeadline('fetching the manifest data')
+    const { body, apiBillNo } = await fetchManifest(options.blNo, {
+      baseUrl: options.apiBase,
+      fetchImpl: options.fetchImpl,
+      timeoutMs: requestTimeout(),
+      ctx,
+      operatorBlNo: options.blNo,
+    })
+    steps.push('Fetched the manifest data from external API (eb)')
 
-    const header = buildHeaderPayload(data, ctx, options.blNo)
     // The bill number as written by the operator.
-    const writtenBillNo = header.bill_nbr ?? ''
-    // The bill number from the external API also goes through `billNoAsWritten` (trim + upper-case) — same format as the bill number written on the site ⇒ comparison without mistaking because of different capitalization.
-    const apiBillNo = billNoAsWritten(data.blNo ?? '')
+    const writtenBillNo = body.bill_nbr
     if (writtenBillNo !== '' && writtenBillNo !== apiBillNo) {
       steps.push(billNoMismatchStep(writtenBillNo, apiBillNo))
     }
-    const cargoPayloads = goods.map((item) => buildCargoPayload(item, ''))
-    const containerPayloads = containers.map((item) => buildContainerPayload(item, ctx, ''))
-    const kinds = goods.map((item) => deriveCargoKind(item))
 
-    cargoRows = cargoPayloads.length
-    containerRows = containerPayloads.length
-    items.push(...reportHeader(header))
-    items.push(...reportCargo(cargoPayloads, kinds))
-    items.push(...reportContainers(containerPayloads))
+    cargoRows = body.cdgoods.length
+    containerRows = body.cntr_list.length
+    items.push(...reportHeader(body))
+    items.push(...reportCargo(body.cdgoods))
+    items.push(...reportContainers(body.cntr_list))
 
     // Create the manifest bill — the server assigns the internal bill number.
     checkDeadline('creating the manifest bill')
     createAttempted = true
-    const created = await createManifestBill(header, siteOptions())
+    const created = await createManifestBill(body, siteOptions())
     steps.push('Created the manifest bill on the site')
     // The site has confirmed the creation of the bill ⇒ the bill exists on the site, even if the step of reading the bill number below fails (special case).
     billCreated = true
@@ -467,7 +481,7 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
     steps.push('Read the bill number from the site')
 
     // Attach each cargo row to the bill.
-    for (const row of cargoPayloads) {
+    for (const row of body.cdgoods) {
       // Check the deadline before each row — many rows can exceed the deadline.
       checkDeadline('adding the cargo rows')
       await addCargoRow(row, assignedBillNo, siteOptions())
@@ -477,11 +491,7 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
 
     // Save the manifest bill with its containers (`is_all` = "1" = 暂存).
     checkDeadline('saving the manifest')
-    const containersWithBill = containerPayloads.map((row) => ({
-      ...row,
-      bill_no: assignedBillNo,
-    }))
-    await saveManifestContainers(header, containersWithBill, assignedBillNo, siteOptions())
+    await saveManifestContainers(body, assignedBillNo, siteOptions())
     steps.push('Saved the manifest with its containers')
     written = true
 
