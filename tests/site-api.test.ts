@@ -3,6 +3,7 @@ import {
   normalizeDictOptions,
   pickArray,
   createMappingContext,
+  fetchPackageCode,
   readCookieToken,
   loadSiteDicts,
   DEFAULT_SITE_API_BASE,
@@ -226,6 +227,84 @@ describe('loadSiteDicts', () => {
 
     expect(dicts.ports).toHaveLength(0)
     expect(dicts.trustCodes[0]?.code).toBe('MAEU')
+  })
+})
+
+describe('fetchPackageCode', () => {
+  const okResponse = (body: unknown) =>
+    ({ ok: true, status: 200, json: async () => body }) as unknown as Response
+
+  /** Fetch giả của site — ghi lại URL rồi trả về `body`. */
+  function fakeSite(body: unknown): { fetchImpl: typeof fetch; urls: string[] } {
+    const urls: string[] = []
+    const fetchImpl = (async (url: string) => {
+      urls.push(String(url))
+      return okResponse(body)
+    }) as unknown as typeof fetch
+    return { fetchImpl, urls }
+  }
+
+  const optionsOf = (fetchImpl: typeof fetch) => ({
+    baseUrl: '/api/test',
+    fetchImpl,
+    cookieString: 'token=abc',
+  })
+
+  it('trùng tên ⇒ trả mã, và URL đúng như site gửi', async () => {
+    const { fetchImpl, urls } = fakeSite({
+      code: 2000,
+      data: [{ PACKAGE_COD: 'PKGS', E_PACKAGE_NAM: 'PACKAGES' }],
+    })
+
+    const code = await fetchPackageCode('PACKAGES', optionsOf(fetchImpl))
+
+    expect(code).toBe('PKGS')
+    expect(urls[0]).toContain('kw=PACKAGES')
+    // Filter của site CÓ DẤU CÁCH Ở ĐẦU ⇒ `%20`.
+    expect(urls[0]).toContain('filter=%20E_PACKAGE_NAM')
+  })
+
+  it('chỉ có MỘT dòng ⇒ lấy mã của dòng đó (không cần trùng tên)', async () => {
+    const { fetchImpl } = fakeSite({
+      code: 2000,
+      data: [{ PACKAGE_COD: 'PKGS', E_PACKAGE_NAM: 'PACKAGES (木箱)' }],
+    })
+
+    const code = await fetchPackageCode('PACKAGES', optionsOf(fetchImpl))
+
+    expect(code).toBe('PKGS')
+  })
+
+  it('NHIỀU dòng mà không dòng nào trùng tên ⇒ undefined', async () => {
+    const { fetchImpl } = fakeSite({
+      code: 2000,
+      data: [
+        { PACKAGE_COD: 'PKG1', E_PACKAGE_NAM: 'WOODEN CASES' },
+        { PACKAGE_COD: 'PKG2', E_PACKAGE_NAM: 'STEEL DRUMS' },
+      ],
+    })
+
+    const code = await fetchPackageCode('PACKAGES', optionsOf(fetchImpl))
+
+    expect(code).toBeUndefined()
+  })
+
+  it('tên rỗng ⇒ KHÔNG gọi site', async () => {
+    const { fetchImpl, urls } = fakeSite({ code: 2000, data: [] })
+
+    const code = await fetchPackageCode('   ', optionsOf(fetchImpl))
+
+    expect(code).toBeUndefined()
+    expect(urls).toHaveLength(0)
+  })
+
+  it('site trả lỗi 4000 ⇒ promise reject', async () => {
+    const fakeFetch = (async () =>
+      okResponse({ code: 4000, data: null, msg: 'session' })) as unknown as typeof fetch
+
+    const err = await rejectionOf(fetchPackageCode('PACKAGES', optionsOf(fakeFetch)))
+    expect(err.kind).toBe('session')
+    expect(err.code).toBe(4000)
   })
 })
 

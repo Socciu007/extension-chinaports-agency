@@ -1,4 +1,4 @@
-import { postSiteJson, SiteApiError, type SiteFetchOptions, fetchSiteJson } from './site-api'
+import { postSiteJson, SiteApiError, type SiteFetchOptions } from './site-api'
 import { lowerKeys, toWireValue } from './payload'
 import type { ManifestData } from './types'
 
@@ -75,15 +75,6 @@ export async function addCargoRow(
     )
   }
 
-  // Add api site get package_cod
-  if (cargo.package_str) {
-    const res : any = await fetchSiteJson(
-      'getPackageCode/',
-      { ...options, label: 'the package code list' },
-      { kw: cargo?.package_str as string || '', filter: 'E_PACKAGE_NAM' },
-    ).catch(() => null)
-    if (res && res.data && Array.isArray(res.data)) cargo.package_cod = res.data[0]?.PACKAGE_COD || ''
-  }
   return postSiteJson(
     CARGO_PATH,
     toWireValue(lowerKeys({ ...cargo, bill_no: Number(billNo) })),

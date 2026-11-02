@@ -226,6 +226,20 @@ function assertSiteEnvelope(label: string, payload: unknown): void {
   throw new SiteApiError('site', `The site rejected the request to ${label} (code ${source.code}).`, source.code)
 }
 
+/**
+ * Build the query string of a site request.
+ *
+ * `encodeURIComponent` is used instead of `URLSearchParams` because the site's
+ * own frontend sends a space as `%20` — `URLSearchParams` would send `+`,
+ * which the site's filter parameter does not read the same way.
+ */
+function buildQuery(params: Record<string, string>): string {
+  const pairs = Object.entries(params).map(
+    ([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
+  )
+  return pairs.length === 0 ? '' : `?${pairs.join('&')}`
+}
+
 // Send a request to the site API and return the validated envelope.
 async function sendSiteJson(
   path: string,
@@ -251,7 +265,7 @@ async function sendSiteJson(
   headers.set('Accept', 'application/json')
   if (token) headers.set('Authorization', `JWT ${token}`)
 
-  const query = params ? `?${new URLSearchParams(params).toString()}` : ''
+  const query = params ? buildQuery(params) : ''
   const url = `${base}/${path}${query}`
 
   let res: JsonResponse
@@ -355,6 +369,44 @@ export async function loadSiteDicts(options: SiteFetchOptions = {}): Promise<Sit
     cntrTypes: normalizeDictOptions(pickArray(cntrRaw, ['cntr_type', 'cntrType', 'type'])),
     cntrSizes: normalizeDictOptions(pickArray(cntrRaw, ['cntr_size', 'cntrSize', 'size'])),
   }
+}
+
+/**
+ * The 包装代码 (PACKAGE_COD) of the site for a package NAME.
+ *
+ * The API gives the package NAME only (`goods.unit` → 包装类型/PACKAGE_STR);
+ * the site needs the CODE (包装代码/PACKAGE_COD) ⇒ the code has to be looked
+ * up in the site's own package dictionary.
+ *
+ * The URL is the one the site itself calls:
+ * `getPackageCode/?kw=<name>&filter=%20E_PACKAGE_NAM` — the `filter` value
+ * starts with a SPACE, that is what the site sends.
+ */
+export async function fetchPackageCode(
+  name: string,
+  options: SiteFetchOptions = {},
+): Promise<string | undefined> {
+  const kw = name.trim()
+  if (kw === '') return undefined
+
+  const raw = await fetchSiteJson(
+    'getPackageCode/',
+    { ...options, label: 'the package code list' },
+    { kw, filter: ' E_PACKAGE_NAM' },
+  )
+
+  const dict = normalizeDictOptions(raw, {
+    codeKeys: ['PACKAGE_COD'],
+    nameKeys: ['E_PACKAGE_NAM', 'PACKAGE_NAM'],
+  })
+
+  // Match the NAME first — the dictionary may return several rows because
+  // `kw` is a "contains" search.
+  const exact = dict.find((option) => option.name.trim().toUpperCase() === kw.toUpperCase())
+  if (exact) return exact.code
+  // Only one row ⇒ take it (the site already filtered by `kw`).
+  if (dict.length === 1) return dict[0]?.code
+  return undefined
 }
 
 export function createMappingContext(dicts: SiteDicts): MappingContext {

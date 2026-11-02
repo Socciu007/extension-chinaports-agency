@@ -55,12 +55,22 @@ interface SiteFakeOptions {
   failGet?: string
   /** Site từ chối yêu cầu tạo bill (code 5000). */
   failCreate?: boolean
+  /** Mã 包装代码 mà site trả về cho dict `getPackageCode/`. */
+  packageCode?: string
+  /**
+   * Trả `bill_no` dạNG MẢNG thay vì chuỗi.
+   *
+   * `extractBillNo` của site chỉ nhận mảng ⇒ muốn POST được dòng hàng thì
+   * fake phải trả mảng. Mặc định vẫn là chuỗi (giữ nguyên hành vi cũ).
+   */
+  billNoAsArray?: boolean
 }
 
 /**
  * Fetch giả của site.
  *
  * - GET `getTrustCode/` ⇒ `{code:'MAEU', id:'2'}` (khớp `supplyId: 2` của fixture);
+ * - GET `getPackageCode/` ⇒ mã 包装代码 (rỗng nếu không đặt `packageCode`);
  * - GET còn lại ⇒ rỗng (dict container và dict cảng cố tình để trống);
  * - POST `cargo/add/` ⇒ dòng hàng;
  * - POST `{base}/` ⇒ lần đầu là TẠO bill, sau đó là LƯU bill.
@@ -94,6 +104,15 @@ function siteFetch(
       if (target.includes('getTrustCode/')) {
         return okResponse({ code: 2000, data: [{ code: 'MAEU', id: '2' }] })
       }
+      if (target.includes('getPackageCode/')) {
+        return okResponse({
+          code: 2000,
+          data:
+            options.packageCode === undefined
+              ? []
+              : [{ PACKAGE_COD: options.packageCode, E_PACKAGE_NAM: 'PACKAGES' }],
+        })
+      }
       return okResponse({ code: 2000, data: [] })
     }
 
@@ -118,7 +137,10 @@ function siteFetch(
       }
       return okResponse({
         code: 2000,
-        data: billNo === null ? {} : { bill_no: billNo },
+        data:
+          billNo === null
+            ? {}
+            : { bill_no: options.billNoAsArray ? [billNo] : billNo },
       })
     }
     return okResponse({ code: 2000, data: {} })
@@ -262,13 +284,76 @@ describe('runManifest — dựng payload và report', () => {
     const apiIndex = h.timeline.findIndex((entry) => entry.startsWith('api:'))
     // Chỉ tính các request GET tới site (dict) — các POST (tạo bill, gắn
     // hàng, lưu bill) đi sau, đúng thứ tự của luồng.
+    // `getPackageCode/` KHÔNG tính vào đây — nó cần TÊN bao bị của API nên
+    // phải đi SAU (test kế bên kiểm tra thứ tự đó).
     const dictIndexes = h.timeline
-      .map((entry, index) => (entry.startsWith('site:') && entry.includes('/get') ? index : -1))
+      .map((entry, index) =>
+        entry.startsWith('site:') && entry.includes('/get') && !entry.includes('getPackageCode/')
+          ? index
+          : -1,
+      )
       .filter((index) => index >= 0)
     expect(apiIndex).toBeGreaterThan(-1)
     expect(dictIndexes.length).toBeGreaterThan(0)
     // Mọi request dict phải đi TRƯỚC request tới API manifest.
     expect(Math.max(...dictIndexes)).toBeLessThan(apiIndex)
+  })
+
+  it('tra MÃ 包装代码 đi SAU API (cần tên bao bị) và TRƯỚC POST đầu tiên', async () => {
+    const h = harness()
+    await run(h)
+
+    const apiIndex = h.timeline.findIndex((entry) => entry.startsWith('api:'))
+    const packageIndex = h.timeline.findIndex((entry) => entry.includes('getPackageCode/'))
+    // POST đầu tiên là bước TẠO bill ⇒ URL của nó là `${SITE_BASE}/`.
+    const firstPostIndex = h.timeline.findIndex((entry) => entry === `site:${SITE_BASE}/`)
+
+    expect(apiIndex).toBeGreaterThan(-1)
+    expect(packageIndex).toBeGreaterThan(apiIndex)
+    expect(firstPostIndex).toBeGreaterThan(-1)
+    expect(packageIndex).toBeLessThan(firstPostIndex)
+  })
+
+  it('tra được MÃ 包装代码 ⇒ điền vào dòng hàng, KHÔNG báo field trống', async () => {
+    const h = harness(undefined, { packageCode: 'PKGS', billNoAsArray: true })
+    const result = await run(h)
+
+    // Mã đi kèm dòng hàng gửi lên site.
+    expect(cargoPostOf(h)?.body?.package_cod).toBe('PKGS')
+    // Đã điền ⇒ KHÔNG còn báo là field BẮT BUỘC bị trống.
+    const item = result.items.find(
+      (entry) => entry.scope === 'cargo' && entry.prop === 'PACKAGE_COD',
+    )
+    expect(item).toBeUndefined()
+  })
+
+  it('dict KHÔNG trả mã ⇒ PACKAGE_COD vẫn trống và vẫn báo cho operator', async () => {
+    const h = harness(undefined, { billNoAsArray: true })
+    const result = await run(h)
+
+    const item = result.items.find(
+      (entry) => entry.scope === 'cargo' && entry.prop === 'PACKAGE_COD',
+    )
+    expect(item).toBeDefined()
+    expect(item?.required).toBe(true)
+    expect(item?.status).toBe('warn')
+    // Dòng hàng gửi lên site vẫn mang mã rỗng.
+    expect(cargoPostOf(h)?.body?.package_cod).toBe('')
+  })
+
+  it('tra MÃ 包装代码 MỘT LẦN cho mỗi tên bao bì (2 dòng cùng tên ⇒ 1 request)', async () => {
+    const h = harness(twoGoodsEnvelope(), { packageCode: 'PKGS', billNoAsArray: true })
+    await run(h)
+
+    const packageCalls = h.site.calls.filter((call) => call.url.includes('getPackageCode/'))
+    expect(packageCalls).toHaveLength(1)
+    expect(packageCalls[0]?.url).toContain('kw=PACKAGES')
+    // Cả hai dòng hàng đều mang mã.
+    const cargoPosts = h.site.calls.filter((call) => call.url.includes('cargo/add/'))
+    expect(cargoPosts).toHaveLength(2)
+    for (const post of cargoPosts) {
+      expect(post.body?.package_cod).toBe('PKGS')
+    }
   })
 
   it('dựng tên cảng tiếng Anh (`nameEn`)', async () => {

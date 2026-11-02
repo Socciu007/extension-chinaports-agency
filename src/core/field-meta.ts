@@ -387,7 +387,7 @@ export const BLANK_NOTES: Record<string, string> = {
   DANG_EMS_NO: 'The API does not provide the EMS number — fill this in by hand on the site.',
   DANG_MFAG_NO: 'The API does not provide the MFAG number — fill this in by hand on the site.',
   PACKAGE_COD:
-    'The API does not provide the package type code — fill this in by hand on the site.',
+    'The site\'s package dictionary did not return a code for this package type — fill this in by hand on the site.',
   PACKAGE_STR:
     'The API does not provide the package type — fill this in by hand on the site.',
   CNTR_SIZE_COD:

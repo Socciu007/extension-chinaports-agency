@@ -47,6 +47,7 @@ import type { FillScope, ReportItem } from './protocol'
 import {
   createMappingContext,
   describeSiteError,
+  fetchPackageCode,
   loadSiteDicts,
   SiteApiError,
   type SiteFetchOptions,
@@ -369,6 +370,41 @@ function describeError(error: unknown): string {
   return 'Something went wrong while running the manifest.'
 }
 
+/**
+ * Fill 包装代码 (PACKAGE_COD) for every cargo row.
+ *
+ * Each package NAME is looked up ONCE — rows sharing a name share the result.
+ *
+ * A failed lookup (site error / network error) leaves the field blank ⇒ the
+ * report tells the operator to fill it in by hand. One broken dictionary must
+ * NOT break the whole run.
+ */
+async function fillPackageCodes(body: ManifestData, options: SiteFetchOptions): Promise<void> {
+  const names = new Set<string>()
+  for (const row of body.cdgoods) {
+    const name = typeof row.package_str === 'string' ? row.package_str.trim() : ''
+    if (name !== '') names.add(name)
+  }
+  if (names.size === 0) return
+
+  const codes = new Map<string, string>()
+  for (const name of names) {
+    try {
+      const code = await fetchPackageCode(name, options)
+      if (code !== undefined && code !== '') codes.set(name, code)
+    } catch {
+      // Leave the field blank — the report tells the operator to fill it in.
+    }
+  }
+
+  for (const row of body.cdgoods) {
+    const name = typeof row.package_str === 'string' ? row.package_str.trim() : ''
+    if (name === '') continue
+    const code = codes.get(name)
+    if (code !== undefined) row.package_cod = code
+  }
+}
+
 // Run the entire manifest flow.
 export async function runManifest(options: ManifestRunOptions): Promise<ManifestRunResult> {
   const steps: string[] = []
@@ -454,6 +490,14 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
     if (writtenBillNo !== '' && writtenBillNo !== apiBillNo) {
       steps.push(billNoMismatchStep(writtenBillNo, apiBillNo))
     }
+
+    // 包装代码 (PACKAGE_COD): the API gives the package NAME only — the site
+    // needs the CODE ⇒ look it up in the site's package dictionary, once per
+    // distinct package name. Done BEFORE the report so that a filled code is
+    // not reported as a blank required field.
+    checkDeadline('looking up the package codes')
+    await fillPackageCodes(body, siteOptions())
+    steps.push('Looked up the package codes on the site')
 
     cargoRows = body.cdgoods.length
     containerRows = body.cntr_list.length
