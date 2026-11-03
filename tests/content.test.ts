@@ -148,8 +148,9 @@ function fakeFetch(options: { failSave?: boolean } = {}): {
     }
 
     // Bước TẠO bill — mã bill do server gán.
+    // `extractBillNo` của site chỉ nhận MẢNG ⇒ fake cũng trả mảng.
     createCount += 1
-    return jsonResponse({ code: 2000, data: { bill_no: `BILL-${createCount}` } })
+    return jsonResponse({ code: 2000, data: { bill_no: [`BILL-${createCount}`] } })
   }) as unknown as typeof fetch
 
   return { fetchImpl, calls }

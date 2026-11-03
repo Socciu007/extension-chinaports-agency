@@ -57,13 +57,6 @@ interface SiteFakeOptions {
   failCreate?: boolean
   /** Mã 包装代码 mà site trả về cho dict `getPackageCode/`. */
   packageCode?: string
-  /**
-   * Trả `bill_no` dạNG MẢNG thay vì chuỗi.
-   *
-   * `extractBillNo` của site chỉ nhận mảng ⇒ muốn POST được dòng hàng thì
-   * fake phải trả mảng. Mặc định vẫn là chuỗi (giữ nguyên hành vi cũ).
-   */
-  billNoAsArray?: boolean
 }
 
 /**
@@ -137,10 +130,8 @@ function siteFetch(
       }
       return okResponse({
         code: 2000,
-        data:
-          billNo === null
-            ? {}
-            : { bill_no: options.billNoAsArray ? [billNo] : billNo },
+        // `extractBillNo` của site chỉ nhận MẢNG ⇒ fake cũng trả mảng.
+        data: billNo === null ? {} : { bill_no: [billNo] },
       })
     }
     return okResponse({ code: 2000, data: {} })
@@ -315,7 +306,7 @@ describe('runManifest — dựng payload và report', () => {
   })
 
   it('tra được MÃ 包装代码 ⇒ điền vào dòng hàng, KHÔNG báo field trống', async () => {
-    const h = harness(undefined, { packageCode: 'PKGS', billNoAsArray: true })
+    const h = harness(undefined, { packageCode: 'PKGS' })
     const result = await run(h)
 
     // Mã đi kèm dòng hàng gửi lên site.
@@ -328,7 +319,7 @@ describe('runManifest — dựng payload và report', () => {
   })
 
   it('dict KHÔNG trả mã ⇒ PACKAGE_COD vẫn trống và vẫn báo cho operator', async () => {
-    const h = harness(undefined, { billNoAsArray: true })
+    const h = harness(undefined, {})
     const result = await run(h)
 
     const item = result.items.find(
@@ -342,7 +333,7 @@ describe('runManifest — dựng payload và report', () => {
   })
 
   it('tra MÃ 包装代码 MỘT LẦN cho mỗi tên bao bì (2 dòng cùng tên ⇒ 1 request)', async () => {
-    const h = harness(twoGoodsEnvelope(), { packageCode: 'PKGS', billNoAsArray: true })
+    const h = harness(twoGoodsEnvelope(), { packageCode: 'PKGS' })
     await run(h)
 
     const packageCalls = h.site.calls.filter((call) => call.url.includes('getPackageCode/'))
