@@ -166,9 +166,6 @@ function evidenceText(entry: BillEvidence): string {
 
 const items = computed<ReportItem[]>(() => result.value?.items ?? [])
 
-/** Các bước của lần chạy — để operator thấy run tới đâu. */
-const steps = computed<string[]>(() => result.value?.steps ?? [])
-
 /** Số dòng hàng / container mà lần chạy báo. */
 const cargoRowCount = computed(() => result.value?.cargoRows ?? 0)
 const containerRowCount = computed(() => result.value?.containerRows ?? 0)
@@ -245,6 +242,11 @@ async function run(): Promise<void> {
     // Kết quả cũ chỉ bị thay khi kết quả MỚI đã về ⇒ bằng chứng "bill đã có
     // trên site" không bị xoá vô tình giữa chừng.
     result.value = res
+    // Log the steps of the run — FOR READING LATER ONLY, never shown in the
+    // popup: the popup reports only the final outcome (error / warning /
+    // success). `steps` stays in the result, so a failed run can still be
+    // traced from the console.
+    console.info('[manifest-autofill] manifest run steps', res.steps)
     // Số bill ĐÃ GHI LÊN SITE của lần chạy này (giữ hậu tố piece) — dùng làm
     // KEY của bằng chứng (đúng cách content script chốt) và để biết report
     // đang hiện thuộc về số bill nào (`resultInputBlNo`).
@@ -545,10 +547,6 @@ onUnmounted(() => {
         </li>
       </ul>
     </div>
-
-    <ol v-if="steps.length" class="steps">
-      <li v-for="(step, index) in steps" :key="index">{{ step }}</li>
-    </ol>
 
     <div
       v-if="result && (result.billCreated || result.written || result.billNo)"

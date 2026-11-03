@@ -394,7 +394,7 @@ describe('popup — lỗi vận chuyển', () => {
 })
 
 describe('popup — hiện kết quả của lần chạy', () => {
-  it('kết quả thành công ⇒ hiện các bước, số bill và report field bị trống', async () => {
+  it('kết quả thành công ⇒ hiện số bill + report field bị trống, KHÔNG hiện các bước', async () => {
     // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
     store.createOnSite = true
     sendMessage = async () =>
@@ -431,11 +431,12 @@ describe('popup — hiện kết quả của lần chạy', () => {
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
     await clickCreate(wrapper)
 
-    // Các bước của lần chạy — operator thấy run tới đâu.
-    const steps = wrapper.find('.steps')
-    expect(steps.exists()).toBe(true)
-    expect(steps.text()).toContain('Fetched the manifest data')
-    expect(steps.text()).toContain('Created the manifest bill on the site')
+    // The steps of the run are NOT shown in the popup — the popup reports
+    // only the final outcome (error / warning / success). The steps stay in
+    // the result so they can be read back from the console.
+    expect(wrapper.find('.steps').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Fetched the manifest data')
+    expect(wrapper.text()).not.toContain('Created the manifest bill on the site')
 
     // Số bill do site gán.
     expect(wrapper.text()).toContain('Bill number: BILL-1')
@@ -451,6 +452,29 @@ describe('popup — hiện kết quả của lần chạy', () => {
     expect(summary).toContain('cargo: 1')
     expect(summary).toContain('containers: 1')
     expect(summary).toContain('blank fields: 1 required, 1 optional')
+  })
+
+  it('các bước KHÔNG hiện trên popup ⇒ nhưng vẫn được log ra console', async () => {
+    // The step list is gone from the popup, so the steps must NOT vanish from
+    // the product: they stay in the result and are logged to the console.
+    // Without this test, deleting the log line would silently drop them
+    // everywhere — the popup shows them and the console does not.
+    store.createOnSite = true
+    const steps = ['Fetched the manifest data', 'Created the manifest bill on the site']
+    sendMessage = async () => successResult({ steps })
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+
+    try {
+      const wrapper = mount(PopupApp)
+      await flushPromises()
+
+      await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+      await clickCreate(wrapper)
+
+      expect(infoSpy).toHaveBeenCalledWith('[manifest-autofill] manifest run steps', steps)
+    } finally {
+      infoSpy.mockRestore()
+    }
   })
 
   it('ghi thành công ⇒ hiện cảnh báo ghi hai lần', async () => {

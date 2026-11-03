@@ -148,18 +148,6 @@ button.busy {
   margin: 0;
 }
 
-/* Các bước của lần chạy — để operator thấy run tới đâu. */
-.steps {
-  margin: 8px 0 0;
-  padding-left: 20px;
-  color: #57606a;
-  font-size: 12px;
-}
-
-.steps li {
-  overflow-wrap: anywhere;
-}
-
 /* Trạng thái bill trên site. */
 .bill-status {
   margin-top: 8px;
