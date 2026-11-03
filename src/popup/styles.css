@@ -79,7 +79,7 @@ button.busy {
   trông như một gợi ý thường.
 
   Cỡ chữ 12px (thay vì 11px của `.hint`): cảnh báo không được NHỎ HƠN nội
-  dung mà nó cảnh báo — bảng report bên dưới cũng 12px.
+  dung mà nó cảnh báo.
 */
 .stale-result {
   padding: 6px 8px;
@@ -173,51 +173,7 @@ button.busy {
   font-weight: 600;
 }
 
-/*
-  Bằng chứng "bill đã có trên site" — dòng đứng riêng, SỐNG LÂU.
-  Màu cảnh báo (không phải màu trạng thái) vì đây là điều operator phải
-  xử lý bằng tay.
-*/
-.bill-created {
-  margin: 8px 0 0;
-  padding: 8px;
-  border-radius: 6px;
-  background: #fff8c5;
-  color: #633c01;
-  font-weight: 600;
-}
-
-/* Mỗi bill một dòng — không dính vào nhau. */
-.bill-created-line + .bill-created-line {
-  margin-top: 4px;
-}
-
 .summary {
   margin-top: 8px;
   color: #57606a;
-}
-
-table {
-  width: 100%;
-  margin-top: 8px;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-
-th,
-td {
-  padding: 4px 6px;
-  border-bottom: 1px solid #eaeef2;
-  text-align: left;
-  vertical-align: top;
-}
-
-tr.required td {
-  background: #fff8c5;
-}
-
-td.note {
-  color: #57606a;
-  max-width: 150px;
-  overflow-wrap: anywhere;
 }

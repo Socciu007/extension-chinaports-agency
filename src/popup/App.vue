@@ -58,18 +58,6 @@ const settingsLoaded = ref(false)
 const savedCreateOnSite = ref(false)
 /** Đang lưu setting create-on-site — khoá control để không có 2 lần ghi chồng nhau. */
 const saving = ref(false)
-/**
- * Số bill mà site ĐÃ có manifest — bằng chứng phải SỐNG LÂU.
- *
- * Mỗi entry là số bill; `true` = manifest đó còn DỞ (site đã tạo bill nhưng
- * lưu hỏng, hoặc còn field BẮT BUỘC bị trống) ⇒ operator phải điền tay.
- *
- * KHÔNG bao giờ xoá vì một lần chạy khác: BL-A đang dở thì BL-B chạy sau
- * không được làm mất nhắc nhở về BL-A. Key là số bill ĐÃ GHI LÊN SITE (giữ
- * hậu tố piece) — cùng một số bill thì cùng một entry (giống hệt cách
- * content script chốt).
- */
-const manifestBills = ref<Record<string, boolean>>({})
 
 /**
  * Số bill mà lần chạy CUỐI tạo ra report đang hiện.
@@ -117,53 +105,6 @@ const staleMessage = computed(() => {
   return 'Showing the previous result — it belongs to a different bill of lading number.'
 })
 
-/** Một dòng bằng chứng — một số bill đã có manifest trên site. */
-interface BillEvidence {
-  /** số bill (đã chuẩn hoá) */
-  blNo: string
-  /** manifest đó còn DỞ ⇒ operator phải điền tay trên site */
-  needsFinishing: boolean
-}
-
-/** Các dòng bằng chứng — sắp xếp theo số bill cho ổn định. */
-const billEvidence = computed<BillEvidence[]>(() =>
-  Object.entries(manifestBills.value)
-    .map(([billKey, needsFinishing]) => ({ blNo: billKey, needsFinishing }))
-    .sort((a, b) => a.blNo.localeCompare(b.blNo)),
-)
-
-/**
- * Câu đầy đủ của một dòng bằng chứng.
- *
- * Câu được dựng ở đây (không ghép trong template) để dấu chấm câu luôn có
- * mặt — kể cả khi không kèm câu "điền tay".
- *
- * Câu "Do not create another manifest for this bill number." LUÔN có mặt:
- * nó đang nằm ở `.bill-status` (khối bị lần chạy sau xoá mất) ⇒ chỉ dựa
- * vào đó thì sau một lần chạy bất kỳ, operator mất hẳn lời nhắc. Dùng
- * ĐÚNG câu của `.double-write` để hai nơi nói như nhau.
- *
- * Câu này KHÔNG nói "chạy lại sẽ tạo manifest thứ hai": trong CHÍNH tab đó
- * thì content script đã chặn rồi ("the extension does not create a second
- * manifest for the same bill") ⇒ nói vậy là nói sai, và còn trái với điều
- * operator vừa được báo. Cảnh báo đúng là "đừng tạo manifest khác cho số
- * bill này" — đúng trong tab này lẫn tab khác.
- *
- * Khi manifest ĐÃ lưu thành nháp (暂存) mà không còn field bắt buộc bị trống
- * thì dòng này vẫn phải nói rõ operator phải TỰ submit trên site: extension
- * chỉ lưu nháp, KHÔNG BAO GIỜ submit, và câu "saved as a draft (暂存)" chỉ
- * nằm ở `.bill-status` — khối bị lần chạy sau xoá mất ⇒ không nói ở đây thì
- * sau một lần chạy bất kỳ operator tưởng đã xong.
- */
-function evidenceText(entry: BillEvidence): string {
-  const base = `A manifest bill was already created on the site for ${entry.blNo}.`
-  const duplicate = 'Do not create another manifest for this bill number.'
-  if (!entry.needsFinishing) {
-    return `${base} The manifest was saved as a draft (暂存) and still has to be submitted on the site. ${duplicate}`
-  }
-  return `${base} Check the site and finish that manifest by hand. ${duplicate}`
-}
-
 const items = computed<ReportItem[]>(() => result.value?.items ?? [])
 
 /** Số dòng hàng / container mà lần chạy báo. */
@@ -195,12 +136,6 @@ const counts = computed(() => {
   }
   return { required, optional }
 })
-
-/** Mỗi icon ứng với đúng một trạng thái — không trùng lẫn. */
-function icon(item: ReportItem): string {
-  if (item.status === 'warn') return '⚠️'
-  return '⏭'
-}
 
 async function activeTabId(): Promise<number | undefined> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
@@ -239,32 +174,17 @@ async function run(): Promise<void> {
       RUN_DEADLINE_MS,
       'The manifest run',
     )) as CreateResult
-    // Kết quả cũ chỉ bị thay khi kết quả MỚI đã về ⇒ bằng chứng "bill đã có
-    // trên site" không bị xoá vô tình giữa chừng.
+    // Kết quả cũ chỉ bị thay khi kết quả MỚI đã về.
     result.value = res
     // Log the steps of the run — FOR READING LATER ONLY, never shown in the
     // popup: the popup reports only the final outcome (error / warning /
     // success). `steps` stays in the result, so a failed run can still be
     // traced from the console.
     console.info('[manifest-autofill] manifest run steps', res.steps)
-    // Số bill ĐÃ GHI LÊN SITE của lần chạy này (giữ hậu tố piece) — dùng làm
-    // KEY của bằng chứng (đúng cách content script chốt) và để biết report
-    // đang hiện thuộc về số bill nào (`resultInputBlNo`).
+    // Số bill của lần chạy này (giữ hậu tố piece) — để biết report đang
+    // hiện thuộc về số bill nào (`resultInputBlNo`).
     const billKey = billNoAsWritten(value)
     resultInputBlNo.value = billKey
-
-    if (res.billCreated === true) {
-      // Site ĐÃ có manifest cho số bill này ⇒ ghi nhớ, VÀO MỘT BẢNG RIÊNG
-      // (không gắn vào `result`) ⇒ một lần chạy sau hay một số bill khác
-      // không xoá được bằng chứng này.
-      //
-      // Manifest còn DỞ khi: lưu hỏng (`written` = false) HOẶC còn field BẮT
-      // BUỘC bị trống (`blocked` = true) ⇒ operator vẫn phải điền tay.
-      manifestBills.value = {
-        ...manifestBills.value,
-        [billKey]: res.written !== true || res.blocked === true,
-      }
-    }
   } catch (e) {
     // Chi tiết kỹ thuật (vd "The message port closed before a response was
     // received.") chỉ nằm ở console — người dùng chỉ thấy câu ngắn.
@@ -523,8 +443,9 @@ onUnmounted(() => {
 
     <!--
       Kết quả đang hiện là của lần chạy TRƯỚC — phải nói rõ, nếu không
-      operator tưởng đó là kết quả của số bill vừa gõ. Đặt NGAY TRÊN phần
-      báo cáo để nó đọc như một lời cảnh báo cho cả khối bên dưới.
+      operator tưởng đó là kết quả của số bill vừa gõ. Đặt NGAY TRÊN các
+      khối kết quả bên dưới (`.blocked`, `.blocking`, `.bill-status`,
+      `.summary`) để nó đọc như một lời cảnh báo cho cả phần bên dưới.
     -->
     <p v-if="resultStale" class="hint stale-result">
       {{ staleMessage }}
@@ -573,45 +494,11 @@ onUnmounted(() => {
       </p>
     </div>
 
-    <!--
-      Bằng chứng "bill đã có trên site" — SỐNG LÂU, không bị run sau xoá mất.
-      Nằm NGOÀI khối `bill-status` vì khối đó bám vào `result` (kết quả mới thay
-      thế kết quả cũ) ⇒ một lần chạy là mất cảnh báo. MỘT DÒNG cho mỗi
-      số bill: BL-A đang dở thì BL-B chạy sau không được làm mất nhắc nhở về
-      BL-A.
-    -->
-    <div v-if="billEvidence.length" class="bill-created">
-      <div v-for="entry in billEvidence" :key="entry.blNo" class="bill-created-line">
-        {{ evidenceText(entry) }}
-      </div>
-    </div>
-
     <div v-if="result" class="summary">
       cargo: {{ cargoRowCount }} · containers: {{ containerRowCount }} · blank fields: {{
         counts.required
       }}
       required, {{ counts.optional }} optional
     </div>
-
-    <table v-if="items.length" class="table">
-      <thead>
-        <tr>
-          <th></th>
-          <th>Field</th>
-          <th>Note</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr
-          v-for="item in items"
-          :key="`${item.scope}-${item.row ?? 0}-${item.prop}`"
-          :class="{ required: item.required === true }"
-        >
-          <td>{{ icon(item) }}</td>
-          <td>{{ item.label }}</td>
-          <td class="note">{{ item.note ?? '' }}</td>
-        </tr>
-      </tbody>
-    </table>
   </div>
 </template>
