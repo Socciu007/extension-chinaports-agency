@@ -3,7 +3,7 @@
  *
  * MAIN ROUTE: API.
  *
- *  popup → `MSG_CREATE_MANIFEST` → `runManifest` (read manifest from API outside → read site dicts → build payload → write to site).
+ *  popup → `MSG_CREATE_MANIFEST` → `runManifest` (read manifest from API outside → look up the site dictionaries → build payload → write to site).
  *
  * `runManifest` does not reject ⇒ any error becomes `CreateResult` with `ok: false` + `message` in English.
  */

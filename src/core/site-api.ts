@@ -1,5 +1,4 @@
 import { fetchJsonWithTimeout, HttpTimeoutError, type JsonResponse } from './http'
-import type { MappingContext } from './field-meta'
 
 export const DEFAULT_SITE_API_BASE = '/api/booking/exportManifestDataMaintain'
 
@@ -22,7 +21,7 @@ const CODE_KEYS = [
   'TRUST_COD',
   'PORT_COD',
 ]
-// Key containing the display name — `E_PORT_NAM` is the Chinese port name of the site. The port dictionary is only a fallback: the API path writes the English name (`nameEn`).
+// Key containing the display name — `E_PORT_NAM` is the Chinese port name of the site.
 const NAME_KEYS = [
   'name',
   'label',
@@ -88,8 +87,7 @@ export function pickArray(payload: unknown, keys: string[]): unknown[] {
 }
 
 // Preferred keys for a specific endpoint.
-// Because the site's dict uses specific keys (`PORT_COD`/`E_PORT_NAM`), if we let the generic keys (`code`/`name`/`cnName`…) be searched first, a port record with an additional `name` field will cause `findPort` to return the English name, but the site only suggests the Chinese port name (`上海/CNSHA`) ⇒ the suggestion does not match.
-// The dict therefore holds the CHINESE port name and is only a fallback — the API path writes the English name (`nameEn`).
+// Because the site's dict uses specific keys (`PORT_COD`/`E_PORT_NAM`), the generic keys (`code`/`name`/`cnName`…) must NOT be searched first — a port record with an additional `name` field would then win over the key the site really uses.
 export interface DictKeyPreference {
   codeKeys?: string[]
   nameKeys?: string[]
@@ -123,13 +121,6 @@ export function normalizeDictOptions(
   }
 
   return result
-}
-
-export interface SiteDicts {
-  trustCodes: DictOption[]
-  ports: DictOption[]
-  cntrTypes: DictOption[]
-  cntrSizes: DictOption[]
 }
 
 // Read the `token` cookie of the site (JWT sent via header `Authorization: JWT <token>`).
@@ -347,30 +338,6 @@ export async function postSiteJson(
   )
 }
 
-export async function loadSiteDicts(options: SiteFetchOptions = {}): Promise<SiteDicts> {
-  // The site's `getDrType/` dict is NOT fetched: 交货条款 comes straight from
-  // the API (`transportTerms`) and nothing else looks the value up.
-  const [trustRaw, cntrRaw, portRaw] = await Promise.all([
-    fetchSiteJson('getTrustCode/', { ...options, label: 'the trust code list' }, { kw: '' }),
-    fetchSiteJson('getCntrCode/', { ...options, label: 'the container type list' }),
-    fetchSiteJson(
-      'getPort/',
-      { ...options, label: 'the port list' },
-      { kw: '', filter: 'E_PORT_NAM' },
-    ).catch(() => null),
-  ])
-
-  return {
-    trustCodes: normalizeDictOptions(trustRaw),
-    ports: normalizeDictOptions(portRaw, {
-      codeKeys: ['PORT_COD'],
-      nameKeys: ['E_PORT_NAM'],
-    }),
-    cntrTypes: normalizeDictOptions(pickArray(cntrRaw, ['cntr_type', 'cntrType', 'type'])),
-    cntrSizes: normalizeDictOptions(pickArray(cntrRaw, ['cntr_size', 'cntrSize', 'size'])),
-  }
-}
-
 /**
  * The 包装代码 (PACKAGE_COD) of the site for a package NAME.
  *
@@ -409,39 +376,74 @@ export async function fetchPackageCode(
   return undefined
 }
 
-export function createMappingContext(dicts: SiteDicts): MappingContext {
-  return {
-    findTrustCode(supplyId) {
-      if (supplyId === undefined) return undefined
-      const hit = dicts.trustCodes.find((o) => o.id === String(supplyId) || o.code === String(supplyId))
-      return hit?.code
-    },
+// Columns of the site's port dictionary that may hold the port NAME.
+const PORT_NAME_KEYS = [
+  'E_PORT_NAM',
+  'PORT_NAM',
+  'E_PORT_NAM_EN',
+  'PORT_NAM_EN',
+  'E_PORT_EN',
+  'PORT_EN',
+  'NAME_EN',
+  'nameEn',
+]
 
-    findPort(code) {
-      if (!code) return undefined
-      const hit = dicts.ports.find(
-        (o) =>
-          o.code === code ||
-          o.id === code ||
-          pickString(o.raw, ['unCode', 'portCode', 'code']) === code,
-      )
-      if (!hit) return undefined
-      // Dict `getPort()` của site lưu tên cảng tiếng Trung ⇒ trả về tên.
-      return hit.name
-    },
+/**
+ * Does the port row hold the requested NAME?
+ *
+ * The port dictionary of the site holds the CHINESE name in `E_PORT_NAM`
+ * (FACT 3) ⇒ the English name may live in another column ⇒ match on the
+ * VALUE of every name-ish column, not on one fixed column.
+ */
+function portRowMatchesName(raw: Record<string, unknown>, wanted: string): boolean {
+  const target = wanted.trim().toUpperCase()
+  const matches = (value: unknown): boolean =>
+    typeof value === 'string' && value.trim().toUpperCase() === target
 
-    findCntrType(raw) {
-      if (raw === undefined || raw === null) return undefined
-      const key = String(raw)
-      const hit = dicts.cntrTypes.find((o) => o.id === key || o.code === key)
-      return hit?.name
-    },
-
-    findCntrSize(raw) {
-      if (raw === undefined || raw === null) return undefined
-      const key = String(raw)
-      const hit = dicts.cntrSizes.find((o) => o.id === key || o.code === key)
-      return hit?.name
-    },
+  for (const key of PORT_NAME_KEYS) {
+    if (matches(raw[key])) return true
   }
+  // Safety net: any other column whose NAME mentions a name.
+  for (const [key, value] of Object.entries(raw)) {
+    if (!key.toUpperCase().includes('NAM')) continue
+    if (matches(value)) return true
+  }
+  return false
+}
+
+/**
+ * The port CODE (PORT_COD) of the site for a port NAME.
+ *
+ * The API gives the English port NAME (`PortData.nameEn`) and a port code of
+ * its own; the site needs the code of ITS port dictionary ⇒ the code has to
+ * be looked up once the name is known.
+ *
+ * The URL is the one the site itself calls:
+ * `getPort/?kw=<name>&filter=E_PORT_NAM`.
+ */
+export async function fetchPortCode(
+  name: string,
+  options: SiteFetchOptions = {},
+): Promise<string | undefined> {
+  const kw = name.trim()
+  if (kw === '') return undefined
+
+  const raw = await fetchSiteJson(
+    'getPort/',
+    { ...options, label: 'the port list' },
+    { kw, filter: 'E_PORT_NAM' },
+  )
+
+  const dict = normalizeDictOptions(raw, {
+    codeKeys: ['PORT_COD'],
+    nameKeys: PORT_NAME_KEYS,
+  })
+
+  // Match the NAME first — the dictionary may return several rows because
+  // `kw` is a "contains" search.
+  const exact = dict.find((option) => portRowMatchesName(option.raw, kw))
+  if (exact) return exact.code
+  // Only one row ⇒ take it (the site already filtered by `kw`).
+  if (dict.length === 1) return dict[0]?.code
+  return undefined
 }

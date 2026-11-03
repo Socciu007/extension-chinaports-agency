@@ -4,13 +4,6 @@ export function isBlank(value: unknown): boolean {
   return value === null || value === undefined || String(value).trim() === ''
 }
 
-export interface MappingContext {
-  findTrustCode(supplyId?: number): string | undefined
-  findPort(code?: string): string | undefined
-  findCntrType(raw?: number | string | null): string | undefined
-  findCntrSize(raw?: number | string | null): string | undefined
-}
-
 /**
  * 付款方式 of the site — the site stores the CODE, not the display label.
  *

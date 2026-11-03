@@ -10,22 +10,7 @@ import {
   isBlankPayloadValue,
   isUnparsablePayloadValue,
   payWayOf,
-  type MappingContext,
 } from '../src/core/field-meta'
-
-/**
- * Ngữ cảnh giả lập — chỉ dùng để kiểm tra KIỂU của `MappingContext`.
- *
- * Đây là STUB: mọi hàm tra cứu trả `undefined` hết, giống hệt site không có
- * dữ liệu từ điển. Code THẬT vẫn đọc `ctx` (trust code, tên cảng,
- * kiểu/kích cước container) ⇒ `ctx` KHÔNG được xoá.
- */
-const ctx: MappingContext = {
-  findTrustCode: () => undefined,
-  findPort: () => undefined,
-  findCntrType: () => undefined,
-  findCntrSize: () => undefined,
-}
 
 describe('contactRole', () => {
   it('false = 发货人 (0)', () => {
@@ -129,17 +114,6 @@ describe('quy tắc "trống"', () => {
     expect(isUnparsablePayloadValue(0)).toBe(false)
     expect(isUnparsablePayloadValue('')).toBe(false)
     expect(isUnparsablePayloadValue(undefined)).toBe(false)
-  })
-})
-
-describe('MappingContext', () => {
-  it('không còn cấu hình portNameField (site chỉ gợi ý tên Trung)', () => {
-    // Directive `@ts-expect-error` LÀ phần assert: nếu `portNameField` còn nằm
-    // trong `MappingContext` thì directive thành thừa ⇒ TypeScript báo TS2578
-    // ⇒ test đỏ. Biến chỉ tồn tại để kích hoạt lỗi đó.
-    // @ts-expect-error — `portNameField` đã bị gỡ khỏi `MappingContext`.
-    const legacyCtx: MappingContext = { ...ctx, portNameField: 'START_PORT_NAM' }
-    void legacyCtx
   })
 })
 

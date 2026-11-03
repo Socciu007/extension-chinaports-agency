@@ -2,10 +2,9 @@ import { describe, it, expect } from 'vitest'
 import {
   normalizeDictOptions,
   pickArray,
-  createMappingContext,
   fetchPackageCode,
+  fetchPortCode,
   readCookieToken,
-  loadSiteDicts,
   DEFAULT_SITE_API_BASE,
   SiteApiError,
   describeSiteError,
@@ -19,7 +18,7 @@ interface CapturedInit {
   credentials?: string
 }
 
-/** Bắt lỗi của `loadSiteDicts` — luôn là `SiteApiError` (không phải lỗi JS thô). */
+/** Bắt lỗi của một request tới site — luôn là `SiteApiError` (không phải lỗi JS thô). */
 async function rejectionOf(promise: Promise<unknown>): Promise<SiteApiError> {
   try {
     await promise
@@ -87,91 +86,9 @@ describe('readCookieToken', () => {
   })
 })
 
-describe('createMappingContext', () => {
-  const dicts = {
-    trustCodes: normalizeDictOptions([{ id: 2, TRUST_COD: 'MAEU' }]),
-    ports: normalizeDictOptions([{ E_PORT_NAM: '上海', PORT_COD: 'CNSHA' }]),
-    // `getCntrCode/` trả **chuỗi thuần** (FACT 6.2) — không có id số.
-    cntrTypes: normalizeDictOptions(['40', 'HQ']),
-    cntrSizes: normalizeDictOptions(['20', '45']),
-  }
-
-  it('tìm 承运人 theo supplyId', () => {
-    const ctx = createMappingContext(dicts)
-    expect(ctx.findTrustCode(2)).toBe('MAEU')
-  })
-
-  it('tìm cảng theo mã', () => {
-    const ctx = createMappingContext(dicts)
-    expect(ctx.findPort('CNSHA')).toBe('上海')
-  })
-
-  it('tìm 箱型 và 尺寸 theo **chuỗi** trong dict', () => {
-    const ctx = createMappingContext(dicts)
-    expect(ctx.findCntrType('HQ')).toBe('HQ')
-    expect(ctx.findCntrSize('45')).toBe('45')
-  })
-
-  it('KHÔNG tra được 箱型/尺寸 từ mã số của API (C-5)', () => {
-    // API cho `cType: 2`, `vC: 0` — mã số, còn dict của site chỉ có chuỗi.
-    const ctx = createMappingContext(dicts)
-    expect(ctx.findCntrType(2)).toBeUndefined()
-    expect(ctx.findCntrSize(0)).toBeUndefined()
-  })
-
-  it('trả undefined khi không tìm thấy', () => {
-    const ctx = createMappingContext(dicts)
-    expect(ctx.findPort('ZZZZZ')).toBeUndefined()
-  })
-})
-
-describe('loadSiteDicts', () => {
+describe('request tới site — header và cookie', () => {
   const okResponse = (body: unknown) =>
     ({ ok: true, status: 200, json: async () => body }) as unknown as Response
-
-  it('gọi đúng 3 endpoint, getPort kèm kw + filter', async () => {
-    const calls: string[] = []
-    const inits: CapturedInit[] = []
-    const fakeFetch = (async (url: string, init?: CapturedInit) => {
-      calls.push(url)
-      inits.push(init ?? {})
-      const body = url.includes('getTrustCode')
-        ? { code: 2000, data: [{ id: 2, TRUST_COD: 'MAEU' }] }
-        : url.includes('getPort')
-          ? { code: 2000, data: [{ E_PORT_NAM: '上海', PORT_COD: 'CNSHA' }] }
-          : {
-              // `getCntrCode/` trả **chuỗi thuần**, tên key **ngược** (FACT 6.2).
-              code: 2000,
-              data: {
-                cntr_type: ['40', 'HQ'],
-                cntr_size: ['20', '45'],
-              },
-            }
-      return okResponse(body)
-    }) as unknown as typeof fetch
-
-    const dicts = await loadSiteDicts({
-      baseUrl: '/api/test',
-      fetchImpl: fakeFetch,
-      cookieString: 'token=abc',
-    })
-
-    expect(calls).toHaveLength(3)
-    // URL phải chính xác — `new URLSearchParams({kw: ''})` → `"kw="`.
-    expect(calls).toContain('/api/test/getTrustCode/?kw=')
-    expect(calls).toContain('/api/test/getCntrCode/')
-    expect(
-      calls.some((u) => u.startsWith('/api/test/getPort/') && u.includes('filter=E_PORT_NAM')),
-    ).toBe(true)
-    // Dict 交货条款 KHÔNG được gọi nữa — 交货条款 lấy thẳng từ API.
-    expect(calls.some((u) => u.includes('getDrType'))).toBe(false)
-    // Không gọi dict 包装 — không ai dùng (C-2).
-    expect(calls.some((u) => u.includes('getPackageCode'))).toBe(false)
-    expect(dicts.trustCodes[0]?.code).toBe('MAEU')
-    expect(dicts.ports[0]?.name).toBe('上海')
-    expect(dicts.cntrTypes[0]?.name).toBe('40')
-    expect(dicts.cntrSizes[0]?.name).toBe('20')
-  })
 
   it('gửi credentials + header Authorization của cookie token', async () => {
     const inits: CapturedInit[] = []
@@ -180,13 +97,13 @@ describe('loadSiteDicts', () => {
       return okResponse({ code: 2000, data: [] })
     }) as unknown as typeof fetch
 
-    await loadSiteDicts({
+    await fetchPortCode('SHANGHAI', {
       baseUrl: '/api/test',
       fetchImpl: fakeFetch,
       cookieString: 'token=abc',
     })
 
-    expect(inits).toHaveLength(3)
+    expect(inits).toHaveLength(1)
     // Cookie của site phải được gửi kèm (API cùng origin của site).
     expect(inits.every((i) => i.credentials === 'include')).toBe(true)
     expect(inits.every((i) => i.method === 'GET')).toBe(true)
@@ -200,33 +117,14 @@ describe('loadSiteDicts', () => {
       return okResponse({ code: 2000, data: [] })
     }) as unknown as typeof fetch
 
-    await loadSiteDicts({
+    await fetchPortCode('SHANGHAI', {
       baseUrl: '/api/test',
       fetchImpl: fakeFetch,
       cookieString: '',
     })
 
-    expect(inits).toHaveLength(3)
+    expect(inits).toHaveLength(1)
     expect(inits.every((i) => new Headers(i.headers).get('authorization') === null)).toBe(true)
-  })
-
-  it('vẫn nạp được dict khác khi getPort lỗi', async () => {
-    const fakeFetch = (async (url: string) => {
-      if (url.includes('getPort')) throw new Error('network down')
-      if (url.includes('getTrustCode')) {
-        return okResponse({ code: 2000, data: [{ id: 2, TRUST_COD: 'MAEU' }] })
-      }
-      return okResponse({ code: 2000, data: [] })
-    }) as unknown as typeof fetch
-
-    const dicts = await loadSiteDicts({
-      baseUrl: '/api/test',
-      fetchImpl: fakeFetch,
-      cookieString: 'token=abc',
-    })
-
-    expect(dicts.ports).toHaveLength(0)
-    expect(dicts.trustCodes[0]?.code).toBe('MAEU')
   })
 })
 
@@ -308,6 +206,105 @@ describe('fetchPackageCode', () => {
   })
 })
 
+describe('fetchPortCode', () => {
+  const okResponse = (body: unknown) =>
+    ({ ok: true, status: 200, json: async () => body }) as unknown as Response
+
+  /** Fetch giả của site — ghi lại URL rồi trả về `body`. */
+  function fakeSite(body: unknown): { fetchImpl: typeof fetch; urls: string[] } {
+    const urls: string[] = []
+    const fetchImpl = (async (url: string) => {
+      urls.push(String(url))
+      return okResponse(body)
+    }) as unknown as typeof fetch
+    return { fetchImpl, urls }
+  }
+
+  const optionsOf = (fetchImpl: typeof fetch) => ({
+    baseUrl: '/api/test',
+    fetchImpl,
+    cookieString: 'token=abc',
+  })
+
+  it('trùng tên ⇒ trả mã, và URL đúng như site gửi', async () => {
+    // Dict có NHIỀU dòng ⇒ mã chỉ đúng khi khớp TÊN (đường dẫn "chỉ có
+    // MỘT dòng" thì không cần khớp tên — test riêng ở dưới).
+    const { fetchImpl, urls } = fakeSite({
+      code: 2000,
+      data: [
+        { PORT_COD: 'CNSHA', E_PORT_NAM: '上海', E_PORT_NAM_EN: 'SHANGHAI' },
+        { PORT_COD: 'IDBLW', E_PORT_NAM: '勿拉湾', E_PORT_NAM_EN: 'BELAWAN' },
+      ],
+    })
+
+    const code = await fetchPortCode('SHANGHAI', optionsOf(fetchImpl))
+
+    expect(code).toBe('CNSHA')
+    expect(urls[0]).toContain('kw=SHANGHAI')
+    expect(urls[0]).toContain('filter=E_PORT_NAM')
+  })
+
+  it('tên cảng tiếng Anh nằm ở cột KHÁC `E_PORT_NAM` ⇒ vẫn khớp', async () => {
+    // Dict của site lưu tên Trung ở `E_PORT_NAM` ⇒ tên Anh có thể nằm ở
+    // cột khác ⇒ khớp theo GIÁ TRỊ, không theo một cột cố định.
+    // Nhiều dòng ⇒ chỉ đúng khi khớp TÊN, không phải do có một dòng.
+    const { fetchImpl } = fakeSite({
+      code: 2000,
+      data: [
+        { PORT_COD: 'CNSHA', E_PORT_NAM: '上海', PORT_NAM_EN: 'SHANGHAI' },
+        { PORT_COD: 'IDBLW', E_PORT_NAM: '勿拉湾', PORT_NAM_EN: 'BELAWAN' },
+      ],
+    })
+
+    const code = await fetchPortCode('SHANGHAI', optionsOf(fetchImpl))
+
+    expect(code).toBe('CNSHA')
+  })
+
+  it('chỉ có MỘT dòng ⇒ lấy mã của dòng đó (không cần trùng tên)', async () => {
+    const { fetchImpl } = fakeSite({
+      code: 2000,
+      data: [{ PORT_COD: 'CNSHA', E_PORT_NAM: '上海' }],
+    })
+
+    const code = await fetchPortCode('SHANGHAI', optionsOf(fetchImpl))
+
+    expect(code).toBe('CNSHA')
+  })
+
+  it('NHIỀU dòng mà không dòng nào trùng tên ⇒ undefined', async () => {
+    const { fetchImpl } = fakeSite({
+      code: 2000,
+      data: [
+        { PORT_COD: 'CNSHA', E_PORT_NAM: '上海' },
+        { PORT_COD: 'IDBLW', E_PORT_NAM: '勿拉湾' },
+      ],
+    })
+
+    const code = await fetchPortCode('SURABAYA', optionsOf(fetchImpl))
+
+    expect(code).toBeUndefined()
+  })
+
+  it('tên rỗng ⇒ KHÔNG gọi site', async () => {
+    const { fetchImpl, urls } = fakeSite({ code: 2000, data: [] })
+
+    const code = await fetchPortCode('   ', optionsOf(fetchImpl))
+
+    expect(code).toBeUndefined()
+    expect(urls).toHaveLength(0)
+  })
+
+  it('site trả lỗi 4000 ⇒ promise reject', async () => {
+    const fakeFetch = (async () =>
+      okResponse({ code: 4000, data: null, msg: 'session' })) as unknown as typeof fetch
+
+    const err = await rejectionOf(fetchPortCode('SHANGHAI', optionsOf(fakeFetch)))
+    expect(err.kind).toBe('session')
+    expect(err.code).toBe(4000)
+  })
+})
+
 describe('DEFAULT_SITE_API_BASE', () => {
   it('trỏ đúng base của site', () => {
     expect(DEFAULT_SITE_API_BASE).toBe('/api/booking/exportManifestDataMaintain')
@@ -335,8 +332,8 @@ describe('envelope {code, data, msg} của site', () => {
   })
 })
 
-describe('loadSiteDicts khi session hết hạn', () => {
-  it('báo lỗi rõ ràng thay vì trả dict rỗng', async () => {
+describe('tra cảng khi session hết hạn', () => {
+  it('báo lỗi rõ ràng thay vì trả mã rỗng', async () => {
     const fakeFetch = (async () => ({
       ok: true,
       status: 200,
@@ -344,7 +341,11 @@ describe('loadSiteDicts khi session hết hạn', () => {
     })) as unknown as typeof fetch
 
     await expect(
-      loadSiteDicts({ baseUrl: '/api/test', fetchImpl: fakeFetch, cookieString: 'token=abc' }),
+      fetchPortCode('SHANGHAI', {
+        baseUrl: '/api/test',
+        fetchImpl: fakeFetch,
+        cookieString: 'token=abc',
+      }),
     ).rejects.toThrow(/session/i)
   })
 })
@@ -360,7 +361,11 @@ describe('envelope khoá theo mã thành công 2000', () => {
       okResponse({ code: 5000, data: [], msg: '系统错误' })) as unknown as typeof fetch
 
     const err = await rejectionOf(
-      loadSiteDicts({ baseUrl: '/api/test', fetchImpl: fakeFetch, cookieString: 'token=abc' }),
+      fetchPortCode('SHANGHAI', {
+        baseUrl: '/api/test',
+        fetchImpl: fakeFetch,
+        cookieString: 'token=abc',
+      }),
     )
     expect(err.kind).toBe('site')
     expect(err.code).toBe(5000)
@@ -369,15 +374,12 @@ describe('envelope khoá theo mã thành công 2000', () => {
   it('envelope thành công với data null KHÔNG ném — dict rỗng là hợp lệ', async () => {
     const fakeFetch = (async () => okResponse({ code: 2000, data: null })) as unknown as typeof fetch
 
-    const dicts = await loadSiteDicts({
+    const code = await fetchPortCode('SHANGHAI', {
       baseUrl: '/api/test',
       fetchImpl: fakeFetch,
       cookieString: 'token=abc',
     })
-    expect(dicts.trustCodes).toHaveLength(0)
-    expect(dicts.ports).toHaveLength(0)
-    expect(dicts.cntrTypes).toHaveLength(0)
-    expect(dicts.cntrSizes).toHaveLength(0)
+    expect(code).toBeUndefined()
   })
 
   it('lỗi mạng → kind network', async () => {
@@ -386,7 +388,11 @@ describe('envelope khoá theo mã thành công 2000', () => {
     }) as unknown as typeof fetch
 
     const err = await rejectionOf(
-      loadSiteDicts({ baseUrl: '/api/test', fetchImpl: fakeFetch, cookieString: 'token=abc' }),
+      fetchPortCode('SHANGHAI', {
+        baseUrl: '/api/test',
+        fetchImpl: fakeFetch,
+        cookieString: 'token=abc',
+      }),
     )
     expect(err.kind).toBe('network')
   })
@@ -401,7 +407,11 @@ describe('envelope khoá theo mã thành công 2000', () => {
     })) as unknown as typeof fetch
 
     const err = await rejectionOf(
-      loadSiteDicts({ baseUrl: '/api/test', fetchImpl: fakeFetch, cookieString: 'token=abc' }),
+      fetchPortCode('SHANGHAI', {
+        baseUrl: '/api/test',
+        fetchImpl: fakeFetch,
+        cookieString: 'token=abc',
+      }),
     )
     expect(err.kind).toBe('bad_response')
   })
@@ -414,7 +424,11 @@ describe('envelope khoá theo mã thành công 2000', () => {
     })) as unknown as typeof fetch
 
     const err = await rejectionOf(
-      loadSiteDicts({ baseUrl: '/api/test', fetchImpl: fakeFetch, cookieString: 'token=abc' }),
+      fetchPortCode('SHANGHAI', {
+        baseUrl: '/api/test',
+        fetchImpl: fakeFetch,
+        cookieString: 'token=abc',
+      }),
     )
     expect(err.kind).toBe('http')
     expect(err.code).toBe(500)
@@ -425,7 +439,11 @@ describe('envelope khoá theo mã thành công 2000', () => {
       okResponse({ code: 4000, data: null, msg: '身份认证信息未提供。' })) as unknown as typeof fetch
 
     const err = await rejectionOf(
-      loadSiteDicts({ baseUrl: '/api/test', fetchImpl: fakeFetch, cookieString: 'token=abc' }),
+      fetchPortCode('SHANGHAI', {
+        baseUrl: '/api/test',
+        fetchImpl: fakeFetch,
+        cookieString: 'token=abc',
+      }),
     )
     expect(err.kind).toBe('session')
     expect(err.code).toBe(4000)
@@ -440,7 +458,7 @@ describe('envelope khoá theo mã thành công 2000', () => {
       })) as unknown as typeof fetch
 
     const err = await rejectionOf(
-      loadSiteDicts({
+      fetchPortCode('SHANGHAI', {
         baseUrl: '/api/test',
         fetchImpl: fakeFetch,
         cookieString: 'token=abc',
@@ -502,7 +520,7 @@ describe('dict cảng — ưu tiên key thật của site', () => {
     expect(options[0]).toMatchObject({ code: 'CNSHA', name: '上海' })
   })
 
-  it('loadSiteDicts dùng key thật của site cho dict cảng', async () => {
+  it('tra cảng dùng key thật của site (`PORT_COD` thắng `code` generic)', async () => {
     const okResponse = (body: unknown) =>
       ({ ok: true, status: 200, json: async () => body }) as unknown as Response
     const fakeFetch = (async (url: string) => {
@@ -515,12 +533,11 @@ describe('dict cảng — ưu tiên key thật của site', () => {
       return okResponse({ code: 2000, data: [] })
     }) as unknown as typeof fetch
 
-    const dicts = await loadSiteDicts({
+    const code = await fetchPortCode('Shanghai', {
       baseUrl: '/api/test',
       fetchImpl: fakeFetch,
       cookieString: 'token=abc',
     })
-    expect(dicts.ports[0]?.code).toBe('CNSHA')
-    expect(dicts.ports[0]?.name).toBe('上海')
+    expect(code).toBe('CNSHA')
   })
 })

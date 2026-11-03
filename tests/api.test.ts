@@ -8,16 +8,7 @@ import {
   describeApiError,
   DEFAULT_API_BASE,
 } from '../src/core/api'
-import type { MappingContext } from '../src/core/field-meta'
 import fixture from './fixtures/manifest-ONEYSHAGT1569600.json'
-
-/** `ctx` giả lập — dict của site trong test này chỉ có tên cảng. */
-const ctx: MappingContext = {
-  findTrustCode: (supplyId) => (supplyId === 2 ? 'ONE' : undefined),
-  findPort: () => undefined,
-  findCntrType: () => undefined,
-  findCntrSize: () => undefined,
-}
 
 describe('normalizeBlNo', () => {
   it('bỏ hậu tố piece P1', () => {
@@ -82,69 +73,69 @@ describe('parseEnvelope', () => {
   it('trả về BODY của site khi status=1', () => {
     const body = parseEnvelope(
       { status: 1, messgae: 'success', data: { blNo: 'X', shipName: 'SHIP' } },
-      { ctx },
+      {},
     )
     expect(body.bill_nbr).toBe('X')
     expect(body.e_ship_nam).toBe('SHIP')
   })
 
   it('dựng body đủ 45 key', () => {
-    const body = parseEnvelope({ status: 1, data: {} }, { ctx })
+    const body = parseEnvelope({ status: 1, data: {} }, {})
     expect(Object.keys(body)).toHaveLength(45)
   })
 
   it('giữ hậu tố piece của số bill OPERATOR trong `bill_nbr`', () => {
     const body = parseEnvelope(
       { status: 1, data: { blNo: 'ONEYSHAGT1569600' } },
-      { ctx, operatorBlNo: 'ONEYSHAGT1569600P1' },
+      { operatorBlNo: 'ONEYSHAGT1569600P1' },
     )
     expect(body.bill_nbr).toBe('ONEYSHAGT1569600P1')
   })
 
   it('ném not_found khi status=0', () => {
     expect(() =>
-      parseEnvelope({ status: 0, message: 'data_not_found', data: null }, { ctx }),
+      parseEnvelope({ status: 0, message: 'data_not_found', data: null }, {}),
     ).toThrowError(expect.objectContaining({ kind: 'not_found' }))
   })
 
   it('giữ nguyên message của envelope lỗi', () => {
-    expect(() => parseEnvelope({ status: 0, message: 'data_not_found' }, { ctx })).toThrowError(
+    expect(() => parseEnvelope({ status: 0, message: 'data_not_found' }, {})).toThrowError(
       expect.objectContaining({ kind: 'not_found', message: 'data_not_found' }),
     )
   })
 
   it('ném not_found khi status=1 nhưng data=null', () => {
     expect(() =>
-      parseEnvelope({ status: 1, messgae: 'success', data: null }, { ctx }),
+      parseEnvelope({ status: 1, messgae: 'success', data: null }, {}),
     ).toThrowError(expect.objectContaining({ kind: 'not_found' }))
   })
 
   it('ném bad_response khi payload không phải object', () => {
-    expect(() => parseEnvelope('oops', { ctx })).toThrowError(
+    expect(() => parseEnvelope('oops', {})).toThrowError(
       expect.objectContaining({ kind: 'bad_response' }),
     )
   })
 
   it('ném bad_response khi payload là array', () => {
-    expect(() => parseEnvelope([], { ctx })).toThrowError(
+    expect(() => parseEnvelope([], {})).toThrowError(
       expect.objectContaining({ kind: 'bad_response' }),
     )
   })
 
   it('ném bad_response khi body không có status dạng số', () => {
     expect(() =>
-      parseEnvelope({ errors: 'boom', message: 'server error' }, { ctx }),
+      parseEnvelope({ errors: 'boom', message: 'server error' }, {}),
     ).toThrowError(expect.objectContaining({ kind: 'bad_response' }))
   })
 
   it('ném bad_response khi status không phải số', () => {
-    expect(() => parseEnvelope({ status: '1', data: {} }, { ctx })).toThrowError(
+    expect(() => parseEnvelope({ status: '1', data: {} }, {})).toThrowError(
       expect.objectContaining({ kind: 'bad_response' }),
     )
   })
 
   it('ném bad_response khi data là array thay vì object manifest', () => {
-    expect(() => parseEnvelope({ status: 1, data: [] }, { ctx })).toThrowError(
+    expect(() => parseEnvelope({ status: 1, data: [] }, {})).toThrowError(
       expect.objectContaining({ kind: 'bad_response' }),
     )
   })
@@ -164,7 +155,6 @@ describe('fetchManifest', () => {
 
     const { body, apiBillNo } = await fetchManifest('ONEYSHAGT1569600', {
       fetchImpl: fakeFetch,
-      ctx,
     })
     expect(calls[0]).toBe(`${DEFAULT_API_BASE}?blNo=ONEYSHAGT1569600`)
     expect(apiBillNo).toBe('ONEYSHAGT1569600')
@@ -176,7 +166,7 @@ describe('fetchManifest', () => {
       throw new Error('offline')
     }) as unknown as typeof fetch
 
-    await expect(fetchManifest('X', { fetchImpl: fakeFetch, ctx })).rejects.toMatchObject({
+    await expect(fetchManifest('X', { fetchImpl: fakeFetch})).rejects.toMatchObject({
       kind: 'network',
     })
   })
@@ -189,7 +179,7 @@ describe('fetchManifest', () => {
       })) as unknown as typeof fetch
 
     await expect(
-      fetchManifest('X', { fetchImpl: fakeFetch, timeoutMs: 20, ctx }),
+      fetchManifest('X', { fetchImpl: fakeFetch, timeoutMs: 20}),
     ).rejects.toMatchObject({ kind: 'timeout' })
   })
 
@@ -207,7 +197,7 @@ describe('fetchManifest', () => {
       }) as unknown as Response) as unknown as typeof fetch
 
     await expect(
-      fetchManifest('X', { fetchImpl: fakeFetch, timeoutMs: 20, ctx }),
+      fetchManifest('X', { fetchImpl: fakeFetch, timeoutMs: 20}),
     ).rejects.toMatchObject({ kind: 'timeout' })
   })
 
@@ -220,7 +210,7 @@ describe('fetchManifest', () => {
       } as unknown as Response
     }) as unknown as typeof fetch
 
-    await expect(fetchManifest('X', { fetchImpl: fakeFetch, ctx })).rejects.toMatchObject({
+    await expect(fetchManifest('X', { fetchImpl: fakeFetch})).rejects.toMatchObject({
       kind: 'http',
     })
   })
@@ -236,7 +226,7 @@ describe('fetchManifest', () => {
       } as unknown as Response
     }) as unknown as typeof fetch
 
-    await expect(fetchManifest('X', { fetchImpl: fakeFetch, ctx })).rejects.toMatchObject({
+    await expect(fetchManifest('X', { fetchImpl: fakeFetch})).rejects.toMatchObject({
       kind: 'bad_response',
     })
   })
@@ -255,7 +245,6 @@ describe('fetchManifest', () => {
     await fetchManifest('ONEYSHAGT1569600', {
       baseUrl: 'https://example.test/manifest',
       fetchImpl: fakeFetch,
-      ctx,
     })
     expect(calls[0]).toMatch(/^https:\/\/example\.test\/manifest\?blNo=/)
   })
@@ -271,7 +260,7 @@ describe('fetchManifest', () => {
       } as unknown as Response
     }) as unknown as typeof fetch
 
-    await fetchManifest('AB&CD+EF', { fetchImpl: fakeFetch, ctx })
+    await fetchManifest('AB&CD+EF', { fetchImpl: fakeFetch})
     expect(calls[0]).toContain('blNo=AB%26CD%2BEF')
   })
 
@@ -286,7 +275,7 @@ describe('fetchManifest', () => {
       } as unknown as Response
     }) as unknown as typeof fetch
 
-    await fetchManifest('ONEYSHAGT1569600P12', { fetchImpl: fakeFetch, ctx })
+    await fetchManifest('ONEYSHAGT1569600P12', { fetchImpl: fakeFetch})
     expect(calls[0]).toContain('blNo=ONEYSHAGT1569600')
     expect(calls[0]).not.toContain('P12')
   })

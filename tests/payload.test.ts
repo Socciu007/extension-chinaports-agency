@@ -6,33 +6,11 @@ import {
   lowerKeys,
   toWireValue,
 } from '../src/core/payload'
-import type { MappingContext } from '../src/core/field-meta'
 import type { ManifestApiData, ManifestCargo, ManifestContainer } from '../src/core/types'
 import fixture from './fixtures/manifest-ONEYSHAGT1569600.json'
 
 /** Dữ liệu mẫu (phần `data` của envelope của API) — hình dạng RAW. */
 const manifest = fixture.data as ManifestApiData
-
-/**
- * Tên cảng mà dict `getPort()` của site trả về.
- *
- * Dict của site CHỈ có tên cảng tiếng Trung (`E_PORT_NAM`) ⇒ đường API ghi
- * tên ANH (`PortData.nameEn`), còn đường dự phòng từ dict `getPort()` ghi
- * tên TRUNG.
- */
-const PORT_NAMES: Record<string, string> = {
-  CNSHA: '上海',
-  IDBLW: '勿拉湾',
-  IDSUB: '泗水',
-}
-
-/** `ctx` giả lập — dict của site trong test này chỉ có tên cảng. */
-const ctx: MappingContext = {
-  findTrustCode: (supplyId) => (supplyId === 2 ? 'ONE' : undefined),
-  findPort: (code) => PORT_NAMES[code ?? ''],
-  findCntrType: () => undefined,
-  findCntrSize: () => undefined,
-}
 
 /**
  * 45 key của BODY — đúng theo mẫu thật của site.
@@ -140,7 +118,7 @@ const CONTAINER_KEYS = [
 ]
 
 describe('buildManifestBody', () => {
-  const body = buildManifestBody(manifest, ctx)
+  const body = buildManifestBody(manifest)
 
   it('có đúng 45 key (43 key header + cdgoods + cntr_list)', () => {
     expect(Object.keys(body).sort()).toEqual([...BODY_KEYS].sort())
@@ -201,19 +179,19 @@ describe('buildManifestBody', () => {
       aimPortCode: 'IDSUB',
       aimPortData: { name: '泗水', nameEn: 'SURABAYA' },
     }
-    const body = buildManifestBody(data, ctx)
+    const body = buildManifestBody(data)
     expect(body.dischrg_port_cod).toBe('IDSUB')
     expect(body.dischrg_port_nam).toBe('SURABAYA')
     expect(body.dest_port_cod).toBe('IDBLW')
     expect(body.dest_port_nam).toBe('BELAWAN')
   })
 
-  it('fallback sang dict `getPort()` khi API không có tên cảng', () => {
+  it('API không có tên cảng ⇒ để trống (KHÔNG tra dict lúc dựng body)', () => {
     const data: ManifestApiData = { ...manifest, uploadPortData: null }
-    const body = buildManifestBody(data, ctx)
+    const body = buildManifestBody(data)
     expect(body.dest_port_cod).toBe('IDBLW')
-    // Dict của site CHỈ có tên Trung ⇒ fallback ra tên Trung.
-    expect(body.dest_port_nam).toBe(PORT_NAMES.IDBLW)
+    // Không còn đường dự phòng từ dict ⇒ tên cảng rỗng.
+    expect(body.dest_port_nam).toBe('')
   })
 
   it('dùng `nameEn` của API cho tên cảng', () => {
@@ -222,7 +200,7 @@ describe('buildManifestBody', () => {
       aimPortCode: 'IDXYZ',
       aimPortData: { nameEn: 'UNKNOWN PORT' },
     }
-    const body = buildManifestBody(data, ctx)
+    const body = buildManifestBody(data)
     expect(body.dischrg_port_cod).toBe('IDXYZ')
     expect(body.dischrg_port_nam).toBe('UNKNOWN PORT')
   })
@@ -277,7 +255,7 @@ describe('buildManifestBody', () => {
   })
 
   it('rỗng hết khi không có dữ liệu nào', () => {
-    const empty = buildManifestBody({}, ctx)
+    const empty = buildManifestBody({})
     expect(empty.cdgoods).toEqual([])
     expect(empty.cntr_list).toEqual([])
     const values = empty as Record<string, unknown>
@@ -299,27 +277,27 @@ describe('buildManifestBody', () => {
  */
 describe('buildManifestBody — 付款方式', () => {
   it('payType = true ⇒ "C" (到付)', () => {
-    const body = buildManifestBody({ ...manifest, payType: true }, ctx)
+    const body = buildManifestBody({ ...manifest, payType: true })
     expect(body.pay_way_id).toBe('C')
   })
 
   it('payType = false ⇒ "P" (预付)', () => {
-    const body = buildManifestBody({ ...manifest, payType: false }, ctx)
+    const body = buildManifestBody({ ...manifest, payType: false })
     expect(body.pay_way_id).toBe('P')
   })
 
   it('payType = 1 ⇒ "C", payType = 0 ⇒ "P"', () => {
-    expect(buildManifestBody({ ...manifest, payType: 1 }, ctx).pay_way_id).toBe('C')
-    expect(buildManifestBody({ ...manifest, payType: 0 }, ctx).pay_way_id).toBe('P')
+    expect(buildManifestBody({ ...manifest, payType: 1 }).pay_way_id).toBe('C')
+    expect(buildManifestBody({ ...manifest, payType: 0 }).pay_way_id).toBe('P')
   })
 
   it('không có dữ liệu ⇒ để trống (KHÔNG đoán)', () => {
-    expect(buildManifestBody({ ...manifest, payType: null }, ctx).pay_way_id).toBe('')
-    expect(buildManifestBody({ ...manifest, payType: undefined }, ctx).pay_way_id).toBe('')
+    expect(buildManifestBody({ ...manifest, payType: null }).pay_way_id).toBe('')
+    expect(buildManifestBody({ ...manifest, payType: undefined }).pay_way_id).toBe('')
   })
 
   it('giá trị lạ ⇒ để trống', () => {
-    expect(buildManifestBody({ ...manifest, payType: 2 }, ctx).pay_way_id).toBe('')
+    expect(buildManifestBody({ ...manifest, payType: 2 }).pay_way_id).toBe('')
   })
 })
 
@@ -332,21 +310,20 @@ describe('buildManifestBody — 付款方式', () => {
  */
 describe('buildManifestBody — 交货条款', () => {
   it('lấy thẳng `transportTerms` của API, KHÔNG tra dict', () => {
-    const body = buildManifestBody(manifest, ctx)
+    const body = buildManifestBody(manifest)
     // Fixture: `transportTerms` = "1"; dict của site KHÔNG được tra.
     expect(body.dr_type_str).toBe('1')
   })
 
   it('giữ nguyên giá trị của API — KHÔNG còn đường tra dict nào', () => {
-    // `MappingContext` KHÔNG còn `findDrType` ⇒ body KHÔNG THỂ tra dict cho
+    // Không còn ngữ cảnh tra cứu nào ⇒ body KHÔNG THỂ tra dict cho
     // 交货条款 ⇒ giá trị của API đi thẳng vào body.
-    const body = buildManifestBody(manifest, ctx)
+    const body = buildManifestBody(manifest)
     expect(body.dr_type_str).toBe('1')
-    expect(ctx).not.toHaveProperty('findDrType')
   })
 
   it('không có dữ liệu ⇒ để trống', () => {
-    const body = buildManifestBody({ ...manifest, transportTerms: null }, ctx)
+    const body = buildManifestBody({ ...manifest, transportTerms: null })
     expect(body.dr_type_str).toBe('')
   })
 })
@@ -363,7 +340,7 @@ describe('buildManifestBody — 3 bên (khớp theo vai trò)', () => {
       ...manifest,
       cabContacts: [{ type: 0, master: 'NOT SHIPPER' }],
     }
-    const body = buildManifestBody(data, ctx)
+    const body = buildManifestBody(data)
     expect(body.e_shipper_nam).toBe('NOT SHIPPER')
   })
 
@@ -372,7 +349,7 @@ describe('buildManifestBody — 3 bên (khớp theo vai trò)', () => {
       ...manifest,
       cabContacts: [{ type: 1, master: 'NOT CONSIGNEE' }],
     }
-    const body = buildManifestBody(data, ctx)
+    const body = buildManifestBody(data)
     expect(body.e_consignee_nam).toBe('NOT CONSIGNEE')
   })
 
@@ -381,7 +358,7 @@ describe('buildManifestBody — 3 bên (khớp theo vai trò)', () => {
       ...manifest,
       cabContacts: [{ type: 2, master: 'NOTIFY ME' }],
     }
-    const body = buildManifestBody(data, ctx)
+    const body = buildManifestBody(data)
     expect(body.e_notify_nam).toBe('NOTIFY ME')
   })
 
@@ -390,7 +367,7 @@ describe('buildManifestBody — 3 bên (khớp theo vai trò)', () => {
       ...manifest,
       cabContacts: [{ type: false, master: 'SHIPPER' }],
     }
-    const body = buildManifestBody(data, ctx)
+    const body = buildManifestBody(data)
     expect(body.e_shipper_nam).toBe('SHIPPER')
   })
 
@@ -399,7 +376,7 @@ describe('buildManifestBody — 3 bên (khớp theo vai trò)', () => {
       ...manifest,
       cabContacts: [{ type: true, master: 'CONSIGNEE' }],
     }
-    const body = buildManifestBody(data, ctx)
+    const body = buildManifestBody(data)
     expect(body.e_consignee_nam).toBe('CONSIGNEE')
   })
 })
@@ -413,27 +390,27 @@ describe('buildManifestBody — 3 bên (khớp theo vai trò)', () => {
  */
 describe('buildManifestBody — số bill ghi lên site', () => {
   it('ghi số bill CÓ hậu tố piece đúng như operator gõ', () => {
-    const body = buildManifestBody(manifest, ctx, 'CHN4139065P1')
+    const body = buildManifestBody(manifest, 'CHN4139065P1')
     expect(body.bill_nbr).toBe('CHN4139065P1')
   })
 
   it('giữ hậu tố piece P12', () => {
-    const body = buildManifestBody(manifest, ctx, 'ONEYSHAGT1569600P12')
+    const body = buildManifestBody(manifest, 'ONEYSHAGT1569600P12')
     expect(body.bill_nbr).toBe('ONEYSHAGT1569600P12')
   })
 
   it('trim + upper-case (site upper-case mọi field chuỗi trước khi POST)', () => {
-    const body = buildManifestBody(manifest, ctx, '  chn4139065p1 ')
+    const body = buildManifestBody(manifest, '  chn4139065p1 ')
     expect(body.bill_nbr).toBe('CHN4139065P1')
   })
 
   it('fallback sang blNo của API khi operator KHÔNG gõ số bill', () => {
-    const body = buildManifestBody(manifest, ctx, '')
+    const body = buildManifestBody(manifest, '')
     expect(body.bill_nbr).toBe('ONEYSHAGT1569600')
   })
 
   it('không có tham số ⇒ vẫn lấy blNo của API', () => {
-    const body = buildManifestBody(manifest, ctx)
+    const body = buildManifestBody(manifest)
     expect(body.bill_nbr).toBe('ONEYSHAGT1569600')
   })
 })
@@ -520,97 +497,44 @@ describe('toWireValue — null / undefined', () => {
 /**
  * Tên cảng trong body header.
  *
- * Đường API ghi tên ANH (`PortData.nameEn`); dict `getPort()` của site chỉ
- * có tên Trung (`E_PORT_NAM`) ⇒ dict chỉ là NGUỒN DỰ PHÒNG, dùng khi API
- * không có dữ liệu cảng.
+ * Body lấy tên cảng tiếng Anh (`PortData.nameEn`) của API. KHÔNG còn đường
+ * dự phòng từ dict `getPort()` của site — dict đó giờ chỉ dùng để tra MÃ
+ * cảng, và việc tra đó diễn ra SAU khi đã có tên (xem `runManifest`).
  */
 describe('buildManifestBody — tên cảng', () => {
-  /** Dict `getPort()` không tra được cảng nào. */
-  const noDict: MappingContext = {
-    ...ctx,
-    findPort: () => undefined,
-  }
-
-  /** Dict trả tên KHÁC tên của API cho cùng một mã cảng (biến thể có hậu tố). */
-  const CONFLICT_NAMES: Record<string, string> = {
-    CNSHA: '上海港',
-    IDBLW: '勿拉湾港',
-    IDSUB: '泗水港',
-  }
-
-  const conflictingDict: MappingContext = {
-    ...ctx,
-    findPort: (code) => CONFLICT_NAMES[code ?? ''] ?? PORT_NAMES[code ?? ''],
-  }
-
-  it('start_port_nam lấy tên Anh (`nameEn`) từ API khi dict không tra được', () => {
-    const body = buildManifestBody(manifest, noDict)
+  it('start_port_nam lấy tên Anh (`nameEn`) từ API', () => {
+    const body = buildManifestBody(manifest)
     expect(body.start_port_nam).toBe('SHANGHAI')
   })
 
-  it('start_port_nam lấy từ dict `getPort()` khi API không có tên cảng', () => {
+  it('start_port_nam để trống khi API không có tên cảng', () => {
     const data: ManifestApiData = { ...manifest, loadCode: 'IDSUB', loadPortData: null }
-    const body = buildManifestBody(data, ctx)
-    expect(body.start_port_nam).toBe('泗水')
-  })
-
-  it('start_port_nam lấy từ API trước, dict `getPort()` sau', () => {
-    // Dict trả '上海港' cho mã CNSHA ⇒ phải lấy tên của API ('SHANGHAI').
-    const body = buildManifestBody(manifest, conflictingDict)
-    expect(body.start_port_nam).toBe('SHANGHAI')
-  })
-
-  it('start_port_nam để trống khi API lẫn dict đều không có tên', () => {
-    const data: ManifestApiData = { ...manifest, loadCode: 'IDXYZ', loadPortData: null }
-    const body = buildManifestBody(data, ctx)
+    const body = buildManifestBody(data)
+    expect(body.start_port_cod).toBe('IDSUB')
     expect(body.start_port_nam).toBe('')
   })
 
-  it('dischrg_port_nam lấy tên Anh (`nameEn`) từ API khi dict không tra được', () => {
-    const body = buildManifestBody(manifest, noDict)
+  it('dischrg_port_nam lấy tên Anh (`nameEn`) từ API', () => {
+    const body = buildManifestBody(manifest)
     expect(body.dischrg_port_nam).toBe('BELAWAN')
   })
 
-  it('dischrg_port_nam lấy từ dict `getPort()` khi API không có tên cảng', () => {
+  it('dischrg_port_nam để trống khi API không có tên cảng', () => {
     const data: ManifestApiData = { ...manifest, aimPortCode: 'IDSUB', aimPortData: null }
-    const body = buildManifestBody(data, ctx)
+    const body = buildManifestBody(data)
     expect(body.dischrg_port_cod).toBe('IDSUB')
-    expect(body.dischrg_port_nam).toBe('泗水')
-  })
-
-  it('dischrg_port_nam lấy từ API trước, dict `getPort()` sau', () => {
-    // Dict trả '勿拉湾港' cho mã IDBLW ⇒ phải lấy tên của API ('BELAWAN').
-    const body = buildManifestBody(manifest, conflictingDict)
-    expect(body.dischrg_port_nam).toBe('BELAWAN')
-  })
-
-  it('dischrg_port_nam để trống khi API lẫn dict đều không có tên', () => {
-    const data: ManifestApiData = { ...manifest, aimPortCode: 'IDXYZ', aimPortData: null }
-    const body = buildManifestBody(data, ctx)
     expect(body.dischrg_port_nam).toBe('')
   })
 
-  it('dest_port_nam lấy tên Anh (`nameEn`) từ API khi dict không tra được', () => {
-    const body = buildManifestBody(manifest, noDict)
+  it('dest_port_nam lấy tên Anh (`nameEn`) từ API', () => {
+    const body = buildManifestBody(manifest)
     expect(body.dest_port_nam).toBe('BELAWAN')
   })
 
-  it('dest_port_nam lấy từ dict `getPort()` khi API không có tên cảng', () => {
+  it('dest_port_nam để trống khi API không có tên cảng', () => {
     const data: ManifestApiData = { ...manifest, uploadPortData: null }
-    const body = buildManifestBody(data, ctx)
+    const body = buildManifestBody(data)
     expect(body.dest_port_cod).toBe('IDBLW')
-    expect(body.dest_port_nam).toBe('勿拉湾')
-  })
-
-  it('dest_port_nam lấy từ API trước, dict `getPort()` sau', () => {
-    // Dict trả '勿拉湾港' cho mã IDBLW ⇒ phải lấy tên của API ('BELAWAN').
-    const body = buildManifestBody(manifest, conflictingDict)
-    expect(body.dest_port_nam).toBe('BELAWAN')
-  })
-
-  it('dest_port_nam để trống khi API lẫn dict đều không có tên', () => {
-    const data: ManifestApiData = { ...manifest, uploadCode: 'IDXYZ', uploadPortData: null }
-    const body = buildManifestBody(data, ctx)
     expect(body.dest_port_nam).toBe('')
   })
 
@@ -621,7 +545,7 @@ describe('buildManifestBody — tên cảng', () => {
       aimPortCode: 'IDBLW',
       aimPortData: { name: '勿拉湾', nameEn: 'BELAWAN' },
     }
-    const body = buildManifestBody(data, ctx)
+    const body = buildManifestBody(data)
     expect(body.dest_port_cod).toBe('IDBLW')
     expect(body.dest_port_nam).toBe('BELAWAN')
   })
@@ -632,7 +556,7 @@ describe('buildManifestBody — tên cảng', () => {
       uploadCode: '',
       uploadPortData: null,
     }
-    const body = buildManifestBody(data, ctx)
+    const body = buildManifestBody(data)
     expect(body.dest_port_cod).toBe('')
     expect(body.dest_port_nam).toBe('')
   })
@@ -643,8 +567,7 @@ describe('buildManifestBody — tên cảng', () => {
       loadPortData: { name: '上海', nameEn: 'SHANGHAI' },
       uploadPortData: { name: '勿拉湾', nameEn: 'BELAWAN' },
     }
-    // Dict không tra được gì ⇒ tên chỉ có thể đến từ API ⇒ là `nameEn`.
-    const body = buildManifestBody(data, noDict)
+    const body = buildManifestBody(data)
     expect(body.start_port_nam).toBe('SHANGHAI')
     expect(body.dischrg_port_nam).toBe('BELAWAN')
   })
@@ -797,7 +720,7 @@ describe('buildCargoPayload — loại hàng kiểm dịch / nguy hiểm + kiể
 
 describe('buildContainerPayload', () => {
   const container = manifest.cdCon?.[0] as ManifestContainer
-  const payload = buildContainerPayload(container, ctx, 'BILL-123')
+  const payload = buildContainerPayload(container, 'BILL-123')
 
   it('có đúng 10 key', () => {
     expect(Object.keys(payload).sort()).toEqual([...CONTAINER_KEYS].sort())
@@ -819,33 +742,25 @@ describe('buildContainerPayload', () => {
 
   it('để trống field mà API không có dữ liệu', () => {
     expect(payload.cntr_ef_id).toBe('')
-    // Dict của site chỉ chứa chuỗi "20"/"GP" còn `vC`/`cType` là mã số ⇒
-    // KHÔNG đoán.
-    expect(payload.cntr_size_cod).toBe('')
-    expect(payload.cntr_type_cod).toBe('')
   })
 
   it('ghi `bill_no` theo tham số truyền vào, KHÔNG uppercase', () => {
     expect(payload.bill_no).toBe('BILL-123')
-    expect(buildContainerPayload(container, ctx, 'bill-123').bill_no).toBe('bill-123')
+    expect(buildContainerPayload(container, 'bill-123').bill_no).toBe('bill-123')
   })
 
   it('mã 货主箱标志: true = "Y", false = "N", không rõ = ""', () => {
-    expect(buildContainerPayload({ self: true }, ctx, 'B').soc_id).toBe('Y')
-    expect(buildContainerPayload({ self: false }, ctx, 'B').soc_id).toBe('N')
-    expect(buildContainerPayload({ self: null }, ctx, 'B').soc_id).toBe('')
-    expect(buildContainerPayload({}, ctx, 'B').soc_id).toBe('')
+    expect(buildContainerPayload({ self: true }, 'B').soc_id).toBe('Y')
+    expect(buildContainerPayload({ self: false }, 'B').soc_id).toBe('N')
+    expect(buildContainerPayload({ self: null }, 'B').soc_id).toBe('')
+    expect(buildContainerPayload({}, 'B').soc_id).toBe('')
   })
 
-  it('dùng dict của site cho 尺寸 / 箱型 khi tra được', () => {
-    const withDict: MappingContext = {
-      ...ctx,
-      findCntrSize: () => '20',
-      findCntrType: () => 'GP',
-    }
-    const payloadWithDict = buildContainerPayload(container, withDict, 'BILL-123')
-    expect(payloadWithDict.cntr_size_cod).toBe('20')
-    expect(payloadWithDict.cntr_type_cod).toBe('GP')
+  it('dùng `containerTypeMap` cho 尺寸 / 箱型 (KHÔNG tra dict)', () => {
+    // Fixture: `cType` = 2 ⇒ `40HQ` ⇒ 尺寸 "40", 箱型 "HQ".
+    const payloadFromMap = buildContainerPayload(container, 'BILL-123')
+    expect(payloadFromMap.cntr_size_cod).toBe('40')
+    expect(payloadFromMap.cntr_type_cod).toBe('HQ')
   })
 })
 
@@ -874,7 +789,7 @@ describe('lowerKeys', () => {
   })
 
   it('giữ nguyên body (key đã chữ thường sẵn)', () => {
-    const body = buildManifestBody(manifest, ctx)
+    const body = buildManifestBody(manifest)
     expect(lowerKeys(body)).toEqual(body)
   })
 })

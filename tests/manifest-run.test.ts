@@ -53,18 +53,45 @@ interface SiteFakeOptions {
   createDelayMs?: number
   /** Endpoint GET cần trả về mã lỗi 4000 (session hết hạn). */
   failGet?: string
+  /** Endpoint POST cần trả về mã lỗi 4000 (session hết hạn). */
+  failPost?: string
   /** Site từ chối yêu cầu tạo bill (code 5000). */
   failCreate?: boolean
   /** Mã 包装代码 mà site trả về cho dict `getPackageCode/`. */
   packageCode?: string
+  /**
+   * Mã cảng mà site trả về cho dict `getPort/`.
+   *
+   * Chuỗi ⇒ mã đó cho MỌI cảng; object ⇒ mã theo tên cảng tiếng Anh
+   * (khớp `kw` của request).
+   */
+  portCode?: string | Record<string, string>
+}
+
+/** Tên cảng tiếng Anh của `kw` trong URL — '' khi URL không có `kw`. */
+function kwOf(url: string): string {
+  const match = /[?&]kw=([^&]*)/.exec(url)
+  if (!match?.[1]) return ''
+  return decodeURIComponent(match[1])
+}
+
+/** Mã cảng của fake cho tên cảng tiếng Anh `kw`. */
+function portCodeFor(
+  portCode: SiteFakeOptions['portCode'],
+  kw: string,
+): string | undefined {
+  if (portCode === undefined) return undefined
+  if (typeof portCode === 'string') return portCode
+  return portCode[kw] ?? portCode[kw.toUpperCase()]
 }
 
 /**
  * Fetch giả của site.
  *
- * - GET `getTrustCode/` ⇒ `{code:'MAEU', id:'2'}` (khớp `supplyId: 2` của fixture);
+ * - GET `getPort/` ⇒ mã cảng theo tên cảng tiếng Anh trong `kw` (rỗng nếu
+ *   không đặt `portCode`);
  * - GET `getPackageCode/` ⇒ mã 包装代码 (rỗng nếu không đặt `packageCode`);
- * - GET còn lại ⇒ rỗng (dict container và dict cảng cố tình để trống);
+ * - GET còn lại ⇒ rỗng;
  * - POST `cargo/add/` ⇒ dòng hàng;
  * - POST `{base}/` ⇒ lần đầu là TẠO bill, sau đó là LƯU bill.
  */
@@ -94,8 +121,15 @@ function siteFetch(
       if (options.failGet && target.includes(options.failGet)) {
         return okResponse({ code: 4000, data: null, msg: 'session' })
       }
-      if (target.includes('getTrustCode/')) {
-        return okResponse({ code: 2000, data: [{ code: 'MAEU', id: '2' }] })
+      if (target.includes('getPort/')) {
+        const kw = kwOf(target)
+        const code = portCodeFor(options.portCode, kw)
+        if (code === undefined) return okResponse({ code: 2000, data: [] })
+        // Dict của site lưu tên Trung ở `E_PORT_NAM`, tên Anh ở cột khác.
+        return okResponse({
+          code: 2000,
+          data: [{ PORT_COD: code, E_PORT_NAM: '上海', E_PORT_NAM_EN: kw }],
+        })
       }
       if (target.includes('getPackageCode/')) {
         return okResponse({
@@ -107,6 +141,10 @@ function siteFetch(
         })
       }
       return okResponse({ code: 2000, data: [] })
+    }
+
+    if (options.failPost && target.includes(options.failPost)) {
+      return okResponse({ code: 4000, data: null, msg: 'session' })
     }
 
     if (target.includes('cargo/add/')) {
@@ -268,26 +306,30 @@ function hasNullValue(value: unknown): boolean {
 }
 
 describe('runManifest — dựng payload và report', () => {
-  it('load dict của site TRƯỚC khi fetch manifest (body cần dict lúc dựng)', async () => {
+  it('KHÔNG load dict của site trước khi fetch manifest', async () => {
+    const h = harness()
+    await run(h)
+
+    // Dict 承运人 và dict 箱型/尺寸 KHÔNG còn được gọi nữa.
+    for (const call of h.site.calls) {
+      expect(call.url).not.toContain('getTrustCode/')
+      expect(call.url).not.toContain('getCntrCode/')
+    }
+  })
+
+  it('tra MÃ CẢNG đi SAU API (cần tên cảng) và TRƯỚC POST đầu tiên', async () => {
     const h = harness()
     await run(h)
 
     const apiIndex = h.timeline.findIndex((entry) => entry.startsWith('api:'))
-    // Chỉ tính các request GET tới site (dict) — các POST (tạo bill, gắn
-    // hàng, lưu bill) đi sau, đúng thứ tự của luồng.
-    // `getPackageCode/` KHÔNG tính vào đây — nó cần TÊN bao bị của API nên
-    // phải đi SAU (test kế bên kiểm tra thứ tự đó).
-    const dictIndexes = h.timeline
-      .map((entry, index) =>
-        entry.startsWith('site:') && entry.includes('/get') && !entry.includes('getPackageCode/')
-          ? index
-          : -1,
-      )
-      .filter((index) => index >= 0)
+    const portIndex = h.timeline.findIndex((entry) => entry.includes('getPort/'))
+    // POST đầu tiên là bước TẠO bill ⇒ URL của nó là `${SITE_BASE}/`.
+    const firstPostIndex = h.timeline.findIndex((entry) => entry === `site:${SITE_BASE}/`)
+
     expect(apiIndex).toBeGreaterThan(-1)
-    expect(dictIndexes.length).toBeGreaterThan(0)
-    // Mọi request dict phải đi TRƯỚC request tới API manifest.
-    expect(Math.max(...dictIndexes)).toBeLessThan(apiIndex)
+    expect(portIndex).toBeGreaterThan(apiIndex)
+    expect(firstPostIndex).toBeGreaterThan(-1)
+    expect(portIndex).toBeLessThan(firstPostIndex)
   })
 
   it('tra MÃ 包装代码 đi SAU API (cần tên bao bị) và TRƯỚC POST đầu tiên', async () => {
@@ -535,6 +577,75 @@ describe('runManifest — dựng payload và report', () => {
   })
 })
 
+/**
+ * Tra MÃ CẢNG trong dict cảng của site.
+ *
+ * Tra SAU khi đã có tên cảng tiếng Anh của API; tra lỗi thì giữ mã của
+ * API (không được làm hỏng cả lần chạy).
+ */
+describe('runManifest — tra mã cảng', () => {
+  it('tra được mã cảng ⇒ điền vào header', async () => {
+    // Mã của site CỐ TÌNH KHÁC mã của API (`CNSHA`/`IDBLW`) ⇒ test này
+    // chỉ đạt khi `fillPortCodes` thật sự ghi kết quả tra vào header.
+    const h = harness(undefined, {
+      portCode: { SHANGHAI: 'SITE-SHA', BELAWAN: 'SITE-BLW' },
+    })
+    await run(h)
+
+    const createPost = postsOf(h)[0]
+    expect(createPost?.body?.start_port_cod).toBe('SITE-SHA')
+    expect(createPost?.body?.dischrg_port_cod).toBe('SITE-BLW')
+    expect(createPost?.body?.dest_port_cod).toBe('SITE-BLW')
+  })
+
+  it('mã cảng đã điền ⇒ KHÔNG báo field trống', async () => {
+    const h = harness(undefined, {
+      portCode: { SHANGHAI: 'CNSHA', BELAWAN: 'IDBLW' },
+    })
+    const result = await run(h)
+
+    const props = result.items.map((entry) => entry.prop)
+    expect(props).not.toContain('START_PORT_COD')
+    expect(props).not.toContain('DISCHRG_PORT_COD')
+    expect(props).not.toContain('DEST_PORT_COD')
+  })
+
+  it('tra MỘT LẦN cho mỗi tên cảng (SHANGHAI + BELAWAN ⇒ 2 request)', async () => {
+    const h = harness(undefined, {
+      portCode: { SHANGHAI: 'CNSHA', BELAWAN: 'IDBLW' },
+    })
+    await run(h)
+
+    const portCalls = h.site.calls.filter((call) => call.url.includes('getPort/'))
+    expect(portCalls).toHaveLength(2)
+    // 卸货港 và 交货地 cùng tên (BELAWAN) ⇒ chỉ tra MỘT lần.
+    expect(portCalls.map((call) => kwOf(call.url)).sort()).toEqual(['BELAWAN', 'SHANGHAI'])
+  })
+
+  it('dict KHÔNG trả mã ⇒ giữ mã của API', async () => {
+    const h = harness(undefined, {})
+    const result = await run(h)
+
+    const createPost = postsOf(h)[0]
+    expect(createPost?.body?.start_port_cod).toBe('CNSHA')
+    expect(createPost?.body?.dischrg_port_cod).toBe('IDBLW')
+    expect(createPost?.body?.dest_port_cod).toBe('IDBLW')
+    expect(result.ok).toBe(true)
+  })
+
+  it('tra mã cảng LỖI ⇒ giữ mã của API, run vẫn thành công', async () => {
+    // Site trả 4000 cho `getPort/` ⇒ lỗi bị nuốt, mã của API giữ nguyên.
+    const h = harness(undefined, { failGet: 'getPort/' })
+    const result = await run(h)
+
+    const createPost = postsOf(h)[0]
+    expect(createPost?.body?.start_port_cod).toBe('CNSHA')
+    expect(createPost?.body?.dischrg_port_cod).toBe('IDBLW')
+    expect(result.ok).toBe(true)
+    expect(result.written).toBe(true)
+  })
+})
+
 describe('runManifest — ghi lên site', () => {
   it('gửi đúng 3 POST theo thứ tự create → cargo → save', async () => {
     const h = harness()
@@ -659,7 +770,9 @@ describe('runManifest — lỗi', () => {
   })
 
   it('lỗi session của site (code 4000) ⇒ message đúng', async () => {
-    const h = harness({ status: 1, data: manifest }, { failGet: 'getTrustCode/' })
+    // Session hết hạn lộ ra ở bước TẠO bill — hai lần tra dict (cảng, bao bị)
+    // cố tình nuốt lỗi để không làm hỏng cả lần chạy.
+    const h = harness({ status: 1, data: manifest }, { failPost: `${SITE_BASE}/` })
     const result = await run(h)
 
     expect(result.ok).toBe(false)

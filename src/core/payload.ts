@@ -4,7 +4,6 @@ import {
   DANGER_FIELDS,
   payWayOf,
   TEMP_FIELDS,
-  type MappingContext,
   containerTypeMap,
 } from './field-meta'
 import { billNoAsWritten } from './bill-no'
@@ -160,7 +159,6 @@ function billNbrOf(data: ManifestApiData, operatorBlNo?: string): string {
 // Build the site body for the manifest API.
 export function buildManifestBody(
   data: ManifestApiData,
-  ctx: MappingContext,
   operatorBlNo?: string,
 ): ManifestData {
   const aimCode = str(data.aimPortCode)
@@ -173,7 +171,7 @@ export function buildManifestBody(
 
   return {
     cdgoods: (data.cdgoods ?? []).map((goods) => buildCargoPayload(goods, '')),
-    cntr_list: (data.cdCon ?? []).map((container) => buildContainerPayload(container, ctx, '')),
+    cntr_list: (data.cdCon ?? []).map((container) => buildContainerPayload(container, '')),
     bill_no: '',
     bill_nbr: billNbrOf(data, operatorBlNo),
     e_ship_nam: str(data.shipName),
@@ -184,14 +182,13 @@ export function buildManifestBody(
     sign_place_cod: '',
     sign_place_str: '',
     start_port_cod: str(data.loadCode),
-    start_port_nam: str(data.loadPortData?.nameEn) || str(ctx.findPort(data.loadCode ?? undefined)),
+    start_port_nam: str(data.loadPortData?.nameEn),
     dischrg_port_cod: aimCode,
-    dischrg_port_nam:
-      str(data.aimPortData?.nameEn) || str(ctx.findPort(aimCode ?? undefined)),
+    dischrg_port_nam: str(data.aimPortData?.nameEn),
     trans_port_cod: '',
     trans_port_nam: '',
     dest_port_cod: uploadCode,
-    dest_port_nam: str(data.uploadPortData?.nameEn) || str(ctx.findPort(uploadCode)),
+    dest_port_nam: str(data.uploadPortData?.nameEn),
     e_shipper_nam: str(shipper?.master),
     shipper_add_str: str(shipper?.address?.slice(-70)),
     shipper_country_cod: str(shipper?.country),
@@ -267,7 +264,6 @@ export function buildCargoPayload(goods: ManifestCargo, billNo: string): Record<
 // Build a container row to the manifest body.
 export function buildContainerPayload(
   container: ManifestContainer,
-  ctx: MappingContext,
   billNo: string,
 ): Record<string, unknown> {
   return {

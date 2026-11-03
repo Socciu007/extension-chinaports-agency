@@ -4,15 +4,17 @@
  *
  * Luồng:
  *
- *   1) `loadSiteDicts`      — lấy dict của site (承运人, 箱型, 尺寸, cảng…)
- *   2) `createMappingContext`— gói dict thành `ctx` cho việc tra cứu
- *   3) `fetchManifest`      — lấy dữ liệu manifest từ API bên ngoài VÀ dựng
+ *   1) `fetchManifest`      — lấy dữ liệu manifest từ API bên ngoài VÀ dựng
  *                             luôn body của site (45 key)
+ *   2) tra mã cảng          — tra MÃ cảng (装货港/卸货港/交货地) trong dict
+ *                             cảng của site, SAU khi đã có tên cảng tiếng Anh
+ *   3) tra mã bao bì        — tra MÃ 包装代码 trong dict bao bì của site
  *   4) dựng report          — liệt kê field BỊ BỎ TRỐNG (kèm lý do)
  *   5) ghi lên site         — tạo bill → gắn dòng hàng → lưu bill + container
  *
- * Dict của site phải load TRƯỚC khi fetch: body cần tên cảng và mã 承运人
- * từ dict ngay lúc dựng.
+ * KHÔNG load dict của site trước: dict chỉ CÓ Ý NGHĨA khi đã biết tên
+ * (tên bao bị, tên cảng) ⇒ cả hai dict đều được tra SAU khi fetch, khi tên
+ * đã có trong tay.
  *
  * `runManifest` KHÔNG BAO GIỜ reject: mọi lỗi được đổi thành
  * `ManifestRunResult` với `ok: false` + `message` tiếng Anh.
@@ -22,7 +24,8 @@
  * - KHÔNG gọi `send/`, `upload/`, `deleteBill/`, `downloadTemplate/` của site;
  * - manifest chỉ được lưu dạng NHÁP (`is_all` = "1"), KHÔNG "2" (发送);
  * - mã bill do server gán lấy NGUYÊN VEN (không trim, không uppercase);
- * - tên cảng lấy từ `PortData.nameEn` (tiếng Anh); dict `getPort()` chỉ là dự phòng (tên Trung).
+ * - tên cảng lấy từ `PortData.nameEn` (tiếng Anh); mã cảng lấy từ API, rồi
+ *   tra dict cảng của site để thay khi tra được.
  */
 import { describeApiError, fetchManifest, ManifestApiError } from './api'
 import { HTTP_TIMEOUT_MS } from './http'
@@ -45,10 +48,9 @@ import {
 } from './field-meta'
 import type { FillScope, ReportItem } from './protocol'
 import {
-  createMappingContext,
   describeSiteError,
   fetchPackageCode,
-  loadSiteDicts,
+  fetchPortCode,
   SiteApiError,
   type SiteFetchOptions,
 } from './site-api'
@@ -405,6 +407,60 @@ async function fillPackageCodes(body: ManifestData, options: SiteFetchOptions): 
   }
 }
 
+/**
+ * The header fields that hold a port NAME and the field that holds its code.
+ */
+type PortNameKey = 'start_port_nam' | 'dischrg_port_nam' | 'dest_port_nam'
+type PortCodeKey = 'start_port_cod' | 'dischrg_port_cod' | 'dest_port_cod'
+
+const PORT_CODE_PAIRS: ReadonlyArray<readonly [PortNameKey, PortCodeKey]> = [
+  ['start_port_nam', 'start_port_cod'],
+  ['dischrg_port_nam', 'dischrg_port_cod'],
+  ['dest_port_nam', 'dest_port_cod'],
+]
+
+/** The (trimmed) port NAME of a header field — '' when the field is blank. */
+function portNameOf(body: ManifestData, key: PortNameKey): string {
+  const value = body[key]
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+/**
+ * Fill the port codes (装货港 / 卸货港 / 交货地) from the site's port dictionary.
+ *
+ * Each port NAME is looked up ONCE — the same name in two ports shares the
+ * result.
+ *
+ * A failed lookup (site error / network error) leaves the code of the API
+ * untouched ⇒ the run continues with what the API provided. One broken
+ * dictionary must NOT break the whole run.
+ */
+async function fillPortCodes(body: ManifestData, options: SiteFetchOptions): Promise<void> {
+  const names = new Set<string>()
+  for (const [nameKey] of PORT_CODE_PAIRS) {
+    const name = portNameOf(body, nameKey)
+    if (name !== '') names.add(name)
+  }
+  if (names.size === 0) return
+
+  const codes = new Map<string, string>()
+  for (const name of names) {
+    try {
+      const code = await fetchPortCode(name, options)
+      if (code !== undefined && code !== '') codes.set(name, code)
+    } catch {
+      // Keep the code of the API — the lookup is only a better source.
+    }
+  }
+
+  for (const [nameKey, codeKey] of PORT_CODE_PAIRS) {
+    const name = portNameOf(body, nameKey)
+    if (name === '') continue
+    const code = codes.get(name)
+    if (code !== undefined) body[codeKey] = code
+  }
+}
+
 // Run the entire manifest flow.
 export async function runManifest(options: ManifestRunOptions): Promise<ManifestRunResult> {
   const steps: string[] = []
@@ -468,22 +524,19 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
       })
     }
 
-    // The site dictionaries are loaded FIRST — the body needs the carrier code
-    // and the port-name fallback from the dictionaries at the moment it is built.
-    checkDeadline('loading the site dictionaries')
-    const dicts = await loadSiteDicts(siteOptions())
-    const ctx = createMappingContext(dicts)
-    steps.push('Loaded the site dictionaries')
-
     checkDeadline('fetching the manifest data')
     const { body, apiBillNo } = await fetchManifest(options.blNo, {
       baseUrl: options.apiBase,
       fetchImpl: options.fetchImpl,
       timeoutMs: requestTimeout(),
-      ctx,
       operatorBlNo: options.blNo,
     })
     steps.push('Fetched the manifest data from external API (eb)')
+
+    // The port codes: look them up on the site — the names are known now.
+    checkDeadline('looking up the port codes')
+    await fillPortCodes(body, siteOptions())
+    steps.push('Looked up the port codes on the site')
 
     // The bill number as written by the operator.
     const writtenBillNo = body.bill_nbr

@@ -1,6 +1,5 @@
 import { fetchJsonWithTimeout, HttpTimeoutError, type JsonResponse } from './http'
 import { billNoAsWritten, normalizeBlNo } from './bill-no'
-import type { MappingContext } from './field-meta'
 import { buildManifestBody } from './payload'
 import type {
   ManifestApiData,
@@ -90,16 +89,15 @@ function parseEnvelopeData(json: unknown): ManifestApiData {
   }
 }
 
-// Options for `parseEnvelope` — site dict + operator bill number.
+// Options for `parseEnvelope` — operator bill number.
 export interface ParseEnvelopeOptions {
-  ctx: MappingContext
   operatorBlNo?: string
 }
 
 // Unwrap the API envelope ⇒ the site body (45 keys).
 export function parseEnvelope(json: unknown, options: ParseEnvelopeOptions): ManifestData {
   const raw = parseEnvelopeData(json)
-  return buildManifestBody(raw, options.ctx, options.operatorBlNo)
+  return buildManifestBody(raw, options.operatorBlNo)
 }
 
 export interface FetchManifestOptions extends ParseEnvelopeOptions {
@@ -139,7 +137,7 @@ export async function fetchManifest(
   }
   const raw = parseEnvelopeData(res.data)
   return {
-    body: buildManifestBody(raw, options.ctx, options.operatorBlNo),
+    body: buildManifestBody(raw, options.operatorBlNo),
     apiBillNo: billNoAsWritten(raw.blNo ?? ''),
   }
 }
