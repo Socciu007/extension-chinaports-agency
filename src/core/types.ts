@@ -84,6 +84,7 @@ export interface ManifestApiData {
   aimPortData?: PortInfo | null
   sea_order?: {
     ebNo?: string | null
+    shipCompany?: number | null
     sea_order_bind?: { id?: number; supplyId?: number } | null
   } | null
   cabContacts?: ManifestContact[] | null

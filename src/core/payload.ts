@@ -5,6 +5,7 @@ import {
   payWayOf,
   TEMP_FIELDS,
   containerTypeMap,
+  shipCompanyMap
 } from './field-meta'
 import { billNoAsWritten } from './bill-no'
 import type {
@@ -176,7 +177,7 @@ export function buildManifestBody(
     bill_nbr: billNbrOf(data, operatorBlNo),
     e_ship_nam: str(data.shipName),
     out_voyage_no: str(data.voyage),
-    trust_cod: 'ONE',
+    trust_cod: shipCompanyMap[data.sea_order?.shipCompany as keyof typeof shipCompanyMap] || '',
     pay_way_id: payWayOf(data.payType)?.code ?? '',
     dr_type_str: str(data.transportTerms) === '1' ? 'CY/CY' : 'CY/CY',
     sign_place_cod: '',

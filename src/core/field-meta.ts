@@ -48,10 +48,7 @@ export function contactRole(contact: ManifestContact): ContactRole | null {
   return null
 }
 
-/**
- * Loại hàng: S = thường, D = hàng nguy hiểm, R = hàng kiểm dịch (refrigerated/quarantine),
- * G = vừa nguy hiểm vừa kiểm dịch.
- */
+// Cargo kind: S = normal, D = dangerous, R = refrigerated/quarantine, G = dangerous and refrigerated/quarantine
 export type CargoKind = 'S' | 'D' | 'R' | 'G'
 
 export function deriveCargoKind(goods: ManifestCargo): CargoKind {
@@ -84,17 +81,20 @@ export const containerTypeMap = {
   '16': '40GD'
 };
 
-/**
- * Field BẮT BUỘC của site ở form đầu (FACT 1 của plan live-site-alignment).
- *
- * `START_PORT_COD`/`DISCHRG_PORT_COD` cũng BẮT BUỘC, và ở đường API chúng
- * được điền thẳng bởi `buildManifestBody` (mã cảng lấy từ `loadCode`/
- * `uploadCode`) ⇒ cần nằm trong danh sách này để report báo "còn trống" khi
- * API không có mã cảng.
- *
- * `SHIPPER_COUNTRY_COD` và toàn bộ field 通知人 KHÔNG nằm trong danh sách này:
- * site không bắt buộc chúng.
- */
+// Map ship company to the site's trust code.
+export const shipCompanyMap = {
+  1: 'APL',
+  6: 'CMA',
+  3: 'ESL',
+  30: 'ONE',
+  35: 'PIL',
+  39: 'RCL',
+  206: 'SLS',
+  154: 'VOL',
+  40: 'WHL',
+}
+
+// Required fields for the header
 export const REQUIRED_HEADER: readonly string[] = [
   'BILL_NBR',
   'E_SHIP_NAM',
@@ -113,30 +113,13 @@ export const REQUIRED_HEADER: readonly string[] = [
   'DISCHRG_PORT_COD',
 ]
 
-/**
- * 3 bên (发货人 / 收货人 / 通知人) và 3 kênh liên hệ của mỗi bên.
- *
- * `*Key` là key CHỮ THƯỜNG trong payload header; prop VIẾT HOA trong report
- * (vd `SHIPPER_TE_STR`) suy ra từ chính key đó (`phoneKey.toUpperCase()`) ⇒
- * không lưu cùng một sự thật ở hai chỗ.
- *
- * Site kiểm tra ở form (client-side) rằng mỗi bên phải có ÍT NHẤT một kênh
- * liên hệ (电话 / EMAIL / 传真). Extension chỉ điền được 电话 ⇒ một bên
- * không có phone thì cả ba kênh đều trống ⇒ operator phải điền tay.
- *
- * Đường API của extension đi KHÔNG qua form ⇒ KHÔNG biết server có từ chối
- * manifest đó hay không ⇒ report chỉ nói đúng sự thật ĐÃ BIẾT (operator phải
- * điền tay một kênh liên hệ), KHÔNG nói "sẽ bị từ chối".
- */
+// Contact channels for the parties
 export const PARTY_CONTACT_CHANNELS: Record<
   0 | 1 | 2,
   {
-    /** key CHỮ THƯỜNG trong payload header của ô điện thoại. */
-    phoneKey: string
-    /** key CHỮ THƯỜNG trong payload header của ô email. */
-    emailKey: string
-    /** key CHỮ THƯỜNG trong payload header của ô fax. */
-    faxKey: string
+    phoneKey: string // key lowercase in the payload header of the phone field
+    emailKey: string // key lowercase in the payload header of the email field
+    faxKey: string // key lowercase in the payload header of the fax field
   }
 > = {
   0: {
@@ -156,16 +139,7 @@ export const PARTY_CONTACT_CHANNELS: Record<
   },
 }
 
-/**
- * Các bên KHÔNG có kênh liên hệ nào (điện thoại / email / fax đều trống).
- *
- * Trả về TÊN FIELD VIẾT HOA của ô điện thoại của mỗi bên như vậy — đó là
- * prop mà report đánh dấu là BẮT BUỘC (xem `partyContactRequiredNote`).
- * Email và fax giữ note riêng của chúng và vẫn là TUỲ CHỌN.
- *
- * Đọc thẳng từ PAYLOAD header ⇒ đúng với dữ liệu sẽ gửi đi, không đoán
- * theo tên field.
- */
+// Parties without contact channels
 export function partiesWithoutContactChannel(
   header: Record<string, unknown>,
 ): ReadonlySet<string> {
@@ -183,7 +157,7 @@ export function partiesWithoutContactChannel(
   return withoutContact
 }
 
-/** Field BẮT BUỘC của site theo từng loại hàng (FACT 5.3 của plan live-site-alignment). */
+// Required fields for the cargo
 export const REQUIRED_BASE: readonly string[] = [
   'CARGO_KIND_COD',
   'PACKAGE_COD',
@@ -202,7 +176,7 @@ export const REQUIRED_DANGER: readonly string[] = [
 ]
 export const REQUIRED_COLD: readonly string[] = ['TEMP_ID', 'SET_TEMP_NUM']
 
-/** Field BẮT BUỘC của site trong bảng container (FACT 5.3 + FACT 6). */
+// Required fields for the container
 export const REQUIRED_CONTAINER: readonly string[] = [
   'CNTR_NO',
   'CNTR_SIZE_COD',
@@ -219,9 +193,7 @@ export const REQUIRED_BY_KIND: Record<CargoKind, readonly string[]> = {
   G: [...REQUIRED_BASE, ...REQUIRED_DANGER, ...REQUIRED_COLD],
 }
 
-/**
- * Field `dang_*` + `danger_*` — site xoá & disable trừ khi loại hàng là `D`/`G`.
- */
+// Dangerous fields
 export const DANGER_FIELDS: readonly string[] = [
   'dang_class_nam',
   'dang_page_no',
@@ -237,16 +209,10 @@ export const DANGER_FIELDS: readonly string[] = [
   'danger_fx_str',
 ]
 
-/** Field nhiệt độ — site xoá trừ khi loại hàng là `R`/`G`. */
+// Temperature fields for the cargo when the cargo kind is R or G
 export const TEMP_FIELDS: readonly string[] = ['temp_id', 'set_temp_num']
 
-/**
- * Nhãn hiển thị của field header — theo TÊN TIẾNG TRUNG của site.
- *
- * Key là TÊN FIELD VIẾT HOA của site (`prop`), tức `payload[key.toLowerCase()]`.
- * Nhãn tiếng Trung giữ nguyên vì đó là thứ operator thấy trên site; phần
- * chú thích tiếng Anh giúp tìm đúng ô khi site hiển thị tiếng Trung.
- */
+// Labels for the header fields
 export const HEADER_LABELS: Record<string, string> = {
   BILL_NO: 'Site bill ID',
   BILL_NBR: '提单号',
@@ -286,8 +252,6 @@ export const HEADER_LABELS: Record<string, string> = {
   NOTIFY_EM_STR: '通知人 (email)',
   NOTIFY_FX_STR: '通知人 (fax)',
   TOTAL_PIECE_NUM: 'Total pieces',
-  // Header KHÔNG có nhãn của site cho các ô tổng (site tự tính) ⇒ đơn vị
-  // chọn theo đại lượng: tổng trọng lượng = 货物毛重 ⇒ kg.
   TOTAL_GWEIGHT_TON: 'Total gross weight (kg)',
   TOTAL_GVOL_NUM: 'Total volume (m³)',
   MANDATORY_CHECK: 'Mandatory check',
@@ -295,12 +259,7 @@ export const HEADER_LABELS: Record<string, string> = {
   IS_ALL: 'Save mode',
 }
 
-/**
- * Nhãn hiển thị của field dòng hàng — theo TÊN TIẾNG TRUNG của site.
- *
- * Đơn vị trọng lượng là `kg`: site ghi 公斤 (货物毛重（公斤）/ 货物净重（公斤）)
- * và extension ghi đúng giá trị KG của API ⇒ ghi "ton" sẽ lệch 1000 lần.
- */
+// Labels for the cargo fields
 export const CARGO_LABELS: Record<string, string> = {
   BILL_NO: 'Site bill ID',
   PIECE_NUM: '包装件数',
@@ -329,11 +288,7 @@ export const CARGO_LABELS: Record<string, string> = {
   SET_TEMP_NUM: '温度设置 (°C)',
 }
 
-/**
- * Nhãn hiển thị của field container — theo TÊN TIẾNG TRUNG của site.
- *
- * `WEIGH_TON`: site ghi 箱内货重（公斤） ⇒ đơn vị là `kg`.
- */
+// Labels for the container fields
 export const CONTAINER_LABELS: Record<string, string> = {
   BILL_NO: 'Site bill ID',
   CNTR_NO: '箱号',
@@ -347,12 +302,7 @@ export const CONTAINER_LABELS: Record<string, string> = {
   SOC_ID: '货主箱标志',
 }
 
-/**
- * Note RIÊNG cho các field mà API không có dữ liệu.
- *
- * Key là TÊN FIELD VIẾT HOA của site. Note này thay cho note chung — vì
- * operator cần biết VÌ SAO ô đó trống, không chỉ biết nó trống.
- */
+// Notes for the fields that the API does not provide
 export const BLANK_NOTES: Record<string, string> = {
   SHIPPER_EM_STR: 'The API does not provide email addresses — fill this in by hand on the site.',
   SHIPPER_FX_STR: 'The API does not provide fax numbers — fill this in by hand on the site.',
@@ -397,80 +347,32 @@ export const BLANK_NOTES: Record<string, string> = {
   SET_TEMP_NUM: 'The API does not provide the temperature setting — fill this in by hand on the site.',
 }
 
-/**
- * Note chung cho field BẮT BUỘC bị trống.
- *
- * Dùng khi `BLANK_NOTES` không có mục riêng cho field đó.
- */
+// Note for the required fields that the API does not provide
 export function requiredBlankNote(prop: string, label: string): string {
   return `${label} (${prop}) is required by the site but the API does not provide it — fill it in by hand on the site.`
 }
 
-/**
- * Note chung cho field TUỲ CHỌN bị trống.
- *
- * Dùng khi `BLANK_NOTES` không có mục riêng cho field đó.
- */
+// Note for the optional fields that the API does not provide
 export function optionalBlankNote(prop: string, label: string): string {
   return `${label} (${prop}) is not provided by the API — it was left blank on purpose.`
 }
 
-/**
- * Note cho ô điện thoại của bên mà KHÔNG có kênh liên hệ nào.
- *
- * Site kiểm tra ở form: mỗi bên phải có ÍT NHẤT một kênh liên hệ
- * (电话 / EMAIL / 传真). Extension chỉ điền được 电话 ⇒ bên không có phone
- * thì cả ba kênh đều trống ⇒ operator phải điền tay.
- *
- * KHÔNG nói "sẽ bị từ chối" — đường API đi không qua form nên KHÔNG biết
- * server có từ chối hay không.
- */
+// Note for the party contact that the API does not provide
 export function partyContactRequiredNote(prop: string, label: string): string {
   return `${label} (${prop}) is required by the site — the site expects each party to have at least one of phone, email or fax. The API only provides the phone, and this party has none — fill in a contact channel for this party by hand on the site.`
 }
 
-/**
- * Note cho field mà API trả về giá trị KHÔNG parse được.
- *
- * Khác hẳn "API không có giá trị này": ở đây API CÓ dữ liệu nhưng extension
- * không đọc được nó thành số (vd `"22,400"`) ⇒ phải nói đúng lý do, không
- * nói sai thành "API không cung cấp".
- */
+// Note for the field that the API returned a value that is not a valid number
 export function unparsableNumberNote(prop: string, label: string): string {
   return `${label} (${prop}) could not be parsed — the API returned a value that is not a valid number, so the extension could not fill this field in. Check the value on the site and fill it in by hand if needed.`
 }
 
-/**
- * Giá trị trong PAYLOAD mà extension KHÔNG parse được (NaN) không?
- *
- * `NaN` là một trường hợp RIÊNG: API CÓ trả giá trị nhưng extension không
- * đọc được nó thành số ⇒ khác hẳn "API không có giá trị này".
- */
+// Whether the value in the payload is unparsable
 export function isUnparsablePayloadValue(value: unknown): boolean {
   return typeof value === 'number' && Number.isNaN(value)
 }
 
-/**
- * Giá trị trong PAYLOAD có bị bỏ trống không?
- *
- * KHÁC `isBlank` ở trên, và khác CÓ CHỦ ĐÍCH:
- * - `isBlank` đọc DỮ LIỆU THÔ của API ⇒ số `0` là một giá trị THẬT
- *   (vd `dangerClass = 0` ⇒ không phải hàng nguy hiểm);
- * - hàm này đọc PAYLOAD đã dựng ⇒ số `0` là cách `buildCargoPayload` /
- *   `buildContainerPayload` ghi "API không có giá trị này" (0 kiện / 0 tấn /
- *   0 m³ thì vô nghĩa).
- *
- * Vì vậy HAI quy tắc KHÔNG được gộp làm một. Dùng nhầm quy tắc nào cũng
- * làm sai: gộp vào `isBlank` thì hàng có `dangerClass = 0` bị coi là hàng
- * nguy hiểm; dùng `isBlank` ở đây thì field số `0` không bao giờ được báo là
- * trống.
- *
- * `null`/`undefined` cũng là trống — payload không bao giờ chứa chúng, nhưng
- * nếu có thì field đó rõ ràng là chưa có giá trị.
- *
- * `NaN` cũng là trống — nhưng là một trường hợp RIÊNG: API CÓ trả giá trị
- * mà extension không parse được (xem `isUnparsablePayloadValue`).
- */
+// Whether the value in the payload is blank
 export function isBlankPayloadValue(value: unknown): boolean {
   if (value === null || value === undefined) return true
   if (typeof value === 'string') return value.trim() === ''
@@ -478,16 +380,7 @@ export function isBlankPayloadValue(value: unknown): boolean {
   return false
 }
 
-/**
- * Nhãn hiển thị của field — fallback về chính tên field.
- *
- * `prop` là TÊN FIELD VIẾT HOA (giống `prop` trong report). Key của PAYLOAD thì
- * là CHỮ THƯỜNG ⇒ caller phải uppercase trước khi gọi.
- *
- * Scope dùng union viết TAY chứ KHÔNG import `FillScope` từ `protocol.ts`:
- * `protocol.ts` → `manifest-run.ts` → `field-meta.ts` ⇒ import kiểu sẽ tạo
- * vòng.
- */
+// Label for the field
 export function labelOf(
   scope: 'header' | 'cargo' | 'container',
   prop: string,
