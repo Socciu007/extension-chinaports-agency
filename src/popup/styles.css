@@ -90,7 +90,6 @@ button.busy {
   font-weight: 600;
 }
 
-.error,
 .settings-error {
   margin-top: 8px;
   padding: 8px;
@@ -100,80 +99,54 @@ button.busy {
   white-space: pre-wrap;
 }
 
-.blocking {
+/*
+  The ONE message of the last run — one colour per kind:
+  red = the run failed, yellow = the run finished but something needs the
+  operator, green = the draft was created and saved.
+*/
+.message {
   margin-top: 8px;
   padding: 8px;
   border-radius: 6px;
+}
+
+.message-error {
+  background: #ffebe9;
+  color: #82071e;
+}
+
+.message-warning {
   background: #fff8c5;
   color: #633c01;
 }
 
-.blocking-title {
-  margin: 0 0 4px;
-  font-weight: 600;
-}
-
-.blocking ul {
-  margin: 0;
-  padding-left: 18px;
-}
-
-.blocking-label {
-  font-weight: 600;
-}
-
-.blocking-prop {
-  margin-left: 6px;
-  opacity: 0.75;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 11px;
-}
-
-.blocking-note {
-  display: block;
-  margin-top: 2px;
-  font-size: 11px;
-}
-
-/* Khe CẢNH BÁO — run xong nhưng còn field bắt buộc bị bỏ trống. */
-.blocked {
-  margin-top: 8px;
-  padding: 8px;
-  border-radius: 6px;
-  background: #fff8c5;
-  color: #633c01;
-}
-
-.blocked-message {
-  margin: 0;
-}
-
-/* Trạng thái bill trên site. */
-.bill-status {
-  margin-top: 8px;
-  padding: 8px;
-  border-radius: 6px;
+.message-success {
   background: #dafbe1;
   color: #0a5227;
 }
 
-.bill-line {
+.message-main {
   margin: 0;
-}
-
-.bill-line + .bill-line {
-  margin-top: 4px;
-}
-
-/* Cảnh báo "đừng tạo manifest khác cho số bill này" — nổi hơn phần trạng thái bill. */
-.double-write {
-  margin: 6px 0 0;
-  padding-top: 6px;
-  border-top: 1px solid #0a522733;
   font-weight: 600;
 }
 
-.summary {
-  margin-top: 8px;
-  color: #57606a;
+.message-line {
+  margin: 0;
+}
+
+/* The gap between the headline and the first line under it. */
+.message-main + .message-line {
+  margin-top: 4px;
+}
+
+.message-line + .message-line {
+  margin-top: 4px;
+}
+
+/* The closing warning — separated and bolder than the lines above it. */
+.message-note {
+  margin: 6px 0 0;
+  padding-top: 6px;
+  border-top: 1px solid #0000001f;
+  font-weight: 600;
 }

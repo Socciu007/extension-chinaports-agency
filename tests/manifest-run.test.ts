@@ -572,7 +572,7 @@ describe('runManifest — dựng payload và report', () => {
     expect(result.ok).toBe(true)
     expect(result.blocked).toBe(true)
     expect(result.message).toBe(
-      '5 field(s) required by the site are not provided by the API — they are listed in the report and must be filled in by hand on the site.',
+      '5 field(s) required by the site are not provided by the API — fill them in by hand on the site.',
     )
   })
 

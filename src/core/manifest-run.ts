@@ -247,7 +247,7 @@ function partialStateSentence(
 
 /** Message khi run thành công nhưng còn field BẮT BUỘC bị trống. */
 function blockedMessage(requiredCount: number): string {
-  return `${requiredCount} field(s) required by the site are not provided by the API — they are listed in the report and must be filled in by hand on the site.`
+  return `${requiredCount} field(s) required by the site are not provided by the API — fill them in by hand on the site.`
 }
 
 // A step describing a bill number mismatch

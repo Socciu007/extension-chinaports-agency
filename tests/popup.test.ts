@@ -202,7 +202,7 @@ describe('popup — chạy manifest qua API', () => {
     await wrapper.find('input[type="text"]').trigger('keyup.enter')
     await flushPromises()
 
-    expect(wrapper.find('.error').text()).toBe('Enter a bill of lading number first.')
+    expect(wrapper.find('.message-error').text()).toBe('Enter a bill of lading number first.')
     expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(0)
   })
 
@@ -357,7 +357,7 @@ describe('popup — lỗi vận chuyển', () => {
       await wrapper.find('input[type="text"]').setValue('BL123')
       await clickCreate(wrapper)
 
-      expect(wrapper.find('.error').text()).toBe(
+      expect(wrapper.find('.message-error').text()).toBe(
         'Could not reach the page. Open the manifest declaration page, reload it, and try again.',
       )
       // Chi tiết kỹ thuật phải nằm ở console — không bị nuốt.
@@ -369,7 +369,7 @@ describe('popup — lỗi vận chuyển', () => {
 })
 
 describe('popup — hiện kết quả của lần chạy', () => {
-  it('kết quả thành công ⇒ hiện số bill + số field trống, KHÔNG hiện các bước', async () => {
+  it('kết quả thành công ⇒ hiện ĐÚNG MỘT thông báo MÀU XANH, KHÔNG hiện các bước', async () => {
     // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
     store.createOnSite = true
     sendMessage = async () =>
@@ -413,14 +413,34 @@ describe('popup — hiện kết quả của lần chạy', () => {
     expect(wrapper.text()).not.toContain('Fetched the manifest data')
     expect(wrapper.text()).not.toContain('Created the manifest bill on the site')
 
-    // Số bill do site gán.
-    expect(wrapper.text()).toContain('Bill number: BILL-1')
+    // EXACTLY ONE message — and it is GREEN.
+    expect(wrapper.findAll('.message')).toHaveLength(1)
+    const message = wrapper.find('.message')
+    expect(message.classes()).toContain('message-success')
+    expect(wrapper.find('.message-error').exists()).toBe(false)
+    expect(wrapper.find('.message-warning').exists()).toBe(false)
 
-    // Đếm field trống: required và optional tách riêng.
-    const summary = wrapper.find('.summary').text()
-    expect(summary).toContain('cargo: 1')
-    expect(summary).toContain('containers: 1')
-    expect(summary).toContain('blank fields: 1 required, 1 optional')
+    // The bill number the site assigned + the reminder to reload the manifest list.
+    expect(message.text()).toContain(
+      'The manifest was created on the site and saved as a draft (暂存).',
+    )
+    expect(message.text()).toContain('Bill number: BILL-1')
+    expect(message.text()).toContain(
+      'Refresh the manifest list on the site to see the new draft.',
+    )
+
+    // The "do not create another manifest for this bill" warning is the last line.
+    expect(wrapper.find('.message-note').text()).toContain(
+      'Do not create another manifest for this bill number.',
+    )
+
+    // No blank-field counts any more, no field list any more.
+    expect(wrapper.find('.summary').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('cargo:')
+    expect(wrapper.text()).not.toContain('blank fields')
+    expect(wrapper.text()).not.toContain('PAY_WAY_ID')
+    expect(wrapper.text()).not.toContain('付款方式')
+    expect(wrapper.text()).not.toContain('The API does not provide the payment method.')
   })
 
   it('kết quả có report field + bill đã tạo ⇒ KHÔNG còn bảng "Field"/"Note" lẫn dòng bằng chứng', async () => {
@@ -458,6 +478,12 @@ describe('popup — hiện kết quả của lần chạy', () => {
     // The "bill already created on the site" evidence line is gone.
     expect(wrapper.find('.bill-created').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('A manifest bill was already created on the site')
+    // The list of REQUIRED fields is gone too — no field name leaks into the
+    // single message.
+    expect(wrapper.find('.blocking').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('PAY_WAY_ID')
+    expect(wrapper.text()).not.toContain('付款方式')
+    expect(wrapper.text()).not.toContain('The API does not provide the payment method.')
   })
 
   it('các bước KHÔNG hiện trên popup ⇒ nhưng vẫn được log ra console', async () => {
@@ -498,7 +524,7 @@ describe('popup — hiện kết quả của lần chạy', () => {
     expect(wrapper.text()).toContain(
       'The manifest was created on the site and saved as a draft (暂存).',
     )
-    expect(wrapper.find('.double-write').text()).toContain(
+    expect(wrapper.find('.message-note').text()).toContain(
       'Do not create another manifest for this bill number.',
     )
   })
@@ -517,20 +543,30 @@ describe('popup — hiện kết quả của lần chạy', () => {
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
     await clickCreate(wrapper)
 
-    const billStatus = wrapper.find('.bill-status')
-    expect(billStatus.exists()).toBe(true)
-    expect(billStatus.text()).toContain(
+    const message = wrapper.find('.message-success')
+    expect(message.exists()).toBe(true)
+    expect(message.text()).toContain(
       'The manifest was created on the site and saved as a draft (暂存).',
     )
-    expect(billStatus.text()).toContain(
+    expect(message.text()).toContain(
       'Refresh the manifest list on the site to see the new draft.',
     )
   })
 
-  it('bill tạo được nhưng lưu chưa xong ⇒ KHÔNG nói "đã lưu"', async () => {
+  it('bill tạo được nhưng lưu chưa xong ⇒ báo MÀU ĐỎ, KHÔNG nói "đã lưu"', async () => {
     // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
     store.createOnSite = true
-    sendMessage = async () => successResult({ billCreated: true, written: false })
+    // The core reports a failed save as a FAILED run (ok: false) whose message
+    // says the bill WAS created on the site — that is the shape the popup sees.
+    sendMessage = async () =>
+      successResult({
+        ok: false,
+        billCreated: true,
+        written: false,
+        billNo: 'BILL-1',
+        message:
+          'The site rejected the request. Please try again in a moment. The manifest bill was created on the site. The extension never deletes bills on its own — please finish this manifest by hand on the site.',
+      })
 
     const wrapper = mount(PopupApp)
     await flushPromises()
@@ -538,13 +574,22 @@ describe('popup — hiện kết quả của lần chạy', () => {
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
     await clickCreate(wrapper)
 
-    expect(wrapper.text()).toContain(
-      'The manifest bill was created on the site, but saving it did not finish.',
+    // The run failed ⇒ RED, and the message of the run says the bill exists.
+    expect(wrapper.findAll('.message')).toHaveLength(1)
+    expect(wrapper.find('.message-error').exists()).toBe(true)
+    expect(wrapper.find('.message-success').exists()).toBe(false)
+    expect(wrapper.find('.message-warning').exists()).toBe(false)
+    expect(wrapper.text()).toContain('The manifest bill was created on the site.')
+    // The bill number stays visible — the operator needs it to find the draft.
+    expect(wrapper.text()).toContain('Bill number: BILL-1')
+    // The bill EXISTS on the site ⇒ the operator must not create a second one.
+    expect(wrapper.find('.message-note').text()).toContain(
+      'Do not create another manifest for this bill number.',
     )
     expect(wrapper.text()).not.toContain('saved as a draft (暂存)')
   })
 
-  it('kết quả lỗi ⇒ hiện đúng message của lần chạy', async () => {
+  it('kết quả lỗi ⇒ hiện đúng message của lần chạy, MÀU ĐỎ', async () => {
     // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
     store.createOnSite = true
     sendMessage = async () =>
@@ -559,19 +604,115 @@ describe('popup — hiện kết quả của lần chạy', () => {
     await wrapper.find('input[type="text"]').setValue('BL123')
     await clickCreate(wrapper)
 
-    expect(wrapper.find('.error').text()).toBe(
+    expect(wrapper.findAll('.message')).toHaveLength(1)
+    expect(wrapper.find('.message-error').text()).toBe(
       'No manifest was found for this bill of lading number.',
     )
   })
 
-  it('còn field bắt buộc bị trống ⇒ hiện cảnh báo và liệt kê field kèm note', async () => {
+  it('lỗi token/session hết hạn trên site ⇒ vẫn hiện MỘT thông báo MÀU ĐỎ', async () => {
+    // The expired token/session is an error of the RESULT (it rides in
+    // `result.message`) ⇒ the popup must not stay silent, and must not show
+    // a second message block.
+    store.createOnSite = true
+    const expired =
+      "Your session on the site has expired — log in to the site and try again. If you are still signed in, the site's token cookie may be HttpOnly, which the extension cannot read."
+    sendMessage = async () => successResult({ ok: false, message: expired })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+
+    expect(wrapper.findAll('.message')).toHaveLength(1)
+    const message = wrapper.find('.message-error')
+    expect(message.exists()).toBe(true)
+    expect(message.text()).toBe(expired)
+  })
+
+  it('kết quả lỗi KHÔNG có message ⇒ vẫn hiện MỘT thông báo MÀU ĐỎ', async () => {
+    // No message ⇒ the popup must not be left empty ⇒ use the fallback sentence.
+    store.createOnSite = true
+    sendMessage = async () => successResult({ ok: false })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+
+    expect(wrapper.findAll('.message')).toHaveLength(1)
+    const message = wrapper.find('.message-error')
+    expect(message.exists()).toBe(true)
+    expect(message.text().trim()).toBe('Something went wrong while running the manifest.')
+  })
+
+  it('kết quả "ok" mà KHÔNG có gì được lưu ⇒ vẫn báo, KHÔNG im lặng', async () => {
+    // The core never reaches this state (it reports `ok` only after the draft
+    // is saved) — but the popup must NEVER stay silent after a run.
+    store.createOnSite = true
+    sendMessage = async () => successResult()
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+
+    expect(wrapper.findAll('.message')).toHaveLength(1)
+    expect(wrapper.find('.message-warning').exists()).toBe(true)
+    expect(wrapper.find('.message-main').text()).toBe(
+      'The run finished but nothing was saved on the site.',
+    )
+  })
+
+  it('field bắt buộc bị trống ⇒ KHÔNG hiện trên popup, nhưng vẫn được log ra console', async () => {
+    // The field list has been removed from the popup ⇒ it must still be
+    // reachable somewhere, or "which field is blank" vanishes from the product.
+    store.createOnSite = true
+    sendMessage = async () =>
+      successResult({
+        blocked: true,
+        message:
+          '1 field(s) required by the site are not provided by the API — fill them in by hand on the site.',
+        items: [
+          {
+            scope: 'header',
+            prop: 'PAY_WAY_ID',
+            label: '付款方式',
+            status: 'warn',
+            required: true,
+            note: 'The API does not provide the payment method.',
+          },
+        ],
+      })
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+
+    try {
+      const wrapper = mount(PopupApp)
+      await flushPromises()
+
+      await wrapper.find('input[type="text"]').setValue('BL123')
+      await clickCreate(wrapper)
+
+      expect(infoSpy).toHaveBeenCalledWith(
+        '[manifest-autofill] fields the site requires',
+        ['付款方式 (PAY_WAY_ID) — The API does not provide the payment method.'],
+      )
+    } finally {
+      infoSpy.mockRestore()
+    }
+  })
+
+  it('còn field bắt buộc bị trống ⇒ báo MÀU VÀNG, KHÔNG liệt kê field', async () => {
     // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
     store.createOnSite = true
     sendMessage = async () =>
       successResult({
         blocked: true,
         message:
-          '1 field(s) required by the site are not provided by the API — they are listed in the report and must be filled in by hand on the site.',
+          '1 field(s) required by the site are not provided by the API — fill them in by hand on the site.',
         items: [
           {
             scope: 'header',
@@ -590,17 +731,50 @@ describe('popup — hiện kết quả của lần chạy', () => {
     await wrapper.find('input[type="text"]').setValue('BL123')
     await clickCreate(wrapper)
 
-    const blocked = wrapper.find('.blocked')
-    expect(blocked.exists()).toBe(true)
-    expect(blocked.text()).toContain('required by the site are not provided by the API')
-
-    const panel = wrapper.find('.blocking')
-    expect(panel.exists()).toBe(true)
-    expect(panel.text()).toContain('付款方式')
-    expect(panel.text()).toContain('PAY_WAY_ID')
-    expect(wrapper.find('.blocking-note').text()).toBe(
-      'The API does not provide the payment method.',
+    // EXACTLY ONE message, YELLOW.
+    expect(wrapper.findAll('.message')).toHaveLength(1)
+    expect(wrapper.find('.message-warning').exists()).toBe(true)
+    expect(wrapper.find('.message-error').exists()).toBe(false)
+    expect(wrapper.find('.message-success').exists()).toBe(false)
+    expect(wrapper.find('.message-main').text()).toContain(
+      'required by the site are not provided by the API',
     )
+
+    // The list of REQUIRED fields has been removed from the popup.
+    expect(wrapper.find('.blocking').exists()).toBe(false)
+    expect(wrapper.find('.blocking-note').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('PAY_WAY_ID')
+    expect(wrapper.text()).not.toContain('付款方式')
+    expect(wrapper.text()).not.toContain('The API does not provide the payment method.')
+  })
+
+  it('còn field bắt buộc bị trống nhưng ĐÃ ghi xong ⇒ vẫn thấy số bill và câu "đã lưu"', async () => {
+    // A required field is still blank ⇒ YELLOW, but the bill WAS written ⇒
+    // the bill number and the "saved as a draft" sentence must NOT be lost.
+    store.createOnSite = true
+    sendMessage = async () =>
+      successResult({
+        blocked: true,
+        message:
+          '1 field(s) required by the site are not provided by the API — fill them in by hand on the site.',
+        billCreated: true,
+        written: true,
+        billNo: 'BILL-1',
+      })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+
+    expect(wrapper.findAll('.message')).toHaveLength(1)
+    expect(wrapper.find('.message-warning').exists()).toBe(true)
+    const message = wrapper.find('.message')
+    expect(message.text()).toContain(
+      'The manifest was created on the site and saved as a draft (暂存).',
+    )
+    expect(message.text()).toContain('Bill number: BILL-1')
   })
 })
 
@@ -625,7 +799,7 @@ describe('popup — đọc setting thất bại', () => {
       expect(wrapper.find('.hint').exists()).toBe(false)
       // Lỗi đọc phải nằm ở khe lỗi của setting, không phải khe lỗi chạy.
       expect(wrapper.find('.settings-error').text()).toBe('Could not read the settings.')
-      expect(wrapper.find('.error').exists()).toBe(false)
+      expect(wrapper.find('.message').exists()).toBe(false)
 
       // Nút create phải TẮT — không có cách nào ghi lên site.
       expect(isDisabled(wrapper, 'Create draft on site')).toBe(true)
@@ -887,7 +1061,7 @@ describe('popup — lưu setting thành công', () => {
     expect(store.createOnSite).toBe(true)
     expect(isChecked(wrapper)).toBe(true)
     expect(wrapper.find('.settings-error').exists()).toBe(false)
-    expect(wrapper.find('.error').exists()).toBe(false)
+    expect(wrapper.find('.message').exists()).toBe(false)
   })
 })
 
@@ -947,7 +1121,7 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
     await clickCreate(wrapper)
 
     // Kết quả đầu tiên đang hiện, chưa có gì cũ.
-    expect(wrapper.find('.bill-status').exists()).toBe(true)
+    expect(wrapper.find('.message-success').exists()).toBe(true)
     expect(wrapper.find('.stale-result').exists()).toBe(false)
 
     // Lần chạy thứ hai treo ⇒ kết quả CŨ vẫn còn trên màn hình nhưng phải
@@ -964,7 +1138,7 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
     expect(wrapper.find('.stale-result').text()).toBe(
       'Showing the previous result — a new run is in progress.',
     )
-    expect(wrapper.find('.bill-status').exists()).toBe(true)
+    expect(wrapper.find('.message-success').exists()).toBe(true)
 
     resolveSend?.(successResult())
     await flushPromises()
@@ -994,7 +1168,11 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
     // theo class vẫn xanh (⇒ test hỏng mà không báo), còn assert theo câu
     // thì bắt được cả trường hợp banner không bao giờ hiện.
     expect(wrapper.text()).not.toContain('Showing the previous result')
-    expect(wrapper.find('.bill-status').exists()).toBe(true)
+    // The run was blocked because the input is empty ⇒ the popup shows the
+    // RED error, and that is the ONLY message (the old result is not shown
+    // with it).
+    expect(wrapper.findAll('.message')).toHaveLength(1)
+    expect(wrapper.find('.message-error').text()).toBe('Enter a bill of lading number first.')
   })
 
   it('gõ bill KHÁC bill của report đang hiện ⇒ banner báo report thuộc bill KHÁC', async () => {
@@ -1044,9 +1222,13 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
     // Lần chạy đã hỏng ⇒ KHÔNG được nói "đang có lần chạy" (nút đã hết
     // trạng thái busy) — operator không được đứng đợi một lần chạy đã chết.
     expect(wrapper.text()).not.toContain('a new run is in progress')
-    // Report đang hiện là của bill KHÁC ⇒ banner nói đúng sự thật.
-    expect(wrapper.find('.stale-result').text()).toBe(
-      'Showing the previous result — it belongs to a different bill of lading number.',
+    // The message on screen is the ERROR of the run that just failed, NOT the
+    // previous result ⇒ the "previous result" banner must be gone (saying
+    // "previous result" would be a lie — nothing of it is on screen).
+    expect(wrapper.find('.stale-result').exists()).toBe(false)
+    expect(wrapper.findAll('.message')).toHaveLength(1)
+    expect(wrapper.find('.message-error').text()).toBe(
+      'Could not reach the page. Open the manifest declaration page, reload it, and try again.',
     )
   })
 
@@ -1095,7 +1277,7 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
     await clickCreate(wrapper)
 
     expect(wrapper.find('.stale-result').exists()).toBe(false)
-    expect(wrapper.find('.error').text()).toBe(
+    expect(wrapper.find('.message-error').text()).toBe(
       'No manifest was found for this bill of lading number.',
     )
   })
