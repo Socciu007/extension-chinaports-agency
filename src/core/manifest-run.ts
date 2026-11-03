@@ -315,6 +315,17 @@ const PORT_CODE_PAIRS: ReadonlyArray<readonly [PortNameKey, PortCodeKey]> = [
   ['dest_port_nam', 'dest_port_cod'],
 ]
 
+/**
+ * The port CODE fields the site REQUIRES — 装货港 and 卸货港.
+ *
+ * Keep in sync with the `*_PORT_COD` entries of `REQUIRED_HEADER`
+ * (`field-meta.ts`) — these are exactly the port codes the site asks for.
+ *
+ * The site's port dictionary is the LAST RESORT: it is only asked when the
+ * API gave NO code for either of these two fields.
+ */
+const REQUIRED_PORT_CODE_KEYS: ReadonlyArray<PortCodeKey> = ['start_port_cod', 'dischrg_port_cod']
+
 /** The (trimmed) port NAME of a header field — '' when the field is blank. */
 function portNameOf(body: ManifestData, key: PortNameKey): string {
   const value = body[key]
@@ -324,20 +335,34 @@ function portNameOf(body: ManifestData, key: PortNameKey): string {
 /**
  * Fill the port codes (装货港 / 卸货港 / 交货地) from the site's port dictionary.
  *
+ * The dictionary is the LAST RESORT: the lookup runs ONLY when the API gave
+ * NO code for the two port codes the site requires (装货港 / 卸货港). When
+ * the API already has one of those two codes, the site is NOT called at all
+ * and every code of the API is kept exactly as it is.
+ *
+ * When the lookup DOES run, it fills ALL THREE port codes (装货港 / 卸货港 /
+ * 交货地) — the dictionary's answer wins for each of them.
+ *
  * Each port NAME is looked up ONCE — the same name in two ports shares the
  * result.
  *
- * A failed lookup (site error / network error) leaves the code of the API
- * untouched ⇒ the run continues with what the API provided. One broken
- * dictionary must NOT break the whole run.
+ * A failed lookup (site error / network error) leaves the MISSING code BLANK ⇒
+ * the report tells the operator to fill it in by hand. One broken dictionary
+ * must NOT break the whole run.
+ *
+ * @returns `true` when the site's dictionary was asked (a lookup happened).
  */
-async function fillPortCodes(body: ManifestData, options: SiteFetchOptions): Promise<void> {
+async function fillPortCodes(body: ManifestData, options: SiteFetchOptions): Promise<boolean> {
+  // Both required codes blank ⇒ look the codes up. Otherwise the site is not
+  // called and the code of the API wins.
+  if (!REQUIRED_PORT_CODE_KEYS.every((key) => isBlankPayloadValue(body[key]))) return false
+
   const names = new Set<string>()
   for (const [nameKey] of PORT_CODE_PAIRS) {
     const name = portNameOf(body, nameKey)
     if (name !== '') names.add(name)
   }
-  if (names.size === 0) return
+  if (names.size === 0) return false
 
   const codes = new Map<string, string>()
   for (const name of names) {
@@ -345,7 +370,8 @@ async function fillPortCodes(body: ManifestData, options: SiteFetchOptions): Pro
       const code = await fetchPortCode(name, options)
       if (code !== undefined && code !== '') codes.set(name, code)
     } catch {
-      // Keep the code of the API — the lookup is only a better source.
+      // The lookup failed — the missing code stays blank; the report asks the
+      // operator to fill it in by hand.
     }
   }
 
@@ -355,6 +381,7 @@ async function fillPortCodes(body: ManifestData, options: SiteFetchOptions): Pro
     const code = codes.get(name)
     if (code !== undefined) body[codeKey] = code
   }
+  return true
 }
 
 // Run the entire manifest flow.
@@ -429,10 +456,14 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
     })
     steps.push('Fetched the manifest data from external API (eb)')
 
-    // The port codes: look them up on the site — the names are known now.
+    // The port codes: look them up on the site — but ONLY when the API gave
+    // no code at all for the two ports the site requires.
     checkDeadline('looking up the port codes')
-    await fillPortCodes(body, siteOptions())
-    steps.push('Looked up the port codes on the site')
+    if (await fillPortCodes(body, siteOptions())) {
+      steps.push('Looked up the port codes on the site')
+    } else {
+      steps.push('No port code lookup was needed')
+    }
 
     // The bill number as written by the operator.
     const writtenBillNo = body.bill_nbr

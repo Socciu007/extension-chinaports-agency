@@ -242,6 +242,31 @@ function twoGoodsEnvelope(): { status: number; data: ManifestApiData } {
 }
 
 /**
+ * Envelope whose API gives NO port code (the codes are blank) — the port
+ * NAMES are still there.
+ *
+ * The only case where the extension asks the site's port dictionary: with a
+ * code in place, the code of the API is kept and the site is not called.
+ */
+function blankPortCodesEnvelope(): { status: number; data: ManifestApiData } {
+  return {
+    status: 1,
+    data: { ...manifest, loadCode: '', aimPortCode: '', uploadCode: '' },
+  }
+}
+
+/**
+ * Envelope whose API gives only ONE port code (装货港 has one, 卸货港 /
+ * 交货地 are blank).
+ */
+function onePortCodeEnvelope(): { status: number; data: ManifestApiData } {
+  return {
+    status: 1,
+    data: { ...manifest, loadCode: 'CNSHA', aimPortCode: '', uploadCode: '' },
+  }
+}
+
+/**
  * Dòng hàng mẫu, ép theo loại hàng cần test.
  *
  * `deriveCargoKind` xác định loại hàng như sau:
@@ -318,7 +343,8 @@ describe('runManifest — dựng payload và report', () => {
   })
 
   it('tra MÃ CẢNG đi SAU API (cần tên cảng) và TRƯỚC POST đầu tiên', async () => {
-    const h = harness()
+    // The dictionary is only asked when the API has NO port code ⇒ use the blank-code envelope.
+    const h = harness(blankPortCodesEnvelope())
     await run(h)
 
     const apiIndex = h.timeline.findIndex((entry) => entry.startsWith('api:'))
@@ -580,26 +606,68 @@ describe('runManifest — dựng payload và report', () => {
 /**
  * Tra MÃ CẢNG trong dict cảng của site.
  *
- * Tra SAU khi đã có tên cảng tiếng Anh của API; tra lỗi thì giữ mã của
- * API (không được làm hỏng cả lần chạy).
+ * Dict cảng chỉ là LỰA CHỌN CUỐI: site KHÔNG được gọi khi API đã có mã ở
+ * 装货港 HOẶC 卸货港 — mã của API được giữ nguyên. Tra SAU khi đã có tên
+ * cảng tiếng Anh của API; tra lỗi thì mã vẫn TRỐNG (không được làm hỏng cả
+ * lần chạy).
  */
 describe('runManifest — tra mã cảng', () => {
   it('tra được mã cảng ⇒ điền vào header', async () => {
-    // Mã của site CỐ TÌNH KHÁC mã của API (`CNSHA`/`IDBLW`) ⇒ test này
-    // chỉ đạt khi `fillPortCodes` thật sự ghi kết quả tra vào header.
-    const h = harness(undefined, {
+    // The site returns a code the API does NOT have (the API codes are blank)
+    // ⇒ this test only passes when `fillPortCodes` really writes the lookup
+    // result into the header.
+    const h = harness(blankPortCodesEnvelope(), {
       portCode: { SHANGHAI: 'SITE-SHA', BELAWAN: 'SITE-BLW' },
     })
-    await run(h)
+    const result = await run(h)
 
     const createPost = postsOf(h)[0]
     expect(createPost?.body?.start_port_cod).toBe('SITE-SHA')
     expect(createPost?.body?.dischrg_port_cod).toBe('SITE-BLW')
     expect(createPost?.body?.dest_port_cod).toBe('SITE-BLW')
+    expect(result.steps.join('\n')).toContain('Looked up the port codes on the site')
+  })
+
+  it('API ĐÃ có mã cảng ⇒ KHÔNG gọi site, KHÔNG ghi đè mã của API', async () => {
+    const h = harness(undefined, {
+      portCode: { SHANGHAI: 'SITE-SHA', BELAWAN: 'SITE-BLW' },
+    })
+    const result = await run(h)
+
+    // The site's port dictionary must NOT be called.
+    const portCalls = h.site.calls.filter((call) => call.url.includes('getPort/'))
+    expect(portCalls).toHaveLength(0)
+    // The codes of the API are kept exactly as they are.
+    const createPost = postsOf(h)[0]
+    expect(createPost?.body?.start_port_cod).toBe('CNSHA')
+    expect(createPost?.body?.dischrg_port_cod).toBe('IDBLW')
+    expect(createPost?.body?.dest_port_cod).toBe('IDBLW')
+    expect(result.steps.join('\n')).toContain('No port code lookup was needed')
+  })
+
+  it('chỉ MỘT trong hai mã cảng có ⇒ KHÔNG tra (phải trống CẢ HAI mới tra)', async () => {
+    const h = harness(onePortCodeEnvelope(), {
+      portCode: { SHANGHAI: 'SITE-SHA', BELAWAN: 'SITE-BLW' },
+    })
+    const result = await run(h)
+
+    // 装货港 already has the code of the API ⇒ NO lookup.
+    const portCalls = h.site.calls.filter((call) => call.url.includes('getPort/'))
+    expect(portCalls).toHaveLength(0)
+    const createPost = postsOf(h)[0]
+    expect(createPost?.body?.start_port_cod).toBe('CNSHA')
+    expect(createPost?.body?.dischrg_port_cod).toBe('')
+    expect(createPost?.body?.dest_port_cod).toBe('')
+    // 卸货港 is still blank ⇒ the operator must fill it in by hand.
+    const dischrg = result.items.find((entry) => entry.prop === 'DISCHRG_PORT_COD')
+    expect(dischrg?.required).toBe(true)
+    expect(dischrg?.status).toBe('warn')
+    expect(result.blocked).toBe(true)
   })
 
   it('mã cảng đã điền ⇒ KHÔNG báo field trống', async () => {
-    const h = harness(undefined, {
+    // The API gives NO code ⇒ the codes come from the site's dictionary.
+    const h = harness(blankPortCodesEnvelope(), {
       portCode: { SHANGHAI: 'CNSHA', BELAWAN: 'IDBLW' },
     })
     const result = await run(h)
@@ -611,7 +679,7 @@ describe('runManifest — tra mã cảng', () => {
   })
 
   it('tra MỘT LẦN cho mỗi tên cảng (SHANGHAI + BELAWAN ⇒ 2 request)', async () => {
-    const h = harness(undefined, {
+    const h = harness(blankPortCodesEnvelope(), {
       portCode: { SHANGHAI: 'CNSHA', BELAWAN: 'IDBLW' },
     })
     await run(h)
@@ -622,25 +690,39 @@ describe('runManifest — tra mã cảng', () => {
     expect(portCalls.map((call) => kwOf(call.url)).sort()).toEqual(['BELAWAN', 'SHANGHAI'])
   })
 
-  it('dict KHÔNG trả mã ⇒ giữ mã của API', async () => {
-    const h = harness(undefined, {})
+  it('dict KHÔNG trả mã ⇒ mã vẫn TRỐNG và vẫn báo cho operator', async () => {
+    const h = harness(blankPortCodesEnvelope(), {})
     const result = await run(h)
 
+    // The dictionary WAS asked — it simply has no answer.
+    const portCalls = h.site.calls.filter((call) => call.url.includes('getPort/'))
+    expect(portCalls).toHaveLength(2)
+
     const createPost = postsOf(h)[0]
-    expect(createPost?.body?.start_port_cod).toBe('CNSHA')
-    expect(createPost?.body?.dischrg_port_cod).toBe('IDBLW')
-    expect(createPost?.body?.dest_port_cod).toBe('IDBLW')
+    expect(createPost?.body?.start_port_cod).toBe('')
+    expect(createPost?.body?.dischrg_port_cod).toBe('')
+    // The two required port codes are still blank ⇒ the operator must fill them in by hand.
+    const start = result.items.find((entry) => entry.prop === 'START_PORT_COD')
+    expect(start?.required).toBe(true)
+    expect(start?.status).toBe('warn')
+    const dischrg = result.items.find((entry) => entry.prop === 'DISCHRG_PORT_COD')
+    expect(dischrg?.required).toBe(true)
+    expect(dischrg?.status).toBe('warn')
     expect(result.ok).toBe(true)
   })
 
-  it('tra mã cảng LỖI ⇒ giữ mã của API, run vẫn thành công', async () => {
-    // Site trả 4000 cho `getPort/` ⇒ lỗi bị nuốt, mã của API giữ nguyên.
-    const h = harness(undefined, { failGet: 'getPort/' })
+  it('tra mã cảng LỖI ⇒ mã vẫn TRỐNG, run vẫn thành công', async () => {
+    // Site trả 4000 cho `getPort/` ⇒ lỗi bị nuốt, mã vẫn TRỐNG.
+    const h = harness(blankPortCodesEnvelope(), { failGet: 'getPort/' })
     const result = await run(h)
 
+    // The dictionary WAS asked — the site answered with an error.
+    const portCalls = h.site.calls.filter((call) => call.url.includes('getPort/'))
+    expect(portCalls).toHaveLength(2)
+
     const createPost = postsOf(h)[0]
-    expect(createPost?.body?.start_port_cod).toBe('CNSHA')
-    expect(createPost?.body?.dischrg_port_cod).toBe('IDBLW')
+    expect(createPost?.body?.start_port_cod).toBe('')
+    expect(createPost?.body?.dischrg_port_cod).toBe('')
     expect(result.ok).toBe(true)
     expect(result.written).toBe(true)
   })
