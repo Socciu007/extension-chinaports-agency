@@ -245,7 +245,7 @@ async function openPage(): Promise<void> {
     // extension được reload. Trường hợp đó đã có đường thoát riêng: lần chạy
     // báo "Could not reach the page … reload it …" ⇒ operator reload trang
     // khai báo rồi thử lại.
-    await chrome.tabs.update(tabId, { active: true })
+    await chrome.tabs.update(tabId, { url: MANIFEST_URL, active: true })
   } else {
     await chrome.tabs.update(tabId, {
       url: MANIFEST_URL,
