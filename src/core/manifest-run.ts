@@ -1,32 +1,3 @@
-/**
- * Tầng điều phối của luồng manifest — gọi API manifest, dựng body của site,
- * báo cáo field bị bỏ trống, và ghi lên site.
- *
- * Luồng:
- *
- *   1) `fetchManifest`      — lấy dữ liệu manifest từ API bên ngoài VÀ dựng
- *                             luôn body của site (45 key)
- *   2) tra mã cảng          — tra MÃ cảng (装货港/卸货港/交货地) trong dict
- *                             cảng của site, SAU khi đã có tên cảng tiếng Anh
- *   3) tra mã bao bì        — tra MÃ 包装代码 trong dict bao bì của site
- *   4) dựng report          — liệt kê field BỊ BỎ TRỐNG (kèm lý do)
- *   5) ghi lên site         — tạo bill → gắn dòng hàng → lưu bill + container
- *
- * KHÔNG load dict của site trước: dict chỉ CÓ Ý NGHĨA khi đã biết tên
- * (tên bao bị, tên cảng) ⇒ cả hai dict đều được tra SAU khi fetch, khi tên
- * đã có trong tay.
- *
- * `runManifest` KHÔNG BAO GIỜ reject: mọi lỗi được đổi thành
- * `ManifestRunResult` với `ok: false` + `message` tiếng Anh.
- *
- * Ranh giới an toàn (KHÔNG được nới):
- *
- * - KHÔNG gọi `send/`, `upload/`, `deleteBill/`, `downloadTemplate/` của site;
- * - manifest chỉ được lưu dạng NHÁP (`is_all` = "1"), KHÔNG "2" (发送);
- * - mã bill do server gán lấy NGUYÊN VEN (không trim, không uppercase);
- * - tên cảng lấy từ `PortData.nameEn` (tiếng Anh); mã cảng lấy từ API, rồi
- *   tra dict cảng của site để thay khi tra được.
- */
 import { describeApiError, fetchManifest, ManifestApiError } from './api'
 import { HTTP_TIMEOUT_MS } from './http'
 import {
@@ -62,7 +33,7 @@ import {
 } from './site-write'
 import type { ManifestCargoRow, ManifestContainerRow, ManifestData } from './types'
 
-/** Hạn mặc định của cả một lần chạy (4 phút). */
+// Default deadline: 4 minutes.
 export const DEFAULT_DEADLINE_MS = 240_000
 
 export interface ManifestRunOptions {
@@ -77,32 +48,19 @@ export interface ManifestRunOptions {
 }
 
 export interface ManifestRunResult {
-  /** Run không gặp lỗi (không lỗi mạng / API ngoài / site). */
   ok: boolean
-  /** Còn field BẮT BUỘC bị trống ⇒ bản nháp, operator phải điền tay trên site. */
   blocked: boolean
-  /** Thông báo cho operator — luôn có khi `!ok` hoặc khi `blocked`. */
   message?: string
-  /** Từng bước đã chạy (tiếng Anh), để operator theo dõi. */
   steps: string[]
-  /** Các field bị bỏ trống. */
   items: ReportItem[]
   cargoRows: number
   containerRows: number
-  /** Mã bill do server gán — chỉ có sau khi tạo bill thành công. */
   billNo?: string
-  /**
-   * Site đã XÁC NHẬN tạo bill.
-   *
-   * Mã bill (`billNo`) có thể vẫn còn thiếu — site đã tạo bill nhưng không
-   * trả về mã ⇒ xem `billNo` và `steps` để biết chuyện đó có xảy ra không.
-   */
   billCreated: boolean
-  /** Manifest đã lưu trên site (bước lưu cuối đã thành công). */
   written: boolean
 }
 
-/** Lỗi của tầng điều phối — hiện chỉ có một loại: hết hạn. */
+// Error for the manifest run
 export class ManifestRunError extends Error {
   readonly kind: 'deadline'
 
@@ -113,13 +71,7 @@ export class ManifestRunError extends Error {
   }
 }
 
-/**
- * Lỗi nội bộ: site ĐÃ tạo bill nhưng không trả về mã bill.
- *
- * Không phải lỗi mạng/API ⇒ cần thông báo riêng: dòng hàng KHÔNG được gửi
- * (một dòng hàng gắn sai bill sẽ không báo lỗi nào), và bill có thể đã tồn
- * tại trên site ⇒ extension không tự xoá.
- */
+// Error for the manifest run
 class NoBillNumberError extends Error {
   constructor() {
     super('The site did not return a bill number.')
@@ -127,18 +79,7 @@ class NoBillNumberError extends Error {
   }
 }
 
-/*
- * LƯU Ý quy ước key — hai hệ khác nhau cùng nằm trong file này:
- *
- * - `IGNORED_PROPS` dùng TÊN FIELD VIẾT HOA (giống `prop` trong report);
- * - `byDesignBlanks` dùng key CHỮ THƯỜNG của payload.
- */
-
-/**
- * Field mà site TỰ tính / server gán / điều khiển luồng.
- *
- * Để trống ở đây KHÔNG phải lỗi ⇒ KHÔNG báo trong report.
- */
+// Keys that are ignored in the report
 const IGNORED_PROPS: ReadonlySet<string> = new Set([
   'BILL_NO',
   'TOTAL_PIECE_NUM',
@@ -149,32 +90,21 @@ const IGNORED_PROPS: ReadonlySet<string> = new Set([
   'IS_ALL',
 ])
 
-/**
- * Câu nhắc operator — extension KHÔNG BAO GIỜ tự xoá bill trên site.
- *
- * Dùng chung ở nhiều message để câu chữ không lệch nhau.
- */
+// A sentence reminding the operator that the extension never deletes bills on its own
 const NEVER_DELETES_BILLS =
   'The extension never deletes bills on its own — please finish this manifest by hand on the site.'
 
-/** Field bị site XOÁ theo loại hàng — để trống là ĐÚNG, không phải lỗi. */
+// Fields that are blanked by the site
 const ALL_BLANKED: ReadonlySet<string> = new Set([...DANGER_FIELDS, ...TEMP_FIELDS])
 const DANGER_BLANKED: ReadonlySet<string> = new Set(DANGER_FIELDS)
 const TEMP_BLANKED: ReadonlySet<string> = new Set(TEMP_FIELDS)
 const NOTHING_BLANKED: ReadonlySet<string> = new Set<string>()
 
-/**
- * Field bị site XOÁ theo loại hàng — để trống là ĐÚNG, không phải lỗi.
- *
- * - `S` (thường)      — site xoá CẢ field nguy hiểm lẫn field nhiệt độ;
- * - `D` (nguy hiểm)   — site xoá field nhiệt độ;
- * - `R` (kiểm dịch)   — site xoá field nguy hiểm;
- * - `G` (cả hai)      — site KHÔNG xoá gì.
- *
- * Key ở đây là key CHỮ THƯỜNG của payload (khác với `prop` viết HOA trong
- * report). Set được tạo MỘT LẦN ở cấp module ⇒ không cấp phát lại cho mỗi
- * dòng.
- */
+// Fields that are blanked by the site by cargo kind
+// - `S` (all) - the site blanks both dangerous and temperature fields
+// - `D` (dangerous) - the site blanks the temperature field
+// - `R` (risky) - the site blanks the dangerous field
+// - `G` (all) - the site does not blank any fields
 function byDesignBlanks(kind: CargoKind): ReadonlySet<string> {
   if (kind === 'S') return ALL_BLANKED
   if (kind === 'D') return TEMP_BLANKED
@@ -182,16 +112,7 @@ function byDesignBlanks(kind: CargoKind): ReadonlySet<string> {
   return NOTHING_BLANKED
 }
 
-/**
- * Dựng một item của report cho field bị bỏ trống.
- *
- * `note` LUÔN có: note riêng do caller truyền (nếu có), sau đó là note của
- * lý do RIÊNG (`BLANK_NOTES`), sau đó là note chung theo việc field có bắt
- * buộc hay không.
- *
- * Số KHÔNG parse được (`NaN`) có note riêng: lý do KHÁC hẳn "API không có
- * giá trị này" ⇒ note riêng thắng `BLANK_NOTES`.
- */
+// Build a report item for a blanked field
 function blankItem(
   scope: FillScope,
   prop: string,
@@ -218,35 +139,22 @@ function blankItem(
   }
 }
 
-/** Một dòng cần dựng report (header là 1 dòng, không có số thứ tự). */
+// A specification for a row to build a report
 interface ReportRowSpec {
   scope: FillScope
   values: Record<string, unknown>
-  /** số thứ tự của dòng — `undefined` cho header */
   row?: number
-  /** field này có BẮT BUỘC không */
   required: (prop: string) => boolean
-  /**
-   * Note RIÊNG cho một field — thắng `BLANK_NOTES` và note chung.
-   *
-   * Trả `undefined` ⇒ dùng note chung.
-   */
   note?: (prop: string) => string | undefined
-  /**
-   * Key mà site XOÁ theo loại hàng — để trống là ĐÚNG ⇒ không báo.
-   *
-   * Key ở đây là key CHỮ THƯỜNG của payload (khác với `prop` viết HOA).
-   */
   skipped?: ReadonlySet<string>
 }
 
-/** Report của MỘT dòng — theo thứ tự key trong dòng. */
+// Report a row - by key in the row
 function reportRow(spec: ReportRowSpec): ReportItem[] {
   const items: ReportItem[] = []
   for (const [key, value] of Object.entries(spec.values)) {
     const prop = key.toUpperCase()
     if (IGNORED_PROPS.has(prop)) continue
-    // Field site xoá theo loại hàng ⇒ để trống là ĐÚNG ⇒ không báo.
     if (spec.skipped?.has(key)) continue
     if (!isBlankPayloadValue(value)) continue
     items.push(
@@ -256,24 +164,17 @@ function reportRow(spec: ReportRowSpec): ReportItem[] {
   return items
 }
 
-/**
- * Key của body KHÔNG phải field header — dòng hàng và dòng container.
- *
- * Report header chỉ liệt kê field HEADER ⇒ hai key này bị bỏ qua.
- */
+// Keys that are not fields in the header
 const BODY_ROW_KEYS: ReadonlySet<string> = new Set(['cdgoods', 'cntr_list'])
 
-/**
- * Report của header — theo thứ tự key trong body.
- *
- * Ngoài field BẮT BUỘC cố định, còn một quy tắc theo NHÓM: mỗi bên phải có
- * ÍT NHẤT một kênh liên hệ (电话 / EMAIL / 传真) — xem
- * `partiesWithoutContactChannel`.
- */
+// Report the header - by key in the body
+// - `cdgoods` - cargo rows
+// - `cntr_list` - container rows
+// - other keys - fields in the header
 function reportHeader(body: ManifestData): ReportItem[] {
-  // Tính MỘT LẦN: điều kiện là của BÊN, không phải của từng prop.
+  // Calculate once: the condition is for the parties, not for each prop.
   const withoutContact = partiesWithoutContactChannel(body)
-  // Bỏ 2 key dòng hàng / dòng container — chúng không phải field header.
+  // Skip the two keys for cargo and container rows - they are not fields in the header.
   const values: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(body)) {
     if (BODY_ROW_KEYS.has(key)) continue
@@ -290,19 +191,18 @@ function reportHeader(body: ManifestData): ReportItem[] {
   })
 }
 
-/**
- * Loại hàng của một dòng — đọc từ `cargo_kind_cod` của CHÍNH dòng đó.
- *
- * Dòng hàng trong body đã mang mã loại của site (`S`/`D`/`R`/`G`) ⇒ không
- * cần mảng loại hàng riêng.
- */
+// Get the cargo kind of a row
+// - `D` (dangerous) - the site blanks the temperature field
+// - `R` (risky) - the site blanks the dangerous field
+// - `G` (all) - the site does not blank any fields
+// - `S` (all) - the site blanks both dangerous and temperature fields
 function cargoKindOf(row: Record<string, unknown>): CargoKind {
   const code = row.cargo_kind_cod
   if (code === 'D' || code === 'R' || code === 'G') return code
   return 'S'
 }
 
-/** Report của các dòng hàng — theo thứ tự dòng, rồi thứ tự key trong dòng. */
+// Report the cargo rows - by index and key in the row
 function reportCargo(rows: ManifestCargoRow[]): ReportItem[] {
   return rows.flatMap((row, index) => {
     const kind = cargoKindOf(row)
@@ -316,7 +216,7 @@ function reportCargo(rows: ManifestCargoRow[]): ReportItem[] {
   })
 }
 
-/** Report của các dòng container — theo thứ tự dòng, rồi thứ tự key trong dòng. */
+// Report the container rows - by index and key in the row
 function reportContainers(rows: ManifestContainerRow[]): ReportItem[] {
   return rows.flatMap((row, index) =>
     reportRow({
@@ -350,13 +250,9 @@ function blockedMessage(requiredCount: number): string {
   return `${requiredCount} field(s) required by the site are not provided by the API — they are listed in the report and must be filled in by hand on the site.`
 }
 
-/**
- * Câu nhắc khi số bill GHI LÊN SITE khác số bill của API.
- *
- * Số bill trên site CÓ THỂ mang hậu tố piece (`P1`, `P12`) còn API chỉ trả
- * mã gốc ⇒ site nhận số khác số API trả về. Không nói ra thì operator mở
- * site, thấy số khác số mình gõ, và tưởng extension ghi sai.
- */
+// A step describing a bill number mismatch
+// - the site may have a suffix (`P1`, `P12`) while the API only returns the original number
+// - the site may have a different number than the API returns
 function billNoMismatchStep(written: string, apiBillNo: string): string {
   if (apiBillNo === '') {
     return `The manifest will use the bill number ${written} — the API did not return a bill number.`
@@ -364,7 +260,7 @@ function billNoMismatchStep(written: string, apiBillNo: string): string {
   return `The manifest will use the bill number ${written} — the API returned ${apiBillNo}.`
 }
 
-/** Text lỗi cho người dùng — theo loại lỗi. */
+// Describe an error for the user - by error type
 function describeError(error: unknown): string {
   if (error instanceof ManifestApiError) return describeApiError(error)
   if (error instanceof SiteApiError) return describeSiteError(error)
