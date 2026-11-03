@@ -386,13 +386,13 @@ export async function fetchPackageCode(
   name: string,
   options: SiteFetchOptions = {},
 ): Promise<string | undefined> {
-  const kw = name.trim()
+  const kw = name.trim() === 'PACKAGES' ? 'PACKAGE' : name.trim()
   if (kw === '') return undefined
 
   const raw = await fetchSiteJson(
     'getPackageCode/',
     { ...options, label: 'the package code list' },
-    { kw, filter: ' E_PACKAGE_NAM' },
+    { kw, filter: 'E_PACKAGE_NAM' },
   )
 
   const dict = normalizeDictOptions(raw, {

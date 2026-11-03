@@ -491,10 +491,7 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
       steps.push(billNoMismatchStep(writtenBillNo, apiBillNo))
     }
 
-    // 包装代码 (PACKAGE_COD): the API gives the package NAME only — the site
-    // needs the CODE ⇒ look it up in the site's package dictionary, once per
-    // distinct package name. Done BEFORE the report so that a filled code is
-    // not reported as a blank required field.
+    // 包装代码 (PACKAGE_COD): look up the package codes on the site
     checkDeadline('looking up the package codes')
     await fillPackageCodes(body, siteOptions())
     steps.push('Looked up the package codes on the site')
@@ -524,10 +521,7 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
     steps.push('Read the bill number from the site')
 
     // Attach each cargo row to the bill.
-    console.log('body.cdgoods', body.cdgoods)
-    console.log('assignedBillNo', assignedBillNo)
     for (const row of body.cdgoods) {
-      // Check the deadline before each row — many rows can exceed the deadline.
       checkDeadline('adding the cargo rows')
       await addCargoRow(row, assignedBillNo, siteOptions())
       rowsAdded += 1

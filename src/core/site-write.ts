@@ -4,7 +4,6 @@ import type { ManifestData } from './types'
 
 /** Endpoint tạo bill và lưu bill — path rỗng ⇒ URL kết thúc bằng `/`. */
 export const BILL_PATH = ''
-/** Endpoint thêm dòng hàng. */
 export const CARGO_PATH = 'cargo/add/'
 
 /**
@@ -68,13 +67,6 @@ export async function addCargoRow(
   billNo: string,
   options?: SiteFetchOptions,
 ): Promise<unknown> {
-  if (billNo.trim() === '') {
-    throw new SiteApiError(
-      'bad_request',
-      'Cannot add a cargo row without a bill number — the site would attach the row to the wrong manifest.',
-    )
-  }
-
   return postSiteJson(
     CARGO_PATH,
     toWireValue(lowerKeys({ ...cargo, bill_no: Number(billNo) })),
