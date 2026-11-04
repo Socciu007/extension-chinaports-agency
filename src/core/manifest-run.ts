@@ -246,8 +246,8 @@ function partialStateSentence(
 }
 
 /** Message khi run thành công nhưng còn field BẮT BUỘC bị trống. */
-function blockedMessage(requiredCount: number): string {
-  return `${requiredCount} field(s) required by the site are not provided by the API — fill them in by hand on the site.`
+function blockedMessage(requiredCount: number, items: ReportItem[]): string {
+  return `${requiredCount} field(s) (${items.map((item) => item.label).join(', ')}) required by the site are not provided by the API.`
 }
 
 // A step describing a bill number mismatch
@@ -434,7 +434,7 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
     // Default message when there are required fields missing. The message
     // passed through `overrides.message` is kept.
     if (result.message === undefined && requiredCount > 0) {
-      result.message = blockedMessage(requiredCount)
+      result.message = blockedMessage(requiredCount, items.filter((item) => item.required === true))
     }
     return result
   }

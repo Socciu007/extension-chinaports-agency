@@ -6,10 +6,6 @@ export interface PortInfo {
 
 export interface ManifestContact {
   id?: number
-  /**
-   * Role of the contact party: `false` or `0` = 发货人, `true` or `1` = 收货人,
-   * `2` = 通知人 (see `contactRole`).
-   */
   type?: boolean | number
   master?: string | null
   address?: string | null
@@ -63,12 +59,7 @@ export interface ManifestContainer {
   volume?: string | number | null
 }
 
-/**
- * Dữ liệu RAW của API bên ngoài (`…/insight/manifest?blNo=…`).
- *
- * Đây là hình dạng API trả về — KHÔNG phải hình dạng body của site. Body
- * của site là `ManifestData`.
- */
+// Type for manifest API data
 export interface ManifestApiData {
   id?: number
   blNo?: string | null
@@ -92,19 +83,13 @@ export interface ManifestApiData {
   cdCon?: ManifestContainer[] | null
 }
 
-/** Một dòng hàng trong body của site. */
+// Type for cargo row
 export type ManifestCargoRow = Record<string, unknown>
 
-/** Một dòng container trong body của site. */
+// Type for container row
 export type ManifestContainerRow = Record<string, unknown>
 
-/**
- * Body của site — 45 key: 43 key header + `cdgoods` + `cntr_list`.
- *
- * PHẢI là `type` alias (KHÔNG phải `interface`): chỉ type alias mới có
- * implicit index signature ⇒ gán được cho `Record<string, unknown>` (code
- * hiện tại dùng kiểu đó ở nhiều nơi, vd `ReportRowSpec.values`).
- */
+// Type for manifest data
 export type ManifestData = {
   /** Dòng hàng — gửi riêng qua `cargo/add/`, KHÔNG gửi kèm lúc tạo bill. */
   cdgoods: ManifestCargoRow[]

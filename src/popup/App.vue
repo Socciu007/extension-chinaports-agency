@@ -81,7 +81,6 @@ const NO_SECOND_MANIFEST =
 // The lines about the bill on the site - the same for every outcome
 function billLines(res: CreateResult): string[] {
   const lines: string[] = []
-  if (res.written) lines.push('Refresh the manifest list on the site to see the new draft.')
   if (res.billNo !== undefined && res.billNo !== '') lines.push(`Bill number: ${res.billNo}`)
   return lines
 }
@@ -112,8 +111,6 @@ const runOutcome = computed<Outcome | null>(() => {
       kind: 'error',
       main: main === '' ? FALLBACK_ERROR : main,
       lines: billLines(res),
-      // The bill EXISTS on the site ⇒ the operator must not create a second
-      // manifest for the same bill of lading number.
       note: res.billCreated ? NO_SECOND_MANIFEST : undefined,
     }
   }
@@ -202,6 +199,12 @@ async function run(): Promise<void> {
     }
     const billKey = billNoAsWritten(value)
     resultInputBlNo.value = billKey
+    // Refresh the page
+    await chrome.tabs.update(tabId, { active: true })
+
+    const wait = waitForTabComplete(tabId)
+    await chrome.tabs.reload(tabId)
+    await wait
   } catch (e) {
     console.error('[manifest-autofill] popup could not run the manifest', e)
     runError.value =

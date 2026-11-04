@@ -349,11 +349,21 @@ export async function postSiteJson(
  * `getPackageCode/?kw=<name>&filter=%20E_PACKAGE_NAM` — the `filter` value
  * starts with a SPACE, that is what the site sends.
  */
+const mapPkgName = {
+  'PACKAGES': 'PACKAGE',
+  'CARTONS': 'CARTON',
+  'BAGS': 'BAG',
+  'BOTTLES': 'BOTTLE',
+  'BOXES': 'BOX',
+  'DRUMS': 'DRUM',
+  'ROLLS': 'ROLL',
+  'CASES': 'CASE',
+}
 export async function fetchPackageCode(
   name: string,
   options: SiteFetchOptions = {},
 ): Promise<string | undefined> {
-  const kw = name.trim() === 'PACKAGES' ? 'PACKAGE' : name.trim()
+  const kw = mapPkgName[name.trim() as keyof typeof mapPkgName] ?? name.trim()
   if (kw === '') return undefined
 
   const raw = await fetchSiteJson(
