@@ -388,9 +388,9 @@ onUnmounted(() => {
     <!--
       Result is stale - the current result is not for the bill number entered by the operator
     -->
-    <p v-if="resultStale" class="hint stale-result">
+    <!-- <p v-if="resultStale" class="hint stale-result">
       {{ staleMessage }}
-    </p>
+    </p> -->
 
     <!--
       The ONE message of the last run — red for an error, yellow for a
