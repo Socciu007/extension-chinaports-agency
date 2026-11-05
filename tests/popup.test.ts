@@ -3,7 +3,8 @@ import { mount, flushPromises } from '@vue/test-utils'
 import PopupApp from '../src/popup/App.vue'
 import { MSG_CREATE_MANIFEST } from '../src/core/protocol'
 import { DEFAULT_SETTINGS } from '../src/core/options'
-import { MANIFEST_URL } from '../src/core/site-url'
+import { MANIFEST_URL, SITE_HOME_URL } from '../src/core/site-url'
+import { LOGIN_CREDENTIALS_KEY } from '../src/core/login-credentials'
 
 /**
  * Test tầng WIRING của popup — không chỉ test primitive (`saveSettings`,
@@ -14,29 +15,43 @@ import { MANIFEST_URL } from '../src/core/site-url'
  */
 
 const store: Record<string, unknown> = {}
+/** The store of `chrome.storage.local` — the login details live there. */
+const localStore: Record<string, unknown> = {}
 
 type StorageGet = (
   defaults?: Record<string, unknown> | null,
 ) => Promise<Record<string, unknown>>
 type StorageSet = (values: Record<string, unknown>) => Promise<void>
+type LocalGet = (key: string) => Promise<Record<string, unknown>>
+type LocalSet = (values: Record<string, unknown>) => Promise<void>
 type SentMessage = { type: string; [key: string]: unknown }
 type SendMessage = (message: SentMessage) => Promise<unknown>
 type StorageListener = (
   changes: Record<string, { newValue?: unknown }>,
   areaName: string,
 ) => void
+type TabChangeInfo = { status?: string }
+type TabUpdatedListener = (tabId: number, changeInfo: TabChangeInfo) => void
+type TabRemovedInfo = { windowId: number; isWindowClosing: boolean }
+type TabRemovedListener = (tabId: number, removeInfo: TabRemovedInfo) => void
 
 let storageGet: StorageGet
 let storageSet: StorageSet
+let localGet: LocalGet
+let localSet: LocalSet
 let sendMessage: SendMessage
 /** Ghi lại type của mọi message đã gửi đi — để assert "KHÔNG được gửi". */
 let sentTypes: string[]
 /** Ghi lại TOÀN BỘ message đã gửi đi — để assert payload (vd `blNo`). */
 let sentMessages: SentMessage[]
+/** The id of the tab that received a message — to assert WHICH tab got it. */
+let sentTabIds: number[]
 /** Ghi lại mọi lần ĐIỀU HƯỚNG tab — để assert tab nào bị đổi URL. */
 let tabUpdates: { tabId: number; url?: string; active?: boolean }[]
 /** Ghi lại mọi lần TẠO tab mới — để assert không mở tab mới. */
 let createdTabs: (string | undefined)[]
+/** The details of a created tab — its id, its URL and its `active` flag. */
+let createdTabRecords: { id: number; url?: string; active?: boolean }[]
 /** Ghi lại mọi lần TẢI LẠI tab — để assert tab đang ở trang khai báo được reload. */
 let tabReloads: number[]
 /** URL của tab active trong stub — đổi được để test cả nhánh "đã ở trang khai báo". */
@@ -45,15 +60,42 @@ let activeTabUrl: string
 let activeTabId: number | undefined
 /** Listener của `chrome.storage.onChanged` — để test đổi setting từ nơi khác. */
 let storageListeners: StorageListener[]
+/** The listeners of `chrome.tabs.onUpdated` — the "the tab is loaded" event. */
+let tabUpdatedListeners: TabUpdatedListener[]
+/** The listeners of `chrome.tabs.onRemoved` — the "the tab was closed" event. */
+let tabRemovedListeners: TabRemovedListener[]
+/** The state of the tabs the stub knows (id → tab). */
+const tabStates = new Map<number, { id: number; url?: string; status: string }>()
+/** The id of the next created tab. */
+let nextTabId: number
+/** The status of a NEWLY created tab — the real browser says `'loading'`. */
+let createdTabStatus: string
+/** The ids of the tabs that are GONE (closed) — `chrome.tabs.get` rejects. */
+let goneTabIds: Set<number>
+/** How many sends are rejected with the "no receiver" rejection of Chrome. */
+let noReceiverCount: number
+/** Called every time the stub answers `chrome.tabs.get` — a test may use it. */
+let onTabGet: ((tabId: number) => void) | undefined
 
 beforeEach(() => {
   for (const key of Object.keys(store)) delete store[key]
+  for (const key of Object.keys(localStore)) delete localStore[key]
+  tabStates.clear()
   sentTypes = []
   sentMessages = []
+  sentTabIds = []
   tabUpdates = []
   createdTabs = []
+  createdTabRecords = []
   tabReloads = []
   storageListeners = []
+  tabUpdatedListeners = []
+  tabRemovedListeners = []
+  nextTabId = 100
+  createdTabStatus = 'loading'
+  goneTabIds = new Set()
+  noReceiverCount = 0
+  onTabGet = undefined
   activeTabUrl = 'https://example.test/'
   activeTabId = 1
   storageGet = async (defaults) => ({ ...(defaults ?? {}), ...store })
@@ -65,6 +107,10 @@ beforeEach(() => {
     for (const [key, value] of Object.entries(values)) changes[key] = { newValue: value }
     emitStorageChange(changes)
   }
+  localGet = async (key) => (key in localStore ? { [key]: localStore[key] } : {})
+  localSet = async (values) => {
+    Object.assign(localStore, values)
+  }
   sendMessage = async () => successResult()
 
   vi.stubGlobal('chrome', {
@@ -72,6 +118,10 @@ beforeEach(() => {
       sync: {
         get: (defaults?: Record<string, unknown> | null) => storageGet(defaults),
         set: (values: Record<string, unknown>) => storageSet(values),
+      },
+      local: {
+        get: (key: string) => localGet(key),
+        set: (values: Record<string, unknown>) => localSet(values),
       },
       onChanged: {
         addListener: (fn: StorageListener) => {
@@ -84,25 +134,67 @@ beforeEach(() => {
     },
     tabs: {
       query: async () => (activeTabId === undefined ? [] : [{ id: activeTabId }]),
-      get: async (tabId: number) => ({ id: tabId, url: activeTabUrl }),
+      get: async (tabId: number) => {
+        onTabGet?.(tabId)
+        // The real browser rejects when the tab was closed.
+        if (goneTabIds.has(tabId)) throw new Error(`No tab with id: ${tabId}.`)
+        const known = tabStates.get(tabId)
+        if (known) return known
+        return { id: tabId, url: activeTabUrl, status: 'complete' }
+      },
       reload: async (tabId: number) => {
         tabReloads.push(tabId)
+        // The real browser reports "the tab is loaded" after a reload.
+        markTabComplete(tabId)
         return undefined
       },
-      sendMessage: (_tabId: number, message: SentMessage) => {
+      sendMessage: (tabId: number, message: SentMessage) => {
+        sentTabIds.push(tabId)
         sentTypes.push(message.type)
         // Copy chứ không giữ tham chiếu — để assert không bị ảnh hưởng nếu
         // sau này ai đó sửa lại object message đã gửi.
         sentMessages.push({ ...message })
+        // The real browser rejects when the tab has NO listener (the content
+        // script is not in it yet).
+        if (noReceiverCount > 0) {
+          noReceiverCount -= 1
+          return Promise.reject(
+            new Error('Could not establish connection. Receiving end does not exist.'),
+          )
+        }
         return sendMessage(message)
       },
-      create: async (props: { url?: string }) => {
+      create: async (props: { url?: string; active?: boolean }) => {
         createdTabs.push(props.url)
-        return undefined
+        const id = nextTabId
+        nextTabId += 1
+        createdTabRecords.push({ id, url: props.url, active: props.active })
+        const tab = { id, url: props.url, status: createdTabStatus }
+        tabStates.set(id, tab)
+        return tab
       },
       update: async (tabId: number, props: { url?: string; active?: boolean }) => {
         tabUpdates.push({ tabId, url: props.url, active: props.active })
+        // The real browser reports "the tab is loaded" after a NAVIGATION —
+        // bringing a tab to the front does NOT reload the page.
+        if (props.url !== undefined) markTabComplete(tabId)
         return undefined
+      },
+      onUpdated: {
+        addListener: (fn: TabUpdatedListener) => {
+          tabUpdatedListeners.push(fn)
+        },
+        removeListener: (fn: TabUpdatedListener) => {
+          tabUpdatedListeners = tabUpdatedListeners.filter((listener) => listener !== fn)
+        },
+      },
+      onRemoved: {
+        addListener: (fn: TabRemovedListener) => {
+          tabRemovedListeners.push(fn)
+        },
+        removeListener: (fn: TabRemovedListener) => {
+          tabRemovedListeners = tabRemovedListeners.filter((listener) => listener !== fn)
+        },
       },
     },
   })
@@ -111,6 +203,55 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
 })
+
+/**
+ * Tell the stub that the tab is loaded — the `onUpdated` event of the browser.
+ */
+function markTabComplete(tabId: number): void {
+  const tab = tabStates.get(tabId)
+  if (tab) tab.status = 'complete'
+  for (const listener of [...tabUpdatedListeners]) listener(tabId, { status: 'complete' })
+}
+
+/**
+ * Flush the pending promises — works with the real timers AND with the fake
+ * ones (the fake `setTimeout` would make `flushPromises` wait forever).
+ */
+async function flushPending(): Promise<void> {
+  if (vi.isFakeTimers()) {
+    await vi.advanceTimersByTimeAsync(0)
+    return
+  }
+  await flushPromises()
+}
+
+/**
+ * The tab that was created finishes loading — the `onUpdated` event.
+ *
+ * A NEW tab of the site starts with the status `loading` (like the real
+ * browser) ⇒ the popup waits for it before it sends the message ⇒ a test
+ * that creates a tab must drive the load itself.
+ */
+async function completeCreatedTab(index = 0): Promise<void> {
+  await flushPending()
+  const id = createdTabRecords[index]?.id
+  if (id === undefined) throw new Error('no tab was created')
+  markTabComplete(id)
+  await flushPending()
+}
+
+/**
+ * The tab is closed — the `onRemoved` event of the browser.
+ *
+ * A closed tab never fires `complete` ⇒ the popup must notice the closure.
+ */
+function removeTab(tabId: number): void {
+  goneTabIds.add(tabId)
+  tabStates.delete(tabId)
+  for (const listener of [...tabRemovedListeners]) {
+    listener(tabId, { windowId: -1, isWindowClosing: false })
+  }
+}
 
 /**
  * Kết quả "thành công" mặc định — đủ shape để popup dựng được UI.
@@ -138,6 +279,24 @@ function buttonByText(wrapper: ReturnType<typeof mount>, text: string) {
 
 function checkbox(wrapper: ReturnType<typeof mount>) {
   return wrapper.find('input[type="checkbox"]')
+}
+
+/**
+ * The tick box of the login mode.
+ *
+ * It is the SECOND box in the DOM: the first one is the "create on site"
+ * opt-in (the old test finds the FIRST one ⇒ this DOM order is required).
+ */
+function loginTokenCheckbox(wrapper: ReturnType<typeof mount>) {
+  const boxes = wrapper.findAll('input[type="checkbox"]')
+  const box = boxes[1]
+  if (!box) throw new Error('could not find the login token checkbox')
+  return box
+}
+
+/** Is the tick box of the login mode ticked? */
+function isLoginTokenChecked(wrapper: ReturnType<typeof mount>): boolean {
+  return (loginTokenCheckbox(wrapper).element as HTMLInputElement).checked
 }
 
 function isChecked(wrapper: ReturnType<typeof mount>): boolean {
@@ -1515,5 +1674,776 @@ describe('popup — nút Open page', () => {
     expect(tabUpdates).toEqual([{ tabId: 1, url: MANIFEST_URL, active: true }])
     expect(tabReloads).toEqual([])
     expect(createdTabs).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The login mode — the token comes from a login, the manifest page is NOT needed
+// ---------------------------------------------------------------------------
+
+/**
+ * The endpoints of the login flow.
+ *
+ * They are written HERE ON PURPOSE, not imported from `src/core/login-token.ts`:
+ * a change of an endpoint in the core must be a DELIBERATE change of the test
+ * too — if the test followed the core, it would stop being a check.
+ */
+/** The endpoint of the site that gives the captcha. */
+const SITE_CAPTCHA_URL = 'https://www.chinaports-agency.com:8870/api/captcha/'
+/** The endpoint of the captcha service. */
+const OCR_SERVICE_URL = 'https://upload.chaojiying.net/Upload/Processing.php'
+/** The endpoint of the site that logs in. */
+const SITE_LOGIN_URL = 'https://www.chinaports-agency.com:8870/api/login/'
+
+/** The details of the operator — they live in `chrome.storage.local`. */
+const LOGIN_CREDENTIALS = {
+  siteUsername: 'site-user',
+  sitePassword: 'site-pass',
+  ocrUser: 'ocr-user',
+  ocrPassword: 'ocr-pass',
+  ocrSoftwareId: 'soft-id',
+}
+
+/** A JSON answer of the fake fetch. */
+function jsonResponse(body: unknown) {
+  return { ok: true, status: 200, json: async () => body } as unknown as Response
+}
+
+/**
+ * A fake `fetch` of the login flow: the captcha of the site ⇒ the captcha
+ * service ⇒ the login of the site.
+ *
+ * `refuseLogin` makes the site REFUSE the login (its answer is not `2000`).
+ */
+function fakeLoginFetch(options: { refuseLogin?: boolean } = {}): {
+  fetchImpl: typeof fetch
+  calls: string[]
+} {
+  const calls: string[] = []
+  const fetchImpl = vi.fn(async (url: string) => {
+    const target = String(url)
+    calls.push(target)
+    if (target === SITE_CAPTCHA_URL) {
+      return jsonResponse({
+        code: 2000,
+        data: { image_base: 'data:image/png;base64,AAABBB', key: 'captcha-key' },
+      })
+    }
+    if (target === OCR_SERVICE_URL) return jsonResponse({ pic_str: '8F2K' })
+    if (target === SITE_LOGIN_URL) {
+      if (options.refuseLogin === true) {
+        return jsonResponse({ code: 5000, msg: 'The captcha or the account is wrong.' })
+      }
+      return jsonResponse({ code: 2000, data: { token: 'the-token' } })
+    }
+    throw new Error(`Unexpected URL: ${target}`)
+  })
+  return { fetchImpl: fetchImpl as unknown as typeof fetch, calls }
+}
+
+/** Turn the login mode on and put the login details in the local storage. */
+function enableLoginMode(): void {
+  store.createOnSite = true
+  store.loginToken = true
+  localStore[LOGIN_CREDENTIALS_KEY] = LOGIN_CREDENTIALS
+}
+
+describe('popup — ô tick chế độ đăng nhập', () => {
+  it('setting ĐÃ bật ⇒ ô tick thứ HAI hiện và TICK', async () => {
+    store.loginToken = true
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    // The first box is the "create on site" opt-in ⇒ the login box is the SECOND one.
+    expect(wrapper.findAll('input[type="checkbox"]')).toHaveLength(2)
+    expect(isLoginTokenChecked(wrapper)).toBe(true)
+  })
+
+  it('setting TẮT ⇒ ô tick thứ HAI hiện và KHÔNG tick', async () => {
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    expect(wrapper.findAll('input[type="checkbox"]')).toHaveLength(2)
+    expect(isLoginTokenChecked(wrapper)).toBe(false)
+  })
+
+  it('tick ô ⇒ lưu `loginToken: true`', async () => {
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await loginTokenCheckbox(wrapper).setValue(true)
+    await flushPromises()
+
+    expect(store.loginToken).toBe(true)
+    expect(wrapper.find('.settings-error').exists()).toBe(false)
+  })
+
+  it('lưu lỗi ⇒ rollback ô tick về giá trị ĐÃ LƯU và báo lỗi', async () => {
+    store.loginToken = false
+    storageSet = async () => {
+      throw new Error('storage disabled')
+    }
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      const wrapper = mount(PopupApp)
+      await flushPromises()
+
+      expect(isLoginTokenChecked(wrapper)).toBe(false)
+
+      await loginTokenCheckbox(wrapper).setValue(true)
+      await flushPromises()
+
+      // The box must go back to unchecked — it must NOT sit in the "ticked"
+      // state while the setting is really not saved.
+      expect(isLoginTokenChecked(wrapper)).toBe(false)
+      expect(wrapper.find('.settings-error').text()).toBe(
+        'Could not save the settings. Please try again.',
+      )
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('lưu lỗi mà giá trị ĐÃ LƯU là `true` ⇒ rollback về checked', async () => {
+    store.loginToken = true
+    storageSet = async () => {
+      throw new Error('storage disabled')
+    }
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      const wrapper = mount(PopupApp)
+      await flushPromises()
+
+      expect(isLoginTokenChecked(wrapper)).toBe(true)
+
+      await loginTokenCheckbox(wrapper).setValue(false)
+      await flushPromises()
+
+      expect(isLoginTokenChecked(wrapper)).toBe(true)
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('đang lưu setting ⇒ nút Run bị disable (không chạy nhầm chế độ THƯỜNG)', async () => {
+    // The opt-in is ON ⇒ the Run button works... until a save is in flight.
+    // Then the tick box says "login mode" but the setting is NOT in the
+    // storage yet ⇒ if the button worked, the run would go in NORMAL mode.
+    store.createOnSite = true
+    let resolveSet: (() => void) | undefined
+    storageSet = async (values) => {
+      await new Promise<void>((resolve) => {
+        resolveSet = resolve
+      })
+      Object.assign(store, values)
+    }
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    expect(isDisabled(wrapper, 'Create draft on site')).toBe(false)
+
+    // The operator ticks the login box ⇒ the save starts and hangs.
+    await loginTokenCheckbox(wrapper).setValue(true)
+    await flushPromises()
+
+    expect(isDisabled(wrapper, 'Create draft on site')).toBe(true)
+
+    resolveSet?.()
+    await flushPromises()
+
+    expect(isDisabled(wrapper, 'Create draft on site')).toBe(false)
+  })
+})
+
+describe('popup — chế độ đăng nhập: lấy token rồi chạy manifest', () => {
+  it('có thông tin đăng nhập ⇒ message mang `loginMode` + token, và gọi đủ 3 request', async () => {
+    enableLoginMode()
+    const { fetchImpl, calls } = fakeLoginFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      const wrapper = mount(PopupApp)
+      await flushPromises()
+
+      await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+      await clickCreate(wrapper)
+      // The new tab of the site must finish loading before the message goes.
+      await completeCreatedTab()
+
+      const message = sentMessages.find((m) => m.type === MSG_CREATE_MANIFEST)
+      expect(message).toBeDefined()
+      expect(message?.loginMode).toBe(true)
+      expect(message?.token).toBe('the-token')
+      // Captcha of the site ⇒ captcha service ⇒ login of the site.
+      expect(calls).toEqual([SITE_CAPTCHA_URL, OCR_SERVICE_URL, SITE_LOGIN_URL])
+      // The token is a session secret ⇒ it must NEVER reach the console — not
+      // as a string and not hidden inside an Error.
+      for (const spy of [infoSpy, errorSpy, warnSpy]) {
+        for (const call of spy.mock.calls) {
+          const text = JSON.stringify(call.map((a) => (a instanceof Error ? a.message : a)))
+          expect(text).not.toContain('the-token')
+        }
+      }
+    } finally {
+      infoSpy.mockRestore()
+      errorSpy.mockRestore()
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('CHƯA có thông tin đăng nhập ⇒ báo lỗi trỏ tới options, KHÔNG gửi message', async () => {
+    store.createOnSite = true
+    store.loginToken = true
+    // The local store is empty ⇒ there are no login details at all.
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+
+    // The sentence is pinned EXACTLY: the diagnosis of the login flow must
+    // reach the operator. A looser assertion (the sentence merely CONTAINS
+    // "extension options") would also accept the generic fallback ⇒ the
+    // diagnosis could be lost without any test going red.
+    expect(wrapper.find('.message-error').text()).toBe(
+      'Set the login details in the extension options first: the site account, the site password and the captcha service details.',
+    )
+    expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(0)
+  })
+
+  it('site TỪ CHỐI đăng nhập ⇒ chẩn đoán của site tới nguyên văn cho operator', async () => {
+    // The site answers the login with a code that is not `2000` ⇒ the login
+    // flow knows WHY it failed ⇒ that sentence must reach the operator, not
+    // the generic "check the login details" one.
+    enableLoginMode()
+    const { fetchImpl } = fakeLoginFetch({ refuseLogin: true })
+    vi.stubGlobal('fetch', fetchImpl)
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+
+    expect(wrapper.find('.message-error').text()).toBe(
+      'The site refused the login — the captcha text or the account details may be wrong.',
+    )
+    expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(0)
+  })
+
+  it('đọc thông tin đăng nhập lỗi ⇒ báo lỗi trỏ tới options, KHÔNG gửi message', async () => {
+    store.createOnSite = true
+    store.loginToken = true
+    localGet = async () => {
+      throw new Error('storage disabled')
+    }
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      const wrapper = mount(PopupApp)
+      await flushPromises()
+
+      await wrapper.find('input[type="text"]').setValue('BL123')
+      await clickCreate(wrapper)
+
+      expect(wrapper.find('.message-error').text()).toBe(
+        'Could not read the login details from the extension options.',
+      )
+      expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(0)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('tab active KHÔNG ở site ⇒ mở tab MỚI ở nền, message đi vào tab MỚI', async () => {
+    enableLoginMode()
+    activeTabUrl = 'https://example.test/'
+    const { fetchImpl } = fakeLoginFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+    // The new tab starts with the status `loading` ⇒ the popup waits for it.
+    await completeCreatedTab()
+
+    // The manifest page is NOT needed ⇒ the home page of the site is opened.
+    expect(createdTabs).toEqual([SITE_HOME_URL])
+    // Opened in the BACKGROUND ⇒ the popup stays open (the operator does not
+    // lose the result).
+    expect(createdTabRecords[0]?.active).toBe(false)
+    // The message must go to the NEW tab, not to the active tab.
+    expect(sentTabIds).toEqual([createdTabRecords[0]?.id])
+  })
+
+  it('tab active ĐÃ ở trên site (route bất kỳ) ⇒ KHÔNG mở tab mới', async () => {
+    enableLoginMode()
+    activeTabUrl = 'https://www.chinaports-agency.com:8870/#/someOtherRoute'
+    const { fetchImpl } = fakeLoginFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+
+    expect(createdTabs).toEqual([])
+    expect(sentTabIds).toEqual([1])
+  })
+
+  it('KHÔNG kích hoạt tab và KHÔNG reload tab', async () => {
+    // Activating another tab closes the popup ⇒ the operator loses the
+    // result; reloading the page of the operator can destroy what they were
+    // typing.
+    enableLoginMode()
+    const { fetchImpl } = fakeLoginFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+    await completeCreatedTab()
+
+    expect(tabUpdates).toEqual([])
+    expect(tabReloads).toEqual([])
+  })
+
+  it('tab mới CHƯA tải xong ⇒ đợi sự kiện `complete` rồi mới gửi message', async () => {
+    enableLoginMode()
+    createdTabStatus = 'loading'
+    const { fetchImpl } = fakeLoginFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+
+    // The content script is not in the tab yet ⇒ the message is NOT sent.
+    expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(0)
+
+    markTabComplete(createdTabRecords[0]?.id ?? -1)
+    await flushPromises()
+
+    expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(1)
+  })
+
+  it('content script CHƯA có trong tab ⇒ message được gửi LẠI cho tới khi có', async () => {
+    // The content script is injected at `document_idle` and Chrome picks that
+    // moment itself ⇒ the message can arrive BEFORE the listener is there.
+    enableLoginMode()
+    const { fetchImpl } = fakeLoginFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+    sendMessage = async () =>
+      successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
+    // The first two sends find NO receiver.
+    noReceiverCount = 2
+    // The fake timers: the retry waits 300 ms - the REAL clock would make
+    // this test depend on how busy the machine is.
+    vi.useFakeTimers()
+
+    try {
+      const wrapper = mount(PopupApp)
+      await flushPending()
+
+      await wrapper.find('input[type="text"]').setValue('BL123')
+      await buttonByText(wrapper, 'Create draft on site').trigger('click')
+      await flushPending()
+      await completeCreatedTab()
+
+      // The first send found no receiver ⇒ the popup does NOT give up.
+      expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(1)
+      expect(wrapper.find('.message-error').exists()).toBe(false)
+
+      // The content script arrives ⇒ the message goes through.
+      await vi.advanceTimersByTimeAsync(300 * 3)
+      await flushPending()
+
+      expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(3)
+      expect(wrapper.find('.message-error').exists()).toBe(false)
+      expect(wrapper.find('.message-success').exists()).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('tab active biến mất ⇒ mở tab MỚI và message đi vào tab mới', async () => {
+    // The operator closed the tab while the popup was logging in.
+    enableLoginMode()
+    activeTabUrl = 'https://www.chinaports-agency.com:8870/#/someOtherRoute'
+    goneTabIds.add(1)
+    const { fetchImpl } = fakeLoginFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+    await completeCreatedTab()
+
+    // A vanished tab is "otherwise" ⇒ a NEW tab is opened.
+    expect(createdTabs).toEqual([SITE_HOME_URL])
+    expect(sentTabIds).toEqual([createdTabRecords[0]?.id])
+  })
+
+  it('tab biến mất LÚC CHỜ ⇒ mở tab MỚI và gửi lại vào tab mới', async () => {
+    // The tab is closed right AFTER the popup looked at it ⇒ the run must not
+    // die, it must open a NEW tab (the fallback happens EXACTLY once).
+    enableLoginMode()
+    activeTabUrl = 'https://www.chinaports-agency.com:8870/#/someOtherRoute'
+    let gets = 0
+    onTabGet = (tabId) => {
+      if (tabId !== 1) return
+      gets += 1
+      if (gets === 2) goneTabIds.add(1)
+    }
+    const { fetchImpl } = fakeLoginFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+    await completeCreatedTab()
+
+    expect(createdTabs).toEqual([SITE_HOME_URL])
+    expect(sentTabIds).toEqual([createdTabRecords[0]?.id])
+  })
+
+  it('tab bị ĐÓNG lúc popup chờ ⇒ mở tab MỚI và message đi vào tab mới', async () => {
+    // The operator does not want the stray tab and closes it while it is
+    // still loading ⇒ a closed tab never fires `complete` ⇒ the popup must
+    // notice the closure instead of waiting for the deadline.
+    enableLoginMode()
+    activeTabUrl = 'https://example.test/'
+    const { fetchImpl } = fakeLoginFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+
+    // The first new tab is still loading ⇒ the operator closes it.
+    const closedTabId = createdTabRecords[0]?.id ?? -1
+    removeTab(closedTabId)
+    await flushPromises()
+
+    // The popup opens a NEW tab instead of waiting for the deadline.
+    expect(createdTabs).toEqual([SITE_HOME_URL, SITE_HOME_URL])
+    expect(wrapper.find('.message-error').exists()).toBe(false)
+
+    // The message goes to the NEW tab.
+    await completeCreatedTab(1)
+
+    expect(sentTabIds).toEqual([createdTabRecords[1]?.id])
+
+    // The wait leaves NO listener behind - a later closed tab must not
+    // disturb the popup any more.
+    expect(tabUpdatedListeners).toHaveLength(0)
+    expect(tabRemovedListeners).toHaveLength(0)
+  })
+
+  it('tab biến mất HAI LẦN ⇒ báo tải lại trang, KHÔNG báo kiểm tra thông tin đăng nhập', async () => {
+    // The operator closes the new tab, the popup opens a second new tab, the
+    // operator closes that one too ⇒ this is NOT a problem with the login
+    // details.
+    enableLoginMode()
+    activeTabUrl = 'https://example.test/'
+    const { fetchImpl } = fakeLoginFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+
+    // Tab mới thứ nhất bị đóng lúc đang tải ⇒ popup mở tab thứ hai.
+    removeTab(createdTabRecords[0]?.id ?? -1)
+    await flushPromises()
+    expect(createdTabs).toEqual([SITE_HOME_URL, SITE_HOME_URL])
+
+    // The second tab is closed too ⇒ this time it is a real failure.
+    removeTab(createdTabRecords[1]?.id ?? -1)
+    await flushPromises()
+
+    expect(wrapper.find('.message-error').text()).toBe(
+      'Could not reach the site page. Reload the page on the site and try again.',
+    )
+  })
+
+  it('gửi message lỗi KHÁC (không phải "không có listener") ⇒ báo tải lại trang, KHÔNG báo kiểm tra thông tin đăng nhập', async () => {
+    // The content script IS there but the page navigated while the run was in
+    // flight ⇒ the credentials are fine ⇒ the operator has to reload the
+    // page, not to check the login details.
+    enableLoginMode()
+    const { fetchImpl } = fakeLoginFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+    sendMessage = async () => {
+      throw new Error('The message port closed before a response was received.')
+    }
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+    await completeCreatedTab()
+
+    expect(wrapper.find('.message-error').text()).toBe(
+      'Could not reach the site page. Reload the page on the site and try again.',
+    )
+  })
+
+  it('tab KHÔNG tải xong ⇒ báo deadline của TRANG, KHÔNG phải deadline của lần chạy', async () => {
+    // The page of the site never loads ⇒ the operator must not be sent to the
+    // manifest form (that is the deadline of the RUN, a different failure).
+    enableLoginMode()
+    const { fetchImpl } = fakeLoginFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+    vi.useFakeTimers()
+
+    try {
+      const wrapper = mount(PopupApp)
+      await flushPending()
+
+      await wrapper.find('input[type="text"]').setValue('BL123')
+      await buttonByText(wrapper, 'Create draft on site').trigger('click')
+      await flushPending()
+
+      // The deadline of the page load of the popup is 20 s.
+      await vi.advanceTimersByTimeAsync(20_000 + 100)
+      await flushPending()
+
+      expect(wrapper.find('.message-error').text()).toBe(
+        'The site page did not load in time. Check the page on the site and try again.',
+      )
+
+      // The deadline must clean up after itself too - a leaked listener would
+      // fire for every later tab the operator closes.
+      expect(tabUpdatedListeners).toHaveLength(0)
+      expect(tabRemovedListeners).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('trang vừa tải xong LÚC popup đăng listener ⇒ vẫn gửi message, KHÔNG chờ deadline', async () => {
+    // The `complete` event can be MISSED: the status is read BEFORE the
+    // listener is registered, and the page finishes loading at exactly that
+    // moment ⇒ the popup has to ask the status again, it must not wait for
+    // the deadline.
+    enableLoginMode()
+    const siteTabId = 1
+    tabStates.set(siteTabId, {
+      id: siteTabId,
+      url: 'https://www.chinaports-agency.com:8870/#/someOtherRoute',
+      status: 'loading',
+    })
+    let gets = 0
+    onTabGet = (tabId) => {
+      if (tabId !== siteTabId) return
+      gets += 1
+      // The THIRD read is the read AFTER the listener was registered ⇒ the
+      // page finishes loading exactly then - but NO event is fired.
+      if (gets >= 3) {
+        const tab = tabStates.get(siteTabId)
+        if (tab) tab.status = 'complete'
+      }
+    }
+    const { fetchImpl } = fakeLoginFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+    vi.useFakeTimers()
+
+    try {
+      const wrapper = mount(PopupApp)
+      await flushPending()
+
+      await wrapper.find('input[type="text"]').setValue('BL123')
+      await buttonByText(wrapper, 'Create draft on site').trigger('click')
+      await flushPending()
+      await flushPending()
+      await flushPending()
+
+      expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(1)
+      expect(wrapper.find('.message-error').exists()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('gửi message thất bại ⇒ báo tải lại trang trên site, KHÔNG báo kiểm tra thông tin đăng nhập', async () => {
+    // The tab has no listener (the extension was reloaded and the page was
+    // not) ⇒ the most common cause is NOT the login details.
+    enableLoginMode()
+    const { fetchImpl } = fakeLoginFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+    // EVERY send finds no receiver.
+    noReceiverCount = 100
+    vi.useFakeTimers()
+
+    try {
+      const wrapper = mount(PopupApp)
+      await flushPending()
+
+      await wrapper.find('input[type="text"]').setValue('BL123')
+      await buttonByText(wrapper, 'Create draft on site').trigger('click')
+      await flushPending()
+      await completeCreatedTab()
+
+      // The popup gives up after its attempts (10 tries, 300 ms apart).
+      await vi.advanceTimersByTimeAsync(300 * 11)
+      await flushPending()
+
+      expect(wrapper.find('.message-error').text()).toBe(
+        'Could not reach the site page. Reload the page on the site and try again.',
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('ghi thành công ⇒ có dòng chỉ đường tới trang khai báo', async () => {
+    // NO page is refreshed in this mode ⇒ the operator has to know that the
+    // manifest page is where the new draft is.
+    enableLoginMode()
+    const { fetchImpl } = fakeLoginFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+    sendMessage = async () =>
+      successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+    await completeCreatedTab()
+
+    expect(wrapper.text()).toContain(
+      'Open the manifest declaration page (预配舱单) to see the new draft.',
+    )
+  })
+
+  it('ghi xong nhưng còn field bắt buộc bị trống ⇒ VẪN có dòng chỉ đường tới trang khai báo', async () => {
+    // The YELLOW outcome (a required field is still blank) but the draft WAS
+    // written ⇒ the pointer must stay: in the login mode no page is refreshed
+    // and the operator has to go to the manifest page to fill the field.
+    enableLoginMode()
+    const { fetchImpl } = fakeLoginFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+    sendMessage = async () =>
+      successResult({
+        blocked: true,
+        message:
+          '1 field(s) required by the site are not provided by the API — fill them in by hand on the site.',
+        billCreated: true,
+        written: true,
+        billNo: 'BILL-1',
+      })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+    await completeCreatedTab()
+
+    expect(wrapper.find('.message-warning').exists()).toBe(true)
+    expect(wrapper.text()).toContain(
+      'Open the manifest declaration page (预配舱单) to see the new draft.',
+    )
+  })
+})
+
+describe('popup — chế độ THƯỜNG không bị lẫn với chế độ đăng nhập', () => {
+  it('chế độ THƯỜNG ⇒ đưa tab lên trước và reload tab', async () => {
+    // The normal mode refreshes the page of the operator so that the new
+    // draft shows up there - the login mode does NOT do that.
+    store.createOnSite = true
+    sendMessage = async () =>
+      successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+
+    // The tab is brought to the front ...
+    expect(tabUpdates).toEqual([{ tabId: 1, url: undefined, active: true }])
+    // ... and reloaded, so the operator sees the new draft.
+    expect(tabReloads).toEqual([1])
+  })
+
+  it('request chỉ mang `type` + `blNo` — KHÔNG có cờ của chế độ đăng nhập', async () => {
+    store.createOnSite = true
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
+    await clickCreate(wrapper)
+
+    const message = sentMessages.find((m) => m.type === MSG_CREATE_MANIFEST)
+    expect(message).toBeDefined()
+    expect(Object.keys(message ?? {}).sort()).toEqual(['blNo', 'type'])
+  })
+
+  it('ghi thành công ⇒ KHÔNG có dòng chỉ đường tới trang khai báo', async () => {
+    // The normal mode refreshes the manifest page ⇒ the operator already sees
+    // the result.
+    store.createOnSite = true
+    sendMessage = async () =>
+      successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+
+    expect(wrapper.text()).not.toContain('Open the manifest declaration page')
+  })
+
+  it('ghi xong nhưng còn field bắt buộc bị trống ⇒ KHÔNG có dòng chỉ đường tới trang khai báo', async () => {
+    // The mirror of the test above: the same outcome (the draft was written,
+    // a required field is still blank) but in NORMAL mode ⇒ no pointer.
+    store.createOnSite = true
+    sendMessage = async () =>
+      successResult({
+        blocked: true,
+        message:
+          '1 field(s) required by the site are not provided by the API — fill them in by hand on the site.',
+        billCreated: true,
+        written: true,
+        billNo: 'BILL-1',
+      })
+
+    const wrapper = mount(PopupApp)
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('BL123')
+    await clickCreate(wrapper)
+
+    expect(wrapper.find('.message-warning').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('Open the manifest declaration page')
   })
 })

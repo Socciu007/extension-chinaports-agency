@@ -104,6 +104,28 @@ describe('readSettings', () => {
     const settings = await readSettings()
     expect(settings.createOnSite).toBe(true)
   })
+
+  it('loginToken mặc định là tắt', async () => {
+    // The login mode is NEVER on by default: without the login details there
+    // is nothing to run.
+    const settings = await readSettings()
+    expect(settings.loginToken).toBe(false)
+    expect(DEFAULT_SETTINGS.loginToken).toBe(false)
+  })
+
+  it('loginToken trong storage không phải boolean ⇒ ép về false', async () => {
+    // The storage can be edited by hand ⇒ only the boolean `true` turns the
+    // mode on.
+    store.loginToken = 'true'
+    const settings = await readSettings()
+    expect(settings.loginToken).toBe(false)
+  })
+
+  it('loginToken trong storage là boolean ⇒ giữ nguyên', async () => {
+    store.loginToken = true
+    const settings = await readSettings()
+    expect(settings.loginToken).toBe(true)
+  })
 })
 
 describe('fallback từ key legacy `autoSubmit`', () => {
@@ -369,7 +391,12 @@ describe('writeSettings', () => {
   it('mọi key trong DEFAULT_SETTINGS đều được ghi khi patch', async () => {
     // Hợp đồng với người dùng: patch setting nào thì setting đó được lưu.
     for (const key of Object.keys(DEFAULT_SETTINGS)) {
-      const value = key === 'createOnSite' ? true : 'https://custom.example/api'
+      // A boolean key takes a boolean - writing a string into a boolean key
+      // is coerced to `false` when it is read back ⇒ the assert would fail.
+      const value =
+        typeof DEFAULT_SETTINGS[key as keyof ExtensionSettings] === 'boolean'
+          ? true
+          : 'https://custom.example/api'
       await writeSettings({ [key]: value } as Partial<ExtensionSettings>)
 
       expect(store[key]).toBe(value)
@@ -389,6 +416,26 @@ describe('saveSettings', () => {
 
     const settings = await readSettings()
     expect(settings.createOnSite).toBe(true)
+  })
+
+  it('lưu `loginToken` ⇒ nó được ghi và đọc lại được', async () => {
+    const result = await saveSettings({ loginToken: true })
+
+    expect(result.ok).toBe(true)
+    expect(store.loginToken).toBe(true)
+    expect(setCalls[0]).toEqual({ loginToken: true })
+
+    const settings = await readSettings()
+    expect(settings.loginToken).toBe(true)
+  })
+
+  it('lưu `loginToken` KHÔNG được đụng key khác', async () => {
+    await writeSettings({ createOnSite: true })
+
+    await saveSettings({ loginToken: true })
+
+    expect(setCalls[1]).toEqual({ loginToken: true })
+    expect(setCalls[1]).not.toHaveProperty('createOnSite')
   })
 
   it('storage set lỗi ⇒ ok = false và KHÔNG ném ra ngoài', async () => {

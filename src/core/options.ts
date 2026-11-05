@@ -5,12 +5,18 @@ export interface ExtensionSettings {
   apiBase: string
   siteApiBase: string
   createOnSite: boolean
+  /**
+   * The run gets the token by logging in to the site (captcha → captcha
+   * service → login) instead of using the cookie of the site.
+   */
+  loginToken: boolean
 }
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   apiBase: DEFAULT_API_BASE,
   siteApiBase: DEFAULT_SITE_API_BASE,
   createOnSite: false,
+  loginToken: false,
 }
 
 /**
@@ -44,6 +50,8 @@ function withDefaults(stored: Partial<ExtensionSettings>): ExtensionSettings {
     // `createOnSite` phải là boolean THẬT: storage có thể bị sửa tay, và UI
     // rollback về giá trị đã lưu ⇒ giá trị đó phải đúng kiểu.
     createOnSite: stored.createOnSite === true,
+    // `loginToken` is the same: only the boolean `true` turns the mode on.
+    loginToken: stored.loginToken === true,
   }
 }
 
@@ -84,6 +92,7 @@ function toStoredSettings(raw: RawStoredSettings): Partial<ExtensionSettings> {
   if (typeof raw.siteApiBase === 'string') stored.siteApiBase = raw.siteApiBase
   const createOnSite = resolveCreateOnSite(raw)
   if (createOnSite !== undefined) stored.createOnSite = createOnSite
+  if (typeof raw.loginToken === 'boolean') stored.loginToken = raw.loginToken
   return stored
 }
 
@@ -228,6 +237,7 @@ export interface SettingsChange {
   apiBase?: string
   siteApiBase?: string
   createOnSite?: boolean
+  loginToken?: boolean
 }
 
 /**
