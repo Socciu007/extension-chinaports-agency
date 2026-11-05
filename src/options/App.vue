@@ -8,6 +8,11 @@ import {
   type ExtensionSettings,
   type SettingsChange,
 } from '../core/options'
+import {
+  readLoginCredentialsResult,
+  writeLoginCredentials,
+  type LoginCredentials,
+} from '../core/login-credentials'
 import './styles.css'
 
 const apiBase = ref('')
@@ -200,6 +205,14 @@ async function save(): Promise<void> {
       return
     }
 
+    // The values that were REALLY written - captured BEFORE the await, so the
+    // badge can be checked against them afterwards.
+    const written = {
+      apiBase: nextApiBase,
+      siteApiBase: nextSiteApiBase,
+      createOnSite: createOnSite.value,
+    }
+
     const outcome = await saveSettings(patch)
     if (!outcome.ok) {
       // KHÔNG báo "Saved." khi ghi hỏng — thông báo đó phải CÓ NGHĨA là
@@ -217,19 +230,197 @@ async function save(): Promise<void> {
       assignSetting(snapshot, key, outcome.settings[key])
     }
 
+    // The operator may have typed while the write was in flight ⇒ the badge
+    // must not say "Saved." for a value that was NOT stored.
+    if (
+      apiBase.value.trim() !== written.apiBase ||
+      siteApiBase.value.trim() !== written.siteApiBase ||
+      createOnSite.value !== written.createOnSite
+    ) {
+      saveError.value = 'The settings changed while they were being saved. Press Save again.'
+      return
+    }
+
     showStatus('Saved.')
   } finally {
     saving.value = false
   }
 }
 
+/*
+ * The login details - the section BELOW the settings form.
+ *
+ * The details live in `chrome.storage.local` and NEVER in `chrome.storage.sync`:
+ * a synced password leaves the machine (it is uploaded to the Google account
+ * of the operator and copied to every other machine of theirs).
+ *
+ * The section is INDEPENDENT of the settings form: its own state, its own save
+ * button, its own status and its own error. Saving the settings must not
+ * write the credentials and saving the credentials must not write the
+ * settings.
+ */
+
+/** The account of the site. */
+const siteUsername = ref('')
+/** The password of the site. */
+const sitePassword = ref('')
+/** The user of the captcha service (超級鹰 / chaojiying). */
+const ocrUser = ref('')
+/** The password of the captcha service. */
+const ocrPassword = ref('')
+/** The software ID of the captcha service. */
+const ocrSoftwareId = ref('')
+
+/**
+ * The details have been read - only then the form may be shown.
+ *
+ * The same rule as the settings form: a form that pretends to be the stored
+ * value is worse than no form at all. A failed read ⇒ the error and NO form.
+ */
+const loginLoaded = ref(false)
+/** The details are being read (the first time, or after a Retry). */
+const loginLoading = ref(true)
+/** The error of READING the details - its own, it does not overwrite the save error. */
+const loginLoadError = ref('')
+/** The error of SAVING the details - its own. */
+const loginSaveError = ref('')
+/** The badge of the login section (empty = no badge). */
+const loginStatus = ref('')
+/** The details are being written - the save button is locked meanwhile. */
+const loginSaving = ref(false)
+
+/** Timer that removes the badge of the login section - cleaned on unmount. */
+let loginStatusTimer: ReturnType<typeof setTimeout> | undefined
+
+function clearLoginStatusTimer(): void {
+  if (loginStatusTimer === undefined) return
+  clearTimeout(loginStatusTimer)
+  loginStatusTimer = undefined
+}
+
+/** Show the badge of the login section, then remove it after 2s. */
+function showLoginStatus(message: string): void {
+  clearLoginStatusTimer()
+  loginStatus.value = message
+  loginStatusTimer = setTimeout(() => {
+    loginStatus.value = ''
+    loginStatusTimer = undefined
+  }, 2000)
+}
+
+/** Remove the badge of the login section (with its timer). */
+function clearLoginStatus(): void {
+  clearLoginStatusTimer()
+  loginStatus.value = ''
+}
+
+// The badge must go away as soon as the operator edits a field - the page
+// must not say "Saved." while the form holds a change that is NOT saved.
+watch(
+  [siteUsername, sitePassword, ocrUser, ocrPassword, ocrSoftwareId],
+  clearLoginStatus,
+)
+
+/**
+ * Read the login details - the form is only shown when the read worked.
+ *
+ * `readLoginCredentialsResult` is the truthful variant: it says whether the
+ * read worked, so the page never shows a form that pretends to be the stored
+ * value when it is not.
+ */
+async function loadLoginDetails(): Promise<void> {
+  loginLoading.value = true
+  loginLoadError.value = ''
+  try {
+    const outcome = await readLoginCredentialsResult()
+    if (!outcome.ok) {
+      // The details cannot be read ⇒ we do NOT know what is stored ⇒ the
+      // form must NOT be shown (a form full of empty boxes would look like a
+      // fresh install and would wipe the stored details on the next save).
+      loginLoadError.value = outcome.error
+      loginLoaded.value = false
+      return
+    }
+    siteUsername.value = outcome.credentials.siteUsername
+    sitePassword.value = outcome.credentials.sitePassword
+    ocrUser.value = outcome.credentials.ocrUser
+    ocrPassword.value = outcome.credentials.ocrPassword
+    ocrSoftwareId.value = outcome.credentials.ocrSoftwareId
+    loginLoaded.value = true
+  } finally {
+    loginLoading.value = false
+  }
+}
+
+/**
+ * Save the login details in `chrome.storage.local`.
+ *
+ * `writeLoginCredentials` THROWS when the write fails ⇒ the page must catch
+ * it and report the failure: "Saved." is only shown when the details really
+ * are stored.
+ */
+async function saveLoginDetails(): Promise<void> {
+  // Not read yet ⇒ do NOT write: we do not know what is stored.
+  if (!loginLoaded.value || loginSaving.value) return
+
+  loginSaving.value = true
+  loginSaveError.value = ''
+  clearLoginStatus()
+  try {
+    // The details are written VERBATIM - a password may end with a space and
+    // the operator is the only one who knows what it is.
+    //
+    // The values are captured BEFORE the await: the badge may only claim
+    // "Saved." for the values that were really written.
+    const written: LoginCredentials = {
+      siteUsername: siteUsername.value,
+      sitePassword: sitePassword.value,
+      ocrUser: ocrUser.value,
+      ocrPassword: ocrPassword.value,
+      ocrSoftwareId: ocrSoftwareId.value,
+    }
+    await writeLoginCredentials(written)
+    // The operator may have typed while the write was in flight ⇒ the badge
+    // must not say "Saved." for a value that was NOT stored.
+    if (!holdsTheWrittenDetails(written)) {
+      loginSaveError.value =
+        'The login details changed while they were being saved. Press Save again.'
+      return
+    }
+    showLoginStatus('Saved.')
+  } catch (e) {
+    console.error('[manifest-autofill] could not save the login details', e)
+    loginSaveError.value = 'Could not save the login details. Please try again.'
+  } finally {
+    loginSaving.value = false
+  }
+}
+
+/**
+ * Does the form still hold the details that were written?
+ *
+ * The operator can type while the write is in flight ⇒ the badge may only
+ * say "Saved." while the form still holds the values that were really stored.
+ */
+function holdsTheWrittenDetails(written: LoginCredentials): boolean {
+  return (
+    siteUsername.value === written.siteUsername &&
+    sitePassword.value === written.sitePassword &&
+    ocrUser.value === written.ocrUser &&
+    ocrPassword.value === written.ocrPassword &&
+    ocrSoftwareId.value === written.ocrSoftwareId
+  )
+}
+
 onMounted(async () => {
   unsubscribe = subscribeSettingsChanges(applyExternalChange)
   await load()
+  await loadLoginDetails()
 })
 
 onUnmounted(() => {
   clearStatusTimer()
+  clearLoginStatusTimer()
   unsubscribe?.()
 })
 </script>
@@ -305,5 +496,92 @@ onUnmounted(() => {
     </p>
 
     <p v-if="saveError" class="error save-error">{{ saveError }}</p>
+
+    <!--
+      The login details - an INDEPENDENT section: its own state, its own save
+      button, its own status and its own error. The credentials are written to
+      `chrome.storage.local` and NEVER to the synced storage.
+    -->
+    <section class="login-section">
+      <h2>Login details</h2>
+      <p class="hint">
+        The account of the site and the account of the captcha service (超級鹰). They are used
+        only when "Get the token by logging in" is ticked in the popup. The details stay in this
+        browser - they are never synced to your Google account - and they are sent nowhere except
+        the site itself and the captcha service.
+      </p>
+
+      <p v-if="loginLoadError" class="login-load-error">{{ loginLoadError }}</p>
+      <button
+        v-if="loginLoadError"
+        type="button"
+        class="login-retry"
+        :disabled="loginLoading"
+        @click="loadLoginDetails"
+      >
+        Retry
+      </button>
+      <p v-else-if="loginLoading" class="hint">Loading the login details…</p>
+
+      <!-- The form is only shown when the read worked - see `loginLoaded`. -->
+      <div v-if="loginLoaded">
+        <label for="site-username">Site account</label>
+        <input
+          id="site-username"
+          v-model="siteUsername"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+        />
+
+        <label for="site-password">Site password</label>
+        <input
+          id="site-password"
+          v-model="sitePassword"
+          type="password"
+          autocomplete="off"
+        />
+
+        <label for="ocr-user">Captcha service user</label>
+        <input
+          id="ocr-user"
+          v-model="ocrUser"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+        />
+
+        <label for="ocr-password">Captcha service password</label>
+        <input
+          id="ocr-password"
+          v-model="ocrPassword"
+          type="password"
+          autocomplete="off"
+        />
+
+        <label for="ocr-software-id">Captcha service software ID</label>
+        <input
+          id="ocr-software-id"
+          v-model="ocrSoftwareId"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+        />
+
+        <p class="actions">
+          <button
+            type="button"
+            class="login-save"
+            :disabled="loginSaving"
+            @click="saveLoginDetails"
+          >
+            {{ loginSaving ? 'Saving…' : 'Save login details' }}
+          </button>
+          <span v-if="loginStatus" class="login-status">{{ loginStatus }}</span>
+        </p>
+
+        <p v-if="loginSaveError" class="login-error">{{ loginSaveError }}</p>
+      </div>
+    </section>
   </div>
 </template>

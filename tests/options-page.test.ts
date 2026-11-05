@@ -18,6 +18,18 @@ let setCalls: Record<string, unknown>[]
 let storageGet: (defaults: Record<string, unknown>) => Promise<Record<string, unknown>>
 let storageSet: (values: Record<string, unknown>) => Promise<void>
 
+/**
+ * The store of `chrome.storage.local` — where the login details are saved.
+ *
+ * NOT `chrome.storage.sync`: a synced password leaves this machine (it is
+ * uploaded to the Google account of the user).
+ */
+const localStore: Record<string, unknown> = {}
+/** The payload really sent to `chrome.storage.local.set` — to assert which key was written. */
+let localSetCalls: Record<string, unknown>[]
+let localGet: (key: string) => Promise<Record<string, unknown>>
+let localSet: (values: Record<string, unknown>) => Promise<void>
+
 type StorageChanges = Record<string, { oldValue?: unknown; newValue?: unknown }>
 type ChangeListener = (changes: StorageChanges, areaName: string) => void
 let changeListeners: ChangeListener[]
@@ -44,11 +56,25 @@ beforeEach(() => {
     if (Object.keys(changes).length > 0) fireStorageChange(changes, 'sync')
   }
 
+  for (const key of Object.keys(localStore)) delete localStore[key]
+  localSetCalls = []
+  // `chrome.storage.local.get('a-key')` answers `{}` when the key is missing ⇒
+  // the stub must behave exactly so, it must not answer `undefined`.
+  localGet = async (key) => (key in localStore ? { [key]: localStore[key] } : {})
+  localSet = async (values) => {
+    localSetCalls.push(values)
+    Object.assign(localStore, values)
+  }
+
   vi.stubGlobal('chrome', {
     storage: {
       sync: {
         get: (defaults: Record<string, unknown>) => storageGet(defaults),
         set: (values: Record<string, unknown>) => storageSet(values),
+      },
+      local: {
+        get: (key: string) => localGet(key),
+        set: (values: Record<string, unknown>) => localSet(values),
       },
       onChanged: {
         addListener: (listener: ChangeListener) => {
@@ -471,6 +497,37 @@ describe('options — lưu bị chặn khi đang chạy', () => {
     resolveSet?.()
     await flushPromises()
   })
+
+  it('người dùng sửa ô TRONG LÚC đang lưu ⇒ KHÔNG nói "Saved."', async () => {
+    // The same race as in the login section: if the operator edits a field
+    // while the write is running, the badge must not claim "Saved." for a
+    // value that was never stored.
+    let resolveSet: (() => void) | undefined
+    storageSet = async (values) => {
+      setCalls.push(values)
+      await new Promise<void>((resolve) => {
+        resolveSet = resolve
+      })
+      Object.assign(store, values)
+    }
+
+    const wrapper = mount(OptionsApp)
+    await flushPromises()
+
+    await wrapper.find('#api-base').setValue('https://custom.example/api')
+    await saveButton(wrapper).trigger('click')
+    await flushPromises()
+
+    await wrapper.find('#api-base').setValue('https://other.example/api')
+
+    resolveSet?.()
+    await flushPromises()
+
+    expect(statusText(wrapper)).toBe('')
+    expect(wrapper.find('.save-error').text()).toBe(
+      'The settings changed while they were being saved. Press Save again.',
+    )
+  })
 })
 
 describe('options — kiểm tra base API', () => {
@@ -646,5 +703,429 @@ describe('options — a11y / hygiene ô nhập', () => {
     const siteInput = wrapper.find('#site-api-base')
     expect(siteInput.attributes('aria-describedby')).toBe('site-api-base-hint')
     expect(siteInput.attributes('spellcheck')).toBe('false')
+  })
+})
+
+/**
+ * The section of the login details.
+ *
+ * The credentials live in `chrome.storage.local` (NEVER in the synced
+ * storage) and the section is INDEPENDENT of the settings form: its own
+ * state, its own save button, its own status and its own error.
+ */
+describe('options — chi tiết đăng nhập', () => {
+  /** The key of the credentials in `chrome.storage.local`. */
+  const KEY = 'manifest-autofill:login-credentials'
+
+  /** The details already stored - fake values, never a real secret. */
+  const STORED = {
+    siteUsername: 'site-user',
+    sitePassword: 'site-pass',
+    ocrUser: 'ocr-user',
+    ocrPassword: 'ocr-pass',
+    ocrSoftwareId: 'ocr-software-id',
+  }
+
+  /** The button that saves the login details. */
+  function loginSaveButton(wrapper: Wrapper) {
+    return wrapper.find('button.login-save')
+  }
+
+  it('hiện chi tiết ĐÃ LƯU trong 5 ô', async () => {
+    localStore[KEY] = STORED
+
+    const wrapper = mount(OptionsApp)
+    await flushPromises()
+
+    expect(inputValue(wrapper, '#site-username')).toBe('site-user')
+    expect(inputValue(wrapper, '#site-password')).toBe('site-pass')
+    expect(inputValue(wrapper, '#ocr-user')).toBe('ocr-user')
+    expect(inputValue(wrapper, '#ocr-password')).toBe('ocr-pass')
+    expect(inputValue(wrapper, '#ocr-software-id')).toBe('ocr-software-id')
+  })
+
+  it('chưa lưu gì ⇒ 5 ô trống (không phải giá trị bịa ra)', async () => {
+    const wrapper = mount(OptionsApp)
+    await flushPromises()
+
+    expect(inputValue(wrapper, '#site-username')).toBe('')
+    expect(inputValue(wrapper, '#site-password')).toBe('')
+    expect(inputValue(wrapper, '#ocr-user')).toBe('')
+    expect(inputValue(wrapper, '#ocr-password')).toBe('')
+    expect(inputValue(wrapper, '#ocr-software-id')).toBe('')
+  })
+
+  it('đọc lỗi ⇒ KHÔNG hiện form, chỉ báo lỗi', async () => {
+    localGet = async () => {
+      throw new Error('storage disabled')
+    }
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      const wrapper = mount(OptionsApp)
+      await flushPromises()
+
+      // A form full of empty boxes when we do NOT know what is stored is a
+      // lie ⇒ no form, only the error.
+      expect(wrapper.find('#site-username').exists()).toBe(false)
+      expect(wrapper.find('#site-password').exists()).toBe(false)
+      expect(wrapper.find('#ocr-user').exists()).toBe(false)
+      expect(wrapper.find('#ocr-password').exists()).toBe(false)
+      expect(wrapper.find('#ocr-software-id').exists()).toBe(false)
+
+      expect(wrapper.find('.login-load-error').text()).toBe(
+        'Could not read the login details from the extension options.',
+      )
+
+      // The error of the login section must NOT be mixed up with the error of
+      // the settings section.
+      expect(wrapper.find('.save-error').exists()).toBe(false)
+      expect(wrapper.find('.error').exists()).toBe(false)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('lưu ⇒ ghi vào chrome.storage.local, KHÔNG ghi vào storage.sync', async () => {
+    const wrapper = mount(OptionsApp)
+    await flushPromises()
+
+    await wrapper.find('#site-username').setValue('site-user')
+    await wrapper.find('#site-password').setValue('site-pass')
+    await wrapper.find('#ocr-user').setValue('ocr-user')
+    await wrapper.find('#ocr-password').setValue('ocr-pass')
+    await wrapper.find('#ocr-software-id').setValue('ocr-software-id')
+    await loginSaveButton(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(localSetCalls).toHaveLength(1)
+    expect(localSetCalls[0]).toEqual({
+      [KEY]: {
+        siteUsername: 'site-user',
+        sitePassword: 'site-pass',
+        ocrUser: 'ocr-user',
+        ocrPassword: 'ocr-pass',
+        ocrSoftwareId: 'ocr-software-id',
+      },
+    })
+
+    // A password is NEVER synced ⇒ storage.sync has nothing at all.
+    expect(setCalls).toHaveLength(0)
+    expect(store[KEY]).toBeUndefined()
+
+    expect(wrapper.find('.login-status').text()).toBe('Saved.')
+  })
+
+  it('ghi lỗi ⇒ báo lỗi và KHÔNG hiện "Saved."', async () => {
+    localSet = async () => {
+      throw new Error('storage disabled')
+    }
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      const wrapper = mount(OptionsApp)
+      await flushPromises()
+
+      await wrapper.find('#site-username').setValue('site-user')
+      await loginSaveButton(wrapper).trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('.login-error').text()).toBe(
+        'Could not save the login details. Please try again.',
+      )
+      // "Saved." must MEAN "it was really saved".
+      expect(wrapper.find('.login-status').exists()).toBe(false)
+      // The badge of the settings section must not be borrowed by the login
+      // section.
+      expect(wrapper.find('.status').exists()).toBe(false)
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('mật khẩu là type="password" và tắt autocomplete', async () => {
+    const wrapper = mount(OptionsApp)
+    await flushPromises()
+
+    const sitePassword = wrapper.find('#site-password')
+    expect(sitePassword.attributes('type')).toBe('password')
+    expect(sitePassword.attributes('autocomplete')).toBe('off')
+
+    const ocrPassword = wrapper.find('#ocr-password')
+    expect(ocrPassword.attributes('type')).toBe('password')
+    expect(ocrPassword.attributes('autocomplete')).toBe('off')
+  })
+
+  it('phần login KHÔNG có checkbox (checkbox là opt-in của phần setting)', async () => {
+    const wrapper = mount(OptionsApp)
+    await flushPromises()
+
+    expect(wrapper.findAll('input[type="checkbox"]')).toHaveLength(1)
+  })
+
+  it('lưu phần setting ⇒ KHÔNG ghi login details', async () => {
+    const wrapper = mount(OptionsApp)
+    await flushPromises()
+
+    await wrapper.find('#api-base').setValue('https://custom.example/api')
+    await saveButton(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(localSetCalls).toHaveLength(0)
+    expect(setCalls).toHaveLength(1)
+  })
+
+  it('sửa ô sau khi lưu ⇒ badge "Saved." biến mất ngay', async () => {
+    const wrapper = mount(OptionsApp)
+    await flushPromises()
+
+    await wrapper.find('#site-username').setValue('site-user')
+    await loginSaveButton(wrapper).trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.login-status').text()).toBe('Saved.')
+
+    await wrapper.find('#site-username').setValue('other-user')
+    await flushPromises()
+
+    // The form holds a change that is NOT saved ⇒ it must not say "Saved.".
+    expect(wrapper.find('.login-status').exists()).toBe(false)
+  })
+
+  it('đọc lỗi ⇒ có nút Retry, bấm lại thì đọc được và form hiện', async () => {
+    // The first read fails, the next one works ⇒ the operator does not have to
+    // reload the page to be able to configure the extension.
+    let failNext = true
+    localGet = async (key) => {
+      if (failNext) {
+        failNext = false
+        throw new Error('storage disabled')
+      }
+      return key in localStore ? { [key]: localStore[key] } : {}
+    }
+    localStore[KEY] = STORED
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      const wrapper = mount(OptionsApp)
+      await flushPromises()
+
+      expect(wrapper.find('.login-load-error').exists()).toBe(true)
+      expect(wrapper.find('button.login-retry').exists()).toBe(true)
+
+      await wrapper.find('button.login-retry').trigger('click')
+      await flushPromises()
+
+      // The read worked ⇒ the form is shown with the stored values and the
+      // error is gone.
+      expect(wrapper.find('.login-load-error').exists()).toBe(false)
+      expect(inputValue(wrapper, '#site-username')).toBe('site-user')
+      expect(inputValue(wrapper, '#ocr-software-id')).toBe('ocr-software-id')
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('đang đọc ⇒ hiện dòng "Loading…", xong thì hiện form', async () => {
+    let resolveGet: ((value: Record<string, unknown>) => void) | undefined
+    localGet = () =>
+      new Promise<Record<string, unknown>>((resolve) => {
+        resolveGet = resolve
+      })
+
+    const wrapper = mount(OptionsApp)
+    await flushPromises()
+
+    // While the read is running there is no form yet - only the hint.
+    expect(wrapper.findAll('.hint').map((node) => node.text())).toContain(
+      'Loading the login details…',
+    )
+    expect(wrapper.find('#site-username').exists()).toBe(false)
+
+    resolveGet?.({})
+    await flushPromises()
+
+    expect(wrapper.find('#site-username').exists()).toBe(true)
+  })
+
+  it('badge "Saved." tự tắt sau 2000ms', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = mount(OptionsApp)
+      await vi.advanceTimersByTimeAsync(0)
+
+      await wrapper.find('#site-username').setValue('site-user')
+      await loginSaveButton(wrapper).trigger('click')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(wrapper.find('.login-status').text()).toBe('Saved.')
+
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(wrapper.find('.login-status').exists()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('timer của badge được dọn khi component unmount', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = mount(OptionsApp)
+      await vi.advanceTimersByTimeAsync(0)
+
+      await wrapper.find('#site-username').setValue('site-user')
+      await loginSaveButton(wrapper).trigger('click')
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(wrapper.find('.login-status').exists()).toBe(true)
+      // The timer that removes the badge is still hanging.
+      expect(vi.getTimerCount()).toBe(1)
+
+      wrapper.unmount()
+
+      // Unmount must clean the timer - no timer may outlive the component.
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('mật khẩu có DẤU CÁCH CUỐI ⇒ ghi nguyên văn (không trim)', async () => {
+    const wrapper = mount(OptionsApp)
+    await flushPromises()
+
+    await wrapper.find('#site-password').setValue('site-pass ')
+    await loginSaveButton(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(localSetCalls[0]).toEqual({
+      [KEY]: {
+        siteUsername: '',
+        sitePassword: 'site-pass ',
+        ocrUser: '',
+        ocrPassword: '',
+        ocrSoftwareId: '',
+      },
+    })
+  })
+
+  it('bấm Save hai lần khi lần đầu còn đang ghi ⇒ chỉ MỘT lần storage.set', async () => {
+    let resolveSet: (() => void) | undefined
+    localSet = async (values) => {
+      localSetCalls.push(values)
+      await new Promise<void>((resolve) => {
+        resolveSet = resolve
+      })
+      Object.assign(localStore, values)
+    }
+
+    const wrapper = mount(OptionsApp)
+    await flushPromises()
+
+    await wrapper.find('#site-username').setValue('site-user')
+
+    await loginSaveButton(wrapper).trigger('click')
+    await loginSaveButton(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(localSetCalls).toHaveLength(1)
+
+    resolveSet?.()
+    await flushPromises()
+  })
+
+  it('lưu lại sau một lần lưu lỗi ⇒ xoá lỗi cũ và hiện "Saved."', async () => {
+    let failNext = true
+    localSet = async (values) => {
+      if (failNext) {
+        failNext = false
+        throw new Error('storage disabled')
+      }
+      localSetCalls.push(values)
+      Object.assign(localStore, values)
+    }
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      const wrapper = mount(OptionsApp)
+      await flushPromises()
+
+      await wrapper.find('#site-username').setValue('site-user')
+      await loginSaveButton(wrapper).trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.login-error').exists()).toBe(true)
+
+      await loginSaveButton(wrapper).trigger('click')
+      await flushPromises()
+
+      // The next save must clear the old error and say "Saved.".
+      expect(wrapper.find('.login-error').exists()).toBe(false)
+      expect(wrapper.find('.login-status').text()).toBe('Saved.')
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('lưu lỗi sau một lần lưu thành công ⇒ KHÔNG để lại badge "Saved." cũ', async () => {
+    vi.useFakeTimers()
+    let failNext = false
+    localSet = async (values) => {
+      if (failNext) {
+        throw new Error('storage disabled')
+      }
+      localSetCalls.push(values)
+      Object.assign(localStore, values)
+    }
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      const wrapper = mount(OptionsApp)
+      await vi.advanceTimersByTimeAsync(0)
+
+      await wrapper.find('#site-username').setValue('site-user')
+      await loginSaveButton(wrapper).trigger('click')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(wrapper.find('.login-status').text()).toBe('Saved.')
+
+      // The next save fails ⇒ the badge of the PREVIOUS save must be gone:
+      // "Saved." must never sit next to an error.
+      failNext = true
+      await loginSaveButton(wrapper).trigger('click')
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(wrapper.find('.login-status').exists()).toBe(false)
+      expect(wrapper.find('.login-error').exists()).toBe(true)
+    } finally {
+      errorSpy.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
+  it('người dùng sửa ô TRONG LÚC đang ghi ⇒ KHÔNG nói "Saved."', async () => {
+    let resolveSet: (() => void) | undefined
+    localSet = async (values) => {
+      localSetCalls.push(values)
+      await new Promise<void>((resolve) => {
+        resolveSet = resolve
+      })
+      Object.assign(localStore, values)
+    }
+
+    const wrapper = mount(OptionsApp)
+    await flushPromises()
+
+    await wrapper.find('#site-username').setValue('site-user')
+    await loginSaveButton(wrapper).trigger('click')
+    await flushPromises()
+
+    // The operator edits the PASSWORD while the write is still running ⇒ the
+    // badge must not claim "Saved." for a value that was never stored.
+    await wrapper.find('#site-password').setValue('other-pass')
+
+    resolveSet?.()
+    await flushPromises()
+
+    expect(wrapper.find('.login-status').exists()).toBe(false)
+    expect(wrapper.find('.login-error').text()).toBe(
+      'The login details changed while they were being saved. Press Save again.',
+    )
   })
 })

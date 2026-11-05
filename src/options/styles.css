@@ -19,13 +19,31 @@ h1 {
   font-size: 20px;
 }
 
+h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+/*
+ * The second section of the page - the login details.
+ *
+ * A rule above it separates the two sections: without it the page reads as
+ * one long blob and the operator cannot see where the settings end.
+ */
+.login-section {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #d0d7de;
+}
+
 label {
   display: block;
   margin: 14px 0 4px;
   font-weight: 600;
 }
 
-input[type='text'] {
+input[type='text'],
+input[type='password'] {
   width: 100%;
   padding: 6px 8px;
   border: 1px solid #d0d7de;
@@ -56,14 +74,28 @@ input[type='text'] {
  * margin-top KHÔNG có hiệu lực với hộp inline không thay thế ⇒ trước đây
  * khoảng cách 16px trên `margin-top` chỉ là vô nghĩa. Inline-block + margin
  * ngang đặt badge nằm ngay cạnh nút Save và canh theo đường chữ của nút.
+ *
+ * `.login-status` is the badge of the login section: it has its own class
+ * (not `.status`) so it can never be mixed up with the badge of the settings
+ * section.
  */
-.status {
+.status,
+.login-status {
   display: inline-block;
   margin: 0 0 0 8px;
   color: #1f883d;
 }
 
-.error {
+/*
+ * The error of the settings section and the errors of the login section.
+ *
+ * `.login-error` (the error of SAVING the login details) and `.login-load-error`
+ * (the error of READING them) have their own classes ⇒ the page's
+ * `find('.error')` can never catch them by mistake.
+ */
+.error,
+.login-error,
+.login-load-error {
   margin: 12px 0 0;
   padding: 8px;
   border-radius: 6px;
@@ -86,7 +118,8 @@ button.primary {
   color: #fff;
 }
 
-button.retry {
+button.retry,
+button.login-retry {
   margin-top: 8px;
 }
 
