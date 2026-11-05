@@ -2,8 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   EMPTY_LOGIN_CREDENTIALS,
   LOGIN_CREDENTIALS_KEY,
+  LOGIN_CREDENTIALS_READ_ERROR,
   missingLoginCredentialLabels,
   readLoginCredentials,
+  readLoginCredentialsResult,
   writeLoginCredentials,
   type LoginCredentials,
 } from '../src/core/login-credentials'
@@ -111,6 +113,56 @@ describe('readLoginCredentials', () => {
   })
 })
 
+describe('readLoginCredentialsResult', () => {
+  it('đọc được ⇒ ok true + credentials đã lưu', async () => {
+    await writeLoginCredentials(CREDENTIALS)
+
+    const outcome = await readLoginCredentialsResult()
+
+    expect(outcome.ok).toBe(true)
+    if (outcome.ok) expect(outcome.credentials).toEqual(CREDENTIALS)
+  })
+
+  it('chưa lưu gì ⇒ ok true + credentials rỗng', async () => {
+    const outcome = await readLoginCredentialsResult()
+
+    expect(outcome.ok).toBe(true)
+    if (outcome.ok) expect(outcome.credentials).toEqual(EMPTY_LOGIN_CREDENTIALS)
+  })
+
+  it('KHÔNG có chrome.storage.local ⇒ ok false + lời báo lỗi', async () => {
+    // Storage bị chặn bởi policy ⇒ phải báo được, KHÔNG được giả vờ là rỗng.
+    vi.stubGlobal('chrome', undefined)
+
+    const outcome = await readLoginCredentialsResult()
+
+    expect(outcome.ok).toBe(false)
+    if (!outcome.ok) expect(outcome.error).toBe(LOGIN_CREDENTIALS_READ_ERROR)
+  })
+
+  it('storage đọc lỗi ⇒ ok false + lời báo lỗi', async () => {
+    vi.stubGlobal('chrome', {
+      storage: {
+        local: {
+          get: async () => {
+            throw new Error('storage disabled')
+          },
+          set: async () => undefined,
+        },
+      },
+    })
+
+    const outcome = await readLoginCredentialsResult()
+
+    expect(outcome.ok).toBe(false)
+    if (!outcome.ok) expect(outcome.error).toBe(LOGIN_CREDENTIALS_READ_ERROR)
+  })
+
+  it('lời báo lỗi nhắc tới extension options', () => {
+    expect(LOGIN_CREDENTIALS_READ_ERROR).toContain('extension options')
+  })
+})
+
 describe('writeLoginCredentials', () => {
   it('ghi vào chrome.storage.local, đúng key', async () => {
     await writeLoginCredentials(CREDENTIALS)
@@ -141,6 +193,37 @@ describe('writeLoginCredentials', () => {
     })
 
     await expect(writeLoginCredentials(CREDENTIALS)).rejects.toThrow()
+  })
+
+  it('thiếu `set` trong storage.local ⇒ phải ném lỗi "not available"', async () => {
+    // Stub cụt ⇒ không được để lỗi TypeError thô lọt ra ngoài.
+    vi.stubGlobal('chrome', {
+      storage: {
+        local: {
+          get: async () => ({}),
+        },
+      },
+    })
+
+    await expect(writeLoginCredentials(CREDENTIALS)).rejects.toThrow(
+      'chrome.storage.local is not available',
+    )
+  })
+
+  it('details KHÔNG phải object ⇒ phải ném lỗi, KHÔNG được ghi đè mật khẩu đã lưu', async () => {
+    await writeLoginCredentials(CREDENTIALS)
+    const setCallsBefore = setCalls.length
+
+    await expect(
+      writeLoginCredentials(null as unknown as LoginCredentials),
+    ).rejects.toThrow()
+    await expect(
+      writeLoginCredentials('nope' as unknown as LoginCredentials),
+    ).rejects.toThrow()
+
+    // Mật khẩu đã lưu KHÔNG được bị xoá trong im lặng.
+    expect(setCalls).toHaveLength(setCallsBefore)
+    expect(store[LOGIN_CREDENTIALS_KEY]).toEqual(CREDENTIALS)
   })
 
   it('KHÔNG ghi vào storage.sync (mật khẩu không được rời khỏi máy)', async () => {

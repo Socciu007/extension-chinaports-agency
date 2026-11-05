@@ -1,16 +1,16 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
-  CAPTCHA_PATH,
   CAPTCHA_SERVICE_URL,
   fetchTokenByLogin,
-  LOGIN_PATH,
   LoginTokenError,
 } from '../src/core/login-token'
 import type { LoginCredentials } from '../src/core/login-credentials'
 
 const ORIGIN = 'https://site.test'
-const CAPTCHA_URL = `${ORIGIN}${CAPTCHA_PATH}`
-const LOGIN_URL = `${ORIGIN}${LOGIN_PATH}`
+// The paths are written OUT BY HAND on purpose: building them from the
+// constants under test would let a wrong endpoint (`/api/captacha/`) pass.
+const CAPTCHA_URL = 'https://site.test/api/captcha/'
+const LOGIN_URL = 'https://site.test/api/login/'
 
 const CREDENTIALS: LoginCredentials = {
   siteUsername: 'site-user',
@@ -27,6 +27,21 @@ const IMAGE_B64 = 'AAABBB'
 
 const jsonResponse = (body: unknown) =>
   ({ ok: true, status: 200, json: async () => body }) as unknown as Response
+
+/** A response of the site that answers with an HTTP error. */
+const httpError = (status: number) =>
+  ({ ok: false, status, json: async () => ({}) }) as unknown as Response
+
+/**
+ * A `fetch` that never answers.
+ *
+ * It only rejects when the request is aborted ⇒ the timeout of the HTTP layer
+ * can fire (a promise that never settles would hang the test forever).
+ */
+const hangingFetch = ((_url: string, init?: RequestInit) =>
+  new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+  })) as unknown as typeof fetch
 
 /** Answers of the fake fetch — the default answer of every step. */
 interface FakeAnswers {
@@ -153,6 +168,62 @@ describe('fetchTokenByLogin — cả luồng', () => {
     expect(token).toBe('the-token')
     expect(loginBodyOf(calls).captcha).toBe('9Z')
   })
+
+  it('ảnh captcha là CHUỖI trong `data` ⇒ vẫn chạy được, gửi phần base64', async () => {
+    // Hình dạng thật của site chưa được kiểm chứng ⇒ `data` có thể là chuỗi.
+    const { fetchImpl, calls } = fakeFetch({
+      captcha: () => jsonResponse({ code: 2000, data: IMAGE_BASE }),
+    })
+
+    const token = await fetchTokenByLogin({
+      credentials: CREDENTIALS,
+      fetchImpl,
+      siteOrigin: ORIGIN,
+    })
+
+    expect(token).toBe('the-token')
+    const call = calls.find((entry) => entry.url === CAPTCHA_SERVICE_URL)
+    const form = call?.init?.body as FormData
+    expect(form.get('file_base64')).toBe(IMAGE_B64)
+  })
+
+  it('ảnh captcha là chuỗi KHÔNG có dấu phẩy ⇒ gửi nguyên chuỗi', async () => {
+    const { fetchImpl, calls } = fakeFetch({
+      captcha: () => jsonResponse({ code: 2000, data: 'AAABBB' }),
+    })
+
+    const token = await fetchTokenByLogin({
+      credentials: CREDENTIALS,
+      fetchImpl,
+      siteOrigin: ORIGIN,
+    })
+
+    expect(token).toBe('the-token')
+    const call = calls.find((entry) => entry.url === CAPTCHA_SERVICE_URL)
+    const form = call?.init?.body as FormData
+    expect(form.get('file_base64')).toBe('AAABBB')
+  })
+
+  it('gọi site ⇒ gửi kèm cookie của site (captcha + login)', async () => {
+    // Key của captcha có thể gắn với session của site ⇒ phải gửi cookie.
+    const { fetchImpl, calls } = fakeFetch()
+
+    await fetchTokenByLogin({ credentials: CREDENTIALS, fetchImpl, siteOrigin: ORIGIN })
+
+    const captchaCall = calls.find((entry) => entry.url === CAPTCHA_URL)
+    const loginCall = calls.find((entry) => entry.url === LOGIN_URL)
+    expect(captchaCall?.init?.credentials).toBe('include')
+    expect(loginCall?.init?.credentials).toBe('include')
+  })
+
+  it('gọi captcha service ⇒ KHÔNG gửi cookie của site', async () => {
+    const { fetchImpl, calls } = fakeFetch()
+
+    await fetchTokenByLogin({ credentials: CREDENTIALS, fetchImpl, siteOrigin: ORIGIN })
+
+    const call = calls.find((entry) => entry.url === CAPTCHA_SERVICE_URL)
+    expect(call?.init?.credentials).toBeUndefined()
+  })
 })
 
 describe('fetchTokenByLogin — đọc token', () => {
@@ -211,6 +282,34 @@ describe('fetchTokenByLogin — đọc token', () => {
 
     expect(token).toBe('abc.def')
   })
+
+  it('token nằm ở CHÍNH envelope ⇒ trả về token', async () => {
+    const { fetchImpl } = fakeFetch({
+      login: () => jsonResponse({ code: 2000, token: 'in-envelope' }),
+    })
+
+    const token = await fetchTokenByLogin({
+      credentials: CREDENTIALS,
+      fetchImpl,
+      siteOrigin: ORIGIN,
+    })
+
+    expect(token).toBe('in-envelope')
+  })
+
+  it('token nằm ở key `Authorization` ⇒ trả về token (bỏ tiền tố `JWT `)', async () => {
+    const { fetchImpl } = fakeFetch({
+      login: () => jsonResponse({ code: 2000, Authorization: 'JWT abc.def' }),
+    })
+
+    const token = await fetchTokenByLogin({
+      credentials: CREDENTIALS,
+      fetchImpl,
+      siteOrigin: ORIGIN,
+    })
+
+    expect(token).toBe('abc.def')
+  })
 })
 
 describe('fetchTokenByLogin — lỗi', () => {
@@ -228,6 +327,12 @@ describe('fetchTokenByLogin — lỗi', () => {
     expect(err.kind).toBe('credentials')
     expect(err.message).toContain('extension options')
     expect(calls).toHaveLength(0)
+  })
+
+  it('KHÔNG có options ⇒ kind credentials, KHÔNG ném lỗi TypeError thô', async () => {
+    const err = await errorOf(fetchTokenByLogin(undefined))
+
+    expect(err.kind).toBe('credentials')
   })
 
   it('site từ chối cho captcha ⇒ kind captcha', async () => {
@@ -325,5 +430,94 @@ describe('fetchTokenByLogin — lỗi', () => {
     )
 
     expect(err.kind).toBe('network')
+  })
+
+  it('mạng hỏng KHÁNG phải timeout ⇒ tin là "không gọi được", KHÔNG phải "timeout"', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error('Failed to fetch')
+    }) as unknown as typeof fetch
+
+    const err = await errorOf(
+      fetchTokenByLogin({ credentials: CREDENTIALS, fetchImpl, siteOrigin: ORIGIN }),
+    )
+
+    expect(err.kind).toBe('network')
+    expect(err.message).toBe('Could not reach the site to get the captcha.')
+  })
+
+  it('site trả HTTP 500 khi lấy captcha ⇒ kind captcha + nhắc HTTP 500', async () => {
+    const { fetchImpl } = fakeFetch({ captcha: () => httpError(500) })
+
+    const err = await errorOf(
+      fetchTokenByLogin({ credentials: CREDENTIALS, fetchImpl, siteOrigin: ORIGIN }),
+    )
+
+    expect(err.kind).toBe('captcha')
+    expect(err.message).toContain('HTTP 500')
+  })
+
+  it('captcha service trả HTTP 500 ⇒ kind ocr + nhắc HTTP 500', async () => {
+    const { fetchImpl } = fakeFetch({ ocr: () => httpError(500) })
+
+    const err = await errorOf(
+      fetchTokenByLogin({ credentials: CREDENTIALS, fetchImpl, siteOrigin: ORIGIN }),
+    )
+
+    expect(err.kind).toBe('ocr')
+    expect(err.message).toContain('HTTP 500')
+  })
+
+  it('site trả HTTP 500 khi đăng nhập ⇒ kind login + nhắc HTTP 500', async () => {
+    const { fetchImpl } = fakeFetch({ login: () => httpError(500) })
+
+    const err = await errorOf(
+      fetchTokenByLogin({ credentials: CREDENTIALS, fetchImpl, siteOrigin: ORIGIN }),
+    )
+
+    expect(err.kind).toBe('login')
+    expect(err.message).toContain('HTTP 500')
+  })
+
+  it('hết giờ ⇒ kind network + câu của TIMEOUT (không phải "không gọi được")', async () => {
+    const err = await errorOf(
+      fetchTokenByLogin({
+        credentials: CREDENTIALS,
+        fetchImpl: hangingFetch,
+        siteOrigin: ORIGIN,
+        timeoutMs: 5,
+      }),
+    )
+
+    expect(err.kind).toBe('network')
+    expect(err.message).toBe(
+      'The site did not answer in time when it was asked for the captcha.',
+    )
+  })
+
+  it('code của envelope là CHUỖI "4000" khi đăng nhập ⇒ kind login', async () => {
+    const { fetchImpl } = fakeFetch({
+      login: () => jsonResponse({ code: '4000', data: null, msg: 'bad captcha' }),
+    })
+
+    const err = await errorOf(
+      fetchTokenByLogin({ credentials: CREDENTIALS, fetchImpl, siteOrigin: ORIGIN }),
+    )
+
+    expect(err.kind).toBe('login')
+  })
+
+  it('code của envelope là CHUỖI "2000" khi lấy captcha ⇒ vẫn chạy tiếp', async () => {
+    const { fetchImpl } = fakeFetch({
+      captcha: () =>
+        jsonResponse({ code: '2000', data: { image_base: IMAGE_BASE, key: 'captcha-key' } }),
+    })
+
+    const token = await fetchTokenByLogin({
+      credentials: CREDENTIALS,
+      fetchImpl,
+      siteOrigin: ORIGIN,
+    })
+
+    expect(token).toBe('the-token')
   })
 })

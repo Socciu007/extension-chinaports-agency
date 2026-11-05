@@ -25,16 +25,20 @@ export interface LoginCredentials {
 }
 
 /** The details when nothing is stored yet — every field is empty. */
-export const EMPTY_LOGIN_CREDENTIALS: LoginCredentials = {
+export const EMPTY_LOGIN_CREDENTIALS: LoginCredentials = Object.freeze({
   siteUsername: '',
   sitePassword: '',
   ocrUser: '',
   ocrPassword: '',
   ocrSoftwareId: '',
-}
+})
 
 /** Key in `chrome.storage.local` — NOT `sync` (a synced password leaves the machine). */
 export const LOGIN_CREDENTIALS_KEY = 'manifest-autofill:login-credentials'
+
+/** The message of a store that cannot be read. */
+export const LOGIN_CREDENTIALS_READ_ERROR =
+  'Could not read the login details from the extension options.'
 
 /** The label of every field — the order is the order of the fields. */
 const CREDENTIAL_LABELS: ReadonlyArray<{ key: keyof LoginCredentials; label: string }> = [
@@ -45,10 +49,21 @@ const CREDENTIAL_LABELS: ReadonlyArray<{ key: keyof LoginCredentials; label: str
   { key: 'ocrSoftwareId', label: 'captcha service software ID' },
 ]
 
-/** The area of the storage — `undefined` when it is not there at all. */
+/**
+ * The area of the storage — `undefined` when it is not there at all.
+ *
+ * The READ needs `get` ⇒ an area without it is not an area at all.
+ */
 function localArea(): chrome.storage.StorageArea | undefined {
   if (typeof chrome === 'undefined') return undefined
-  return chrome.storage?.local
+  const area = chrome.storage?.local
+  if (typeof area?.get !== 'function') return undefined
+  return area
+}
+
+/** A plain object — anything else is not a place where the fields can live. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /** A string field of the credentials — anything that is not a string is empty. */
@@ -63,16 +78,47 @@ function textOf(value: unknown): string {
  * gives the EMPTY credentials — never a made-up value.
  */
 function toCredentials(raw: unknown): LoginCredentials {
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+  if (!isPlainObject(raw)) {
     return { ...EMPTY_LOGIN_CREDENTIALS }
   }
-  const source = raw as Record<string, unknown>
+  const source = raw
   return {
     siteUsername: textOf(source.siteUsername),
     sitePassword: textOf(source.sitePassword),
     ocrUser: textOf(source.ocrUser),
     ocrPassword: textOf(source.ocrPassword),
     ocrSoftwareId: textOf(source.ocrSoftwareId),
+  }
+}
+
+/**
+ * The result of reading the login details — it says whether the read worked.
+ *
+ * Telling "nothing stored yet" apart from "the read failed" is a
+ * prerequisite: the popup must be able to say that the options could not be
+ * read instead of showing an empty form that looks like a fresh install.
+ */
+export type ReadLoginCredentialsResult =
+  | { ok: true; credentials: LoginCredentials }
+  | { ok: false; error: string }
+
+/**
+ * Read the login details AND REPORT a failure.
+ *
+ * This is the "truthful" variant of `readLoginCredentials`: the UI needs to
+ * know what it really read, so it never shows a made-up value.
+ */
+export async function readLoginCredentialsResult(): Promise<ReadLoginCredentialsResult> {
+  const area = localArea()
+  if (!area) return { ok: false, error: LOGIN_CREDENTIALS_READ_ERROR }
+  try {
+    const stored = (await area.get(LOGIN_CREDENTIALS_KEY)) as Record<string, unknown>
+    return { ok: true, credentials: toCredentials(stored[LOGIN_CREDENTIALS_KEY]) }
+  } catch (e) {
+    // The storage may be blocked by a policy ⇒ the details are not available;
+    // the UI reports it.
+    console.warn('[manifest-autofill] could not read the login details', e)
+    return { ok: false, error: LOGIN_CREDENTIALS_READ_ERROR }
   }
 }
 
@@ -84,16 +130,8 @@ function toCredentials(raw: unknown): LoginCredentials {
  * missing details itself, so a broken storage must not throw here.
  */
 export async function readLoginCredentials(): Promise<LoginCredentials> {
-  const area = localArea()
-  if (!area) return { ...EMPTY_LOGIN_CREDENTIALS }
-  try {
-    const stored = (await area.get(LOGIN_CREDENTIALS_KEY)) as Record<string, unknown>
-    return toCredentials(stored[LOGIN_CREDENTIALS_KEY])
-  } catch {
-    // The storage may be blocked by a policy ⇒ the login details are simply
-    // not available; the UI reports it.
-    return { ...EMPTY_LOGIN_CREDENTIALS }
-  }
+  const outcome = await readLoginCredentialsResult()
+  return outcome.ok ? outcome.credentials : { ...EMPTY_LOGIN_CREDENTIALS }
 }
 
 /**
@@ -105,6 +143,14 @@ export async function readLoginCredentials(): Promise<LoginCredentials> {
 export async function writeLoginCredentials(credentials: LoginCredentials): Promise<void> {
   const area = localArea()
   if (!area) throw new Error('chrome.storage.local is not available')
+  // A value that is not an object would be written as the EMPTY credentials
+  // ⇒ the saved account and password would be wiped in silence.
+  if (!isPlainObject(credentials)) {
+    throw new Error('The login details must be an object with the five fields.')
+  }
+  // A partial stub (a `local` area without `set`) must not produce a raw
+  // `TypeError` ⇒ the same error as a missing area.
+  if (typeof area.set !== 'function') throw new Error('chrome.storage.local is not available')
   await area.set({ [LOGIN_CREDENTIALS_KEY]: toCredentials(credentials) })
 }
 

@@ -6,8 +6,20 @@
  * extension holds the host permission, and the captcha service sends no CORS
  * headers. Extension pages may call the hosts of `host_permissions` without
  * CORS headers.
+ *
+ * The message of an error is BAKED INTO the error on purpose. The rest of the
+ * codebase maps a `kind` to an English sentence at the UI layer
+ * (`describeSiteError` / `describeApiError`); here the diagnosis belongs to
+ * the request itself — which step failed, which HTTP status it answered with,
+ * whether it timed out — so the sentence is written here and the `kind` is
+ * only used for branching.
  */
-import { fetchJsonWithTimeout, HTTP_TIMEOUT_MS, type JsonResponse } from './http'
+import {
+  fetchJsonWithTimeout,
+  HttpTimeoutError,
+  HTTP_TIMEOUT_MS,
+  type JsonResponse,
+} from './http'
 import type { LoginCredentials } from './login-credentials'
 import { SITE_ORIGIN } from './site-url'
 
@@ -67,14 +79,27 @@ export interface LoginTokenOptions {
 const MISSING_CREDENTIALS_MESSAGE =
   'Set the login details in the extension options first: the site account, the site password and the captcha service details.'
 const CAPTCHA_REFUSED_MESSAGE = 'The site refused to give a captcha image.'
+const CAPTCHA_HTTP_MESSAGE = 'The site refused to give a captcha image'
 const CAPTCHA_MISSING_MESSAGE = 'The site did not return the captcha image.'
 const CAPTCHA_NETWORK_MESSAGE = 'Could not reach the site to get the captcha.'
+const CAPTCHA_TIMEOUT_MESSAGE =
+  'The site did not answer in time when it was asked for the captcha.'
 const OCR_MISSING_MESSAGE = 'The captcha service did not return the captcha text.'
+const OCR_HTTP_MESSAGE = 'The captcha service did not return the captcha text'
 const OCR_NETWORK_MESSAGE = 'Could not reach the captcha service.'
+const OCR_TIMEOUT_MESSAGE = 'The captcha service did not answer in time.'
 const LOGIN_REFUSED_MESSAGE =
-  'The site refused the login — check the account details and try again.'
+  'The site refused the login — the captcha text or the account details may be wrong.'
+const LOGIN_HTTP_MESSAGE = 'The site refused the login'
 const LOGIN_NETWORK_MESSAGE = 'Could not reach the site to log in.'
+const LOGIN_TIMEOUT_MESSAGE =
+  'The site did not answer in time when it was asked to log in.'
 const TOKEN_MISSING_MESSAGE = 'The site did not return a token after the login.'
+
+/** The message of an HTTP error — the status is part of the diagnosis. */
+function httpMessage(message: string, status: number): string {
+  return `${message} (HTTP ${status}).`
+}
 
 /** A plain object — anything else is not a place where a value can live. */
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -118,8 +143,8 @@ function siteUrl(origin: string, path: string): string {
   return `${origin.replace(/\/+$/, '')}${path}`
 }
 
-/** A string field of the credentials — anything that is not a string is empty. */
-function textOf(value: unknown): string {
+/** A string field of the credentials — trimmed; anything that is not a string is empty. */
+function trimmedText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
@@ -129,13 +154,13 @@ function textOf(value: unknown): string {
  * The check for "is it filled in?" and the login itself use the same values,
  * so a stray space can never make the check pass and the login fail.
  */
-function normalizeCredentials(credentials: LoginCredentials): LoginCredentials {
+function normalizeCredentials(credentials: LoginCredentials | undefined): LoginCredentials {
   return {
-    siteUsername: textOf(credentials?.siteUsername),
-    sitePassword: textOf(credentials?.sitePassword),
-    ocrUser: textOf(credentials?.ocrUser),
-    ocrPassword: textOf(credentials?.ocrPassword),
-    ocrSoftwareId: textOf(credentials?.ocrSoftwareId),
+    siteUsername: trimmedText(credentials?.siteUsername),
+    sitePassword: trimmedText(credentials?.sitePassword),
+    ocrUser: trimmedText(credentials?.ocrUser),
+    ocrPassword: trimmedText(credentials?.ocrPassword),
+    ocrSoftwareId: trimmedText(credentials?.ocrSoftwareId),
   }
 }
 
@@ -155,21 +180,40 @@ function hasEveryCredential(credentials: LoginCredentials): boolean {
  *
  * The message is the one of the caller: the site and the captcha service are
  * two different things and the operator must know which one is unreachable.
+ * A timeout is a different thing again ⇒ it gets its own message.
  */
 async function requestJson(
   url: string,
   init: RequestInit,
   options: { fetchImpl: typeof fetch; timeoutMs: number },
   networkMessage: string,
+  timeoutMessage: string,
 ): Promise<JsonResponse> {
   try {
     return await fetchJsonWithTimeout(url, init, {
       fetchImpl: options.fetchImpl,
       timeoutMs: options.timeoutMs,
     })
-  } catch {
+  } catch (e) {
+    // Keep the cause: the operator must know WHY the request failed. A fetch
+    // error carries no request body ⇒ the password cannot leak through it.
+    console.warn('[manifest-autofill] a login request failed', e)
+    if (e instanceof HttpTimeoutError) {
+      throw new LoginTokenError('network', timeoutMessage)
+    }
     throw new LoginTokenError('network', networkMessage)
   }
+}
+
+/** The code of the envelope — a number, or a string that holds a number. */
+function siteCode(payload: unknown): number | undefined {
+  const raw = asRecord(payload)?.code
+  if (typeof raw === 'number') return raw
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const parsed = Number(raw)
+    return Number.isNaN(parsed) ? undefined : parsed
+  }
+  return undefined
 }
 
 /**
@@ -184,8 +228,8 @@ function assertSiteOk(
   kind: LoginTokenErrorKind,
   message: string,
 ): void {
-  const code = asRecord(payload)?.code
-  if (typeof code !== 'number') return
+  const code = siteCode(payload)
+  if (code === undefined) return
   if (code === SITE_OK_CODE) return
   throw new LoginTokenError(kind, message)
 }
@@ -207,6 +251,11 @@ function findToken(payload: unknown): string | undefined {
     const token = stripAuthPrefix(raw)
     if (token !== undefined) return token
   }
+  // LAST RESORT — the answer may BE the token: `{"code":2000,"data":"<jwt>"}`.
+  if (typeof envelope.data === 'string') {
+    const token = stripAuthPrefix(envelope.data.trim())
+    if (token !== undefined) return token
+  }
   return undefined
 }
 
@@ -216,34 +265,49 @@ function findToken(payload: unknown): string | undefined {
  * The steps are: the captcha of the site → the captcha service (which reads
  * the image) → the login of the site → the token.
  */
-export async function fetchTokenByLogin(options: LoginTokenOptions): Promise<string> {
-  const credentials = normalizeCredentials(options.credentials)
+export async function fetchTokenByLogin(
+  options: LoginTokenOptions | undefined,
+): Promise<string> {
+  const credentials = normalizeCredentials(options?.credentials)
   if (!hasEveryCredential(credentials)) {
     throw new LoginTokenError('credentials', MISSING_CREDENTIALS_MESSAGE)
   }
 
-  const doFetch = options.fetchImpl ?? fetch
-  const timeoutMs = options.timeoutMs ?? HTTP_TIMEOUT_MS
-  const origin = options.siteOrigin ?? SITE_ORIGIN
-  const captchaServiceUrl = options.captchaServiceUrl ?? CAPTCHA_SERVICE_URL
+  const doFetch = options?.fetchImpl ?? fetch
+  const timeoutMs = options?.timeoutMs ?? HTTP_TIMEOUT_MS
+  const origin = options?.siteOrigin ?? SITE_ORIGIN
+  const captchaServiceUrl = options?.captchaServiceUrl ?? CAPTCHA_SERVICE_URL
 
   // Step 1 — the captcha image and its key.
   const captchaResponse = await requestJson(
     siteUrl(origin, CAPTCHA_PATH),
-    { method: 'GET' },
+    // The cookie of the site: the key of the captcha may be bound to the
+    // session of the site ⇒ without the cookie the login could never work.
+    { method: 'GET', credentials: 'include' },
     { fetchImpl: doFetch, timeoutMs },
     CAPTCHA_NETWORK_MESSAGE,
+    CAPTCHA_TIMEOUT_MESSAGE,
   )
   if (!captchaResponse.ok) {
     // The site answered with an HTTP error ⇒ it did not give a captcha.
-    throw new LoginTokenError('captcha', CAPTCHA_REFUSED_MESSAGE)
+    throw new LoginTokenError(
+      'captcha',
+      httpMessage(CAPTCHA_HTTP_MESSAGE, captchaResponse.status),
+    )
   }
   assertSiteOk(captchaResponse.data, 'captcha', CAPTCHA_REFUSED_MESSAGE)
 
   const captchaEnvelope = asRecord(captchaResponse.data)
   const captchaData = asRecord(captchaEnvelope?.data)
+  // The live shape of the answer was never verified ⇒ the image may be a BARE
+  // STRING in `data`. This fallback comes AFTER the `image_base` lookups so it
+  // can never shadow a real field.
+  const bareImage =
+    typeof captchaEnvelope?.data === 'string' ? captchaEnvelope.data.trim() : ''
   const imageBase =
-    pickString(captchaData, ['image_base']) ?? pickString(captchaEnvelope, ['image_base'])
+    pickString(captchaData, ['image_base']) ??
+    pickString(captchaEnvelope, ['image_base']) ??
+    (bareImage === '' ? undefined : bareImage)
   if (imageBase === undefined) {
     throw new LoginTokenError('captcha', CAPTCHA_MISSING_MESSAGE)
   }
@@ -263,12 +327,14 @@ export async function fetchTokenByLogin(options: LoginTokenOptions): Promise<str
     captchaServiceUrl,
     // NO `Content-Type` header: the browser has to set the multipart
     // boundary itself, otherwise the service cannot read the body.
+    // NO `credentials` either: that host has nothing to do with the site.
     { method: 'POST', body: form },
     { fetchImpl: doFetch, timeoutMs },
     OCR_NETWORK_MESSAGE,
+    OCR_TIMEOUT_MESSAGE,
   )
   if (!ocrResponse.ok) {
-    throw new LoginTokenError('ocr', OCR_MISSING_MESSAGE)
+    throw new LoginTokenError('ocr', httpMessage(OCR_HTTP_MESSAGE, ocrResponse.status))
   }
   // The answer of the service is NOT the envelope of the site: it holds
   // `pic_str` (sometimes inside `data`).
@@ -285,6 +351,8 @@ export async function fetchTokenByLogin(options: LoginTokenOptions): Promise<str
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      // The cookie of the site — the captcha key may be bound to the session.
+      credentials: 'include',
       body: JSON.stringify({
         username: credentials.siteUsername,
         password: credentials.sitePassword,
@@ -295,9 +363,10 @@ export async function fetchTokenByLogin(options: LoginTokenOptions): Promise<str
     },
     { fetchImpl: doFetch, timeoutMs },
     LOGIN_NETWORK_MESSAGE,
+    LOGIN_TIMEOUT_MESSAGE,
   )
   if (!loginResponse.ok) {
-    throw new LoginTokenError('login', LOGIN_REFUSED_MESSAGE)
+    throw new LoginTokenError('login', httpMessage(LOGIN_HTTP_MESSAGE, loginResponse.status))
   }
   assertSiteOk(loginResponse.data, 'login', LOGIN_REFUSED_MESSAGE)
 
