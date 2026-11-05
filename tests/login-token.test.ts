@@ -33,6 +33,22 @@ const httpError = (status: number) =>
   ({ ok: false, status, json: async () => ({}) }) as unknown as Response
 
 /**
+ * A response of HTTP 200 whose body is NOT JSON.
+ *
+ * The HTTP layer answers `invalidJson` (the body is unreadable) ⇒ the flow
+ * must not fall through to a confusing error: it has to say which step gave
+ * no usable answer.
+ */
+const notJsonResponse = () =>
+  ({
+    ok: true,
+    status: 200,
+    json: async () => {
+      throw new SyntaxError('Unexpected token < in JSON at position 0')
+    },
+  }) as unknown as Response
+
+/**
  * A `fetch` that never answers.
  *
  * It only rejects when the request is aborted ⇒ the timeout of the HTTP layer
@@ -519,5 +535,38 @@ describe('fetchTokenByLogin — lỗi', () => {
     })
 
     expect(token).toBe('the-token')
+  })
+
+  it('body KHÔNG phải JSON khi lấy captcha ⇒ kind captcha + câu của ẢNH', async () => {
+    const { fetchImpl } = fakeFetch({ captcha: () => notJsonResponse() })
+
+    const err = await errorOf(
+      fetchTokenByLogin({ credentials: CREDENTIALS, fetchImpl, siteOrigin: ORIGIN }),
+    )
+
+    expect(err.kind).toBe('captcha')
+    expect(err.message).toBe('The site did not return the captcha image.')
+  })
+
+  it('body KHÔNG phải JSON khi gọi captcha service ⇒ kind ocr + câu của CHỮ', async () => {
+    const { fetchImpl } = fakeFetch({ ocr: () => notJsonResponse() })
+
+    const err = await errorOf(
+      fetchTokenByLogin({ credentials: CREDENTIALS, fetchImpl, siteOrigin: ORIGIN }),
+    )
+
+    expect(err.kind).toBe('ocr')
+    expect(err.message).toBe('The captcha service did not return the captcha text.')
+  })
+
+  it('body KHÔNG phải JSON khi đăng nhập ⇒ kind token + câu của TOKEN', async () => {
+    const { fetchImpl } = fakeFetch({ login: () => notJsonResponse() })
+
+    const err = await errorOf(
+      fetchTokenByLogin({ credentials: CREDENTIALS, fetchImpl, siteOrigin: ORIGIN }),
+    )
+
+    expect(err.kind).toBe('token')
+    expect(err.message).toBe('The site did not return a token after the login.')
   })
 })

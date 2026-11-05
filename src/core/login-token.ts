@@ -238,7 +238,10 @@ function assertSiteOk(
  * The token of the answer of the login.
  *
  * The site may put the token in the envelope, in `data` or in `data.data` ⇒
- * all three places are searched.
+ * all three places are searched. A `JWT ` / `Bearer ` prefix is stripped.
+ *
+ * LAST RESORT: the answer may BE the token — `{"code":2000,"data":"<jwt>"}`
+ * ⇒ a non-empty string in `data` is taken as the token.
  */
 function findToken(payload: unknown): string | undefined {
   const envelope = asRecord(payload)

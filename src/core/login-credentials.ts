@@ -25,7 +25,7 @@ export interface LoginCredentials {
 }
 
 /** The details when nothing is stored yet — every field is empty. */
-export const EMPTY_LOGIN_CREDENTIALS: LoginCredentials = Object.freeze({
+export const EMPTY_LOGIN_CREDENTIALS: Readonly<LoginCredentials> = Object.freeze({
   siteUsername: '',
   sitePassword: '',
   ocrUser: '',
