@@ -142,6 +142,8 @@ export interface SiteFetchOptions {
   timeoutMs?: number
   label?: string
   headers?: HeadersInit
+  /** The token obtained by logging in — it wins over the cookie of the site. */
+  token?: string
 }
 
 export type SiteApiErrorKind =
@@ -242,10 +244,14 @@ async function sendSiteJson(
   const doFetch = options.fetchImpl ?? fetch
   // The label in the error message — the empty `path` (create bill endpoint) creates a message with two spaces, so the endpoint passes a label separately.
   const label = options.label ?? path
+  // The token of the login wins over the cookie of the site.
   // The service worker of MV3 does not have `document` ⇒ there is no `document.cookie`.
-  const token = readCookieToken(
-    options.cookieString ?? (typeof document !== 'undefined' ? document.cookie : ''),
-  )
+  const token =
+    options.token !== undefined && options.token !== ''
+      ? options.token
+      : readCookieToken(
+          options.cookieString ?? (typeof document !== 'undefined' ? document.cookie : ''),
+        )
 
   // `Headers` can receive all three forms of `HeadersInit` (plain object, `Headers` instance, array of pairs) and merge headers with the same name (case-insensitive) 
   // ⇒ no header of the caller is lost, no two headers with the same name are sent.

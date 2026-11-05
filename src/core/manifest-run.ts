@@ -45,6 +45,8 @@ export interface ManifestRunOptions {
   cookieString?: string
   timeoutMs?: number
   deadlineMs?: number
+  /** The token obtained by logging in — it wins over the cookie of the site. */
+  token?: string
 }
 
 export interface ManifestRunResult {
@@ -409,6 +411,7 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
     fetchImpl: options.siteFetchImpl,
     cookieString: options.cookieString,
     timeoutMs: requestTimeout(),
+    token: options.token,
   })
   // Check if the run has reached its deadline — before each network call.
   const checkDeadline = (step: string): void => {

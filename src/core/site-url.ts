@@ -8,8 +8,14 @@
 /** Route (phần sau `#`) của trang khai 预配舱单. */
 export const MANIFEST_ROUTE = '/exportBusinessOperations/maintenanceOfManifestData'
 
+/** Origin of the site. */
+export const SITE_ORIGIN = 'https://www.chinaports-agency.com:8870'
+
+/** The home page of the site — in login mode ANY page of the site can run the manifest. */
+export const SITE_HOME_URL = `${SITE_ORIGIN}/`
+
 /** URL đầy đủ của trang khai 预配舱单. */
-export const MANIFEST_URL = `https://www.chinaports-agency.com:8870/#${MANIFEST_ROUTE}`
+export const MANIFEST_URL = `${SITE_ORIGIN}/#${MANIFEST_ROUTE}`
 
 /**
  * Route nằm trong phần hash của URL — bỏ `#` đầu, cắt ở `?`/`#` kế tiếp.

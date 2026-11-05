@@ -21,6 +21,8 @@ interface RecordedCall {
   method: string
   /** Body đã parse (chỉ có với POST). */
   body?: Record<string, unknown>
+  /** Header of the request — needed to assert `Authorization`. */
+  headers?: HeadersInit
 }
 
 const okResponse = (body: unknown) =>
@@ -36,7 +38,11 @@ function manifestFetch(
 } {
   const calls: RecordedCall[] = []
   const fetchImpl = (async (url: string, init?: RequestInit) => {
-    calls.push({ url: String(url), method: (init?.method ?? 'GET').toUpperCase() })
+    calls.push({
+      url: String(url),
+      method: (init?.method ?? 'GET').toUpperCase(),
+      headers: init?.headers,
+    })
     timeline.push(`api:${String(url)}`)
     return okResponse(envelope)
   }) as unknown as typeof fetch
@@ -114,7 +120,7 @@ function siteFetch(
       typeof init?.body === 'string'
         ? (JSON.parse(init.body) as Record<string, unknown>)
         : undefined
-    calls.push({ url: target, method, body })
+    calls.push({ url: target, method, body, headers: init?.headers })
     timeline.push(`site:${target}`)
 
     if (method === 'GET') {
@@ -1075,5 +1081,33 @@ describe('runManifest — số không parse được', () => {
     const cargoPost = h.site.calls.find((call) => call.url.includes('cargo/add/'))
     expect(cargoPost?.body?.gweight_ton).toBe(0)
     expect(hasNullValue(cargoPost?.body)).toBe(false)
+  })
+})
+
+/**
+ * The token of the login mode.
+ *
+ * The login mode gets the token from `/api/login/` (it does not read the
+ * cookie) ⇒ every request to the site must carry `Authorization: JWT <token>`.
+ */
+describe('runManifest — token của chế độ đăng nhập', () => {
+  it('có token ⇒ mọi request tới site mang `Authorization: JWT <token>`', async () => {
+    const h = harness()
+    await run(h, { token: 'login-token', cookieString: 'token=cookie-token' })
+
+    expect(h.site.calls.length).toBeGreaterThan(0)
+    for (const call of h.site.calls) {
+      expect(new Headers(call.headers).get('authorization')).toBe('JWT login-token')
+    }
+  })
+
+  it('KHÔNG có token ⇒ vẫn dùng cookie của site', async () => {
+    const h = harness()
+    await run(h)
+
+    expect(h.site.calls.length).toBeGreaterThan(0)
+    for (const call of h.site.calls) {
+      expect(new Headers(call.headers).get('authorization')).toBe('JWT test-token')
+    }
   })
 })

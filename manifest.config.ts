@@ -34,6 +34,10 @@ export default defineManifest({
   host_permissions: [
     'https://www.chinaports-agency.com:8870/*',
     'https://www.dadaex.cn/*',
+    // The captcha service: the popup logs in with it ⇒ the popup must be
+    // allowed to call it (an extension page bypasses CORS only for the hosts
+    // it holds a permission for).
+    'https://upload.chaojiying.net/*',
   ],
   permissions: ['storage', 'activeTab'],
 })

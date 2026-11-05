@@ -51,6 +51,10 @@ export interface CreateRequest {
   blNo: string
   apiBase?: string
   siteApiBase?: string
+  /** The run gets the token by logging in (the manifest page is not needed). */
+  loginMode?: boolean
+  /** The token obtained by logging in — it wins over the site's cookie. */
+  token?: string
 }
 
 /** Kết quả trả về cho popup — cùng hình dạng với `ManifestRunResult`. */

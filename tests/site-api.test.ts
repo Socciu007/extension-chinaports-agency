@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import {
   normalizeDictOptions,
   pickArray,
@@ -125,6 +125,57 @@ describe('request tới site — header và cookie', () => {
 
     expect(inits).toHaveLength(1)
     expect(inits.every((i) => new Headers(i.headers).get('authorization') === null)).toBe(true)
+  })
+})
+
+/**
+ * The token of the login WINS over the cookie of the site.
+ *
+ * The login mode gets the token from `/api/login/` ⇒ the site may have no
+ * cookie at all (or an old one) ⇒ the token passed in must be the one used.
+ */
+describe('token truyền vào thắng cookie của site', () => {
+  const okResponse = (body: unknown) =>
+    ({ ok: true, status: 200, json: async () => body }) as unknown as Response
+
+  afterEach(() => {
+    // jsdom keeps the cookie between tests ⇒ it has to be cleared.
+    document.cookie = 'token=; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+  })
+
+  it('có `token` trong options ⇒ KHÔNG dùng cookie của document', async () => {
+    document.cookie = 'token=cookie-token'
+    const inits: CapturedInit[] = []
+    const fakeFetch = (async (_url: string, init?: CapturedInit) => {
+      inits.push(init ?? {})
+      return okResponse({ code: 2000, data: [] })
+    }) as unknown as typeof fetch
+
+    await fetchPortCode('SHANGHAI', {
+      baseUrl: '/api/test',
+      fetchImpl: fakeFetch,
+      token: 'login-token',
+    })
+
+    expect(inits).toHaveLength(1)
+    expect(new Headers(inits[0]?.headers).get('authorization')).toBe('JWT login-token')
+  })
+
+  it('KHÔNG có `token` ⇒ vẫn dùng cookie của document', async () => {
+    document.cookie = 'token=cookie-token'
+    const inits: CapturedInit[] = []
+    const fakeFetch = (async (_url: string, init?: CapturedInit) => {
+      inits.push(init ?? {})
+      return okResponse({ code: 2000, data: [] })
+    }) as unknown as typeof fetch
+
+    await fetchPortCode('SHANGHAI', {
+      baseUrl: '/api/test',
+      fetchImpl: fakeFetch,
+    })
+
+    expect(inits).toHaveLength(1)
+    expect(new Headers(inits[0]?.headers).get('authorization')).toBe('JWT cookie-token')
   })
 })
 
