@@ -67,6 +67,14 @@ let localStore: Record<string, unknown>
 let localSet: ReturnType<typeof vi.fn>
 /** `get` của `chrome.storage.local` — để assert đã đọc storage. */
 let localGet: ReturnType<typeof vi.fn>
+/**
+ * The spies of the console - the login token must NEVER reach the console.
+ *
+ * The spies are installed in `beforeEach` and removed in `afterEach` ⇒ they
+ * do not leak into the next test, and no test can silently lose an error
+ * message.
+ */
+let consoleSpies: ConsoleSpies
 
 /** Một lần gọi fetch đã bắt. */
 interface RecordedCall {
@@ -90,6 +98,53 @@ function sentHeaders(init: HeadersInit | undefined): [string, string][] {
 /** Giá trị của một header trong call đã bắt (không phân biệt hoa/thường). */
 function headerValue(call: RecordedCall, name: string): string | undefined {
   return call.headers.find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1]
+}
+
+/**
+ * ONE spy of the console - only the captured calls and the way to remove it.
+ */
+interface ConsoleSpy {
+  mock: { calls: unknown[][] }
+  mockRestore: () => void
+}
+
+/**
+ * The spies of the console - used to find out whether the token leaks into
+ * the console.
+ *
+ * They cover ALL SIX ways of printing (`log`, `info`, `warn`, `error`,
+ * `debug`, `trace`) ⇒ the claim "the token never reaches the console" holds
+ * for EVERY way of printing.
+ */
+interface ConsoleSpies {
+  log: ConsoleSpy
+  info: ConsoleSpy
+  warn: ConsoleSpy
+  error: ConsoleSpy
+  debug: ConsoleSpy
+  trace: ConsoleSpy
+}
+
+/**
+ * Turn ANY value into a string so that it can be searched.
+ *
+ * The console takes a string, an object and an error alike ⇒ the text of all
+ * three has to be rebuilt, otherwise a token hidden inside an object (an
+ * object that is logged) would slip through.
+ */
+function safeText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value instanceof Error) return `${value.name}: ${value.message} ${value.stack ?? ''}`
+  try {
+    return JSON.stringify(value) ?? String(value)
+  } catch {
+    return String(value)
+  }
+}
+
+/** The text of EVERY argument of EVERY call of a spy - used to find the token. */
+function consoleText(spy: ConsoleSpy): string {
+  return spy.mock.calls.map((args) => args.map(safeText).join(' ')).join('\n')
 }
 
 const jsonResponse = (body: unknown) =>
@@ -161,6 +216,15 @@ async function send(message: unknown): Promise<CreateResult> {
 }
 
 beforeEach(async () => {
+  // The console spies - installed BEFORE everything so that no call is missed.
+  consoleSpies = {
+    log: vi.spyOn(console, 'log').mockImplementation(() => {}),
+    info: vi.spyOn(console, 'info').mockImplementation(() => {}),
+    warn: vi.spyOn(console, 'warn').mockImplementation(() => {}),
+    error: vi.spyOn(console, 'error').mockImplementation(() => {}),
+    debug: vi.spyOn(console, 'debug').mockImplementation(() => {}),
+    trace: vi.spyOn(console, 'trace').mockImplementation(() => {}),
+  }
   // `inFlight` là trạng thái ở MỨC MODULE ⇒ phải nạp lại module cho mỗi test.
   vi.resetModules()
   listener = undefined
@@ -239,6 +303,13 @@ afterEach(async () => {
   // Cookie đã stub trong test ⇒ gỡ own property, trả lại getter của jsdom.
   Reflect.deleteProperty(document, 'cookie')
   vi.unstubAllGlobals()
+  // Remove the console spies ⇒ they do not leak into the next test.
+  consoleSpies.log.mockRestore()
+  consoleSpies.info.mockRestore()
+  consoleSpies.warn.mockRestore()
+  consoleSpies.error.mockRestore()
+  consoleSpies.debug.mockRestore()
+  consoleSpies.trace.mockRestore()
 })
 
 describe('content script — chống chạy chồng', () => {
@@ -674,7 +745,8 @@ describe('content script — chạy manifest qua API', () => {
     expect(result.message).toBe(OPT_IN_OFF_MESSAGE)
     expect(result.billCreated).toBe(false)
     expect(result.written).toBe(false)
-    // Chặn phải xảy ra TRƯỚC mọi lần gọi mạng — kể cả lúc đọc dữ liệu.
+    // The block must happen BEFORE every network call - even before the data
+    // is read.
     expect(fake.calls).toHaveLength(0)
   })
 
@@ -748,7 +820,17 @@ describe('content script — chạy manifest qua API', () => {
     const fake = fakeFetch()
     vi.stubGlobal('fetch', fake.fetchImpl)
 
-    await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, loginMode: true, token: 'login-token' })
+    const result = await send({
+      type: MSG_CREATE_MANIFEST,
+      blNo: BL_NO,
+      loginMode: true,
+      token: 'login-token',
+    })
+
+    // The run must REALLY have written the manifest — otherwise the header
+    // below would be checked on a run that never reached the site.
+    expect(result.ok).toBe(true)
+    expect(result.written).toBe(true)
 
     const siteCalls = fake.calls.filter((call) => call.url.includes('/api/booking/'))
     expect(siteCalls.length).toBeGreaterThan(0)
@@ -766,7 +848,17 @@ describe('content script — chạy manifest qua API', () => {
     const fake = fakeFetch()
     vi.stubGlobal('fetch', fake.fetchImpl)
 
-    await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, loginMode: true, token: 'login-token' })
+    const result = await send({
+      type: MSG_CREATE_MANIFEST,
+      blNo: BL_NO,
+      loginMode: true,
+      token: 'login-token',
+    })
+
+    // The run must REALLY have written the manifest — otherwise the header
+    // below would be checked on a run that never reached the site.
+    expect(result.ok).toBe(true)
+    expect(result.written).toBe(true)
 
     const siteCalls = fake.calls.filter((call) => call.url.includes('/api/booking/'))
     expect(siteCalls.length).toBeGreaterThan(0)
@@ -798,5 +890,138 @@ describe('content script — chạy manifest qua API', () => {
     expect(result.ok).toBe(false)
     expect(result.message).toBe(OPT_IN_OFF_MESSAGE)
     expect(fake.calls).toHaveLength(0)
+  })
+
+  it('login mode + bill ĐÃ có manifest trên site ⇒ bị chặn, KHÔNG chạm network', async () => {
+    // The bill is pre-seeded in `chrome.storage.local` ⇒ in login mode only
+    // that bill can block this run (the tab is NOT the manifest page, but
+    // login mode does not need the manifest page).
+    localStore[localKeyOf(BL_NO)] = Date.now()
+    location.hash = '#/someOtherRoute'
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    const result = await send({
+      type: MSG_CREATE_MANIFEST,
+      blNo: BL_NO,
+      loginMode: true,
+      token: 'login-token',
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe(DUPLICATE_MESSAGE)
+    expect(result.billCreated).toBe(false)
+    expect(result.written).toBe(false)
+    // The block must happen BEFORE every network call - even before the data
+    // is read.
+    expect(fake.calls).toHaveLength(0)
+  })
+
+  it('token của login KHÔNG BAO GIỜ chạm console', async () => {
+    const SECRET_TOKEN = 'TOKEN-MUST-NEVER-BE-LOGGED-12345'
+    location.hash = '#/someOtherRoute'
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    const result = await send({
+      type: MSG_CREATE_MANIFEST,
+      blNo: BL_NO,
+      loginMode: true,
+      token: SECRET_TOKEN,
+    })
+    expect(result.ok).toBe(true)
+
+    // The log line MUST happen - otherwise the assertion below is vacuous.
+    expect(consoleSpies.log).toHaveBeenCalled()
+
+    // The token is a login credential of the site ⇒ it must never be printed
+    // to the console of ANY page the content script runs on.
+    for (const spy of Object.values(consoleSpies)) {
+      expect(consoleText(spy)).not.toContain(SECRET_TOKEN)
+    }
+  })
+
+  it('lỗi lúc chạy ⇒ console.error KHÔNG mang token', async () => {
+    const SECRET_TOKEN = 'TOKEN-MUST-NEVER-BE-LOGGED-12345'
+    // The storage throws the moment it is touched ⇒ `handleCreate` throws ⇒
+    // the `catch` of the listener prints the error to the console.
+    vi.stubGlobal('chrome', {
+      runtime: {
+        onMessage: {
+          addListener: (fn: Listener) => {
+            listener = fn
+          },
+        },
+      },
+      get storage(): never {
+        throw new Error('test: storage is blocked')
+      },
+    })
+
+    const result = await send({
+      type: MSG_CREATE_MANIFEST,
+      blNo: BL_NO,
+      loginMode: true,
+      token: SECRET_TOKEN,
+    })
+
+    expect(result.ok).toBe(false)
+    // The error path MUST happen - otherwise the assertion below is vacuous.
+    expect(consoleSpies.error).toHaveBeenCalled()
+
+    // The printed error must not carry the token either.
+    for (const spy of Object.values(consoleSpies)) {
+      expect(consoleText(spy)).not.toContain(SECRET_TOKEN)
+    }
+  })
+
+  it('loginMode KHÔNG phải boolean ⇒ KHÔNG bật login mode, vẫn báo mở trang manifest', async () => {
+    location.hash = '#/someOtherRoute'
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    // A truthy value that is NOT the boolean true ⇒ login mode must NOT be
+    // enabled ⇒ the operator still has to open the manifest page.
+    for (const loginMode of ['yes', 1, {}, []]) {
+      const result = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, loginMode })
+
+      expect(result.ok).toBe(false)
+      expect(result.message).toBe(WRONG_PAGE_MESSAGE)
+    }
+    expect(fake.calls).toHaveLength(0)
+  })
+
+  it('token KHÔNG phải chuỗi ⇒ KHÔNG gửi lên header Authorization', async () => {
+    location.hash = '#/someOtherRoute'
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    // A broken token (a number, an object, an array) ⇒ it must NOT be put into
+    // the `Authorization` header - otherwise the header carries rubbish.
+    //
+    // EVERY run uses a DIFFERENT bill number: with the same bill number the
+    // next run is blocked by the "a manifest already exists" latch ⇒ the site
+    // is never reached ⇒ that run would check NOTHING (meaningless).
+    for (const [index, token] of [12345, { a: 1 }, ['x']].entries()) {
+      const callsBefore = fake.calls.length
+      const result = await send({
+        type: MSG_CREATE_MANIFEST,
+        blNo: `${BL_NO}-${index}`,
+        loginMode: true,
+        token,
+      })
+      // This run must REALLY write to the site - if it is blocked there is no
+      // header to check.
+      expect(result.ok).toBe(true)
+
+      // ONLY the calls of THIS run - `fake.calls` is CUMULATIVE.
+      const siteCalls = fake.calls
+        .slice(callsBefore)
+        .filter((call) => call.url.includes('/api/booking/'))
+      expect(siteCalls.length).toBeGreaterThan(0)
+      for (const call of siteCalls) {
+        expect(headerValue(call, 'authorization')).toBeUndefined()
+      }
+    }
   })
 })

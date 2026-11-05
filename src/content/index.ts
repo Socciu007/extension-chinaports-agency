@@ -121,6 +121,9 @@ async function rememberCreatedBillNo(blNo: string): Promise<void> {
 async function handleCreate(request: CreateRequest): Promise<CreateResult> {
   // The "get the token by logging in" mode does NOT need the manifest page:
   // the run only talks to the site's API, it does not touch the page.
+  //
+  // The flag is honoured ONLY when it is exactly `true` — a truthy
+  // non-boolean (a string, a number, an object) must NOT enable login mode.
   const loginMode = request.loginMode === true
   if (!loginMode && !isManifestPage()) {
     return errorResult(
@@ -147,11 +150,17 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
   const apiBase = request.apiBase ?? settings.apiBase
   const siteApiBase = request.siteApiBase ?? settings.siteApiBase
 
+  // The token goes to the API ONLY when it is a non-empty string. The message
+  // comes from the popup and is NOT trusted ⇒ a malformed token (a number, an
+  // object, an array) must NEVER reach the `Authorization` header.
+  const rawToken: unknown = request.token
+  const token = typeof rawToken === 'string' && rawToken !== '' ? rawToken : undefined
+
   const result = await runManifest({
     blNo: request.blNo,
     apiBase,
     siteApiBase,
-    token: request.token,
+    token,
   })
 
   if (result.billCreated === true) await rememberCreatedBillNo(billKey)
@@ -164,10 +173,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (type !== MSG_CREATE_MANIFEST) return false
   // The message can carry the login token — a session credential that
   // authorises writing manifests on the site ⇒ log ONLY the safe fields.
-  console.log('Input from popup:', {
-    type: (message as { type?: string }).type,
-    blNo: (message as { blNo?: string }).blNo,
-  })
+  const blNo = (message as { blNo?: string }).blNo
+  console.log('Input from popup:', { type, blNo })
 
   // Check input from popup
   if (!isCreateRequest(message)) {
