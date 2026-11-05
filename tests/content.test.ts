@@ -730,4 +730,73 @@ describe('content script — chạy manifest qua API', () => {
       expect(auth).toBe('JWT token-2')
     }
   })
+
+  it('login mode + route KHÁC trang manifest ⇒ chạy được (KHÔNG cần trang manifest)', async () => {
+    location.hash = '#/someOtherRoute'
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    const result = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, loginMode: true })
+
+    expect(result.message).not.toBe(WRONG_PAGE_MESSAGE)
+    expect(result.ok).toBe(true)
+    expect(result.written).toBe(true)
+  })
+
+  it('login mode + token ⇒ mọi request tới site mang Authorization: JWT <token>', async () => {
+    location.hash = '#/someOtherRoute'
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, loginMode: true, token: 'login-token' })
+
+    const siteCalls = fake.calls.filter((call) => call.url.includes('/api/booking/'))
+    expect(siteCalls.length).toBeGreaterThan(0)
+    for (const call of siteCalls) {
+      expect(headerValue(call, 'authorization')).toBe('JWT login-token')
+    }
+  })
+
+  it('login mode + token ⇒ token THẮNG cookie của site', async () => {
+    location.hash = '#/someOtherRoute'
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      value: 'token=cookie-token',
+    })
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, loginMode: true, token: 'login-token' })
+
+    const siteCalls = fake.calls.filter((call) => call.url.includes('/api/booking/'))
+    expect(siteCalls.length).toBeGreaterThan(0)
+    for (const call of siteCalls) {
+      expect(headerValue(call, 'authorization')).toBe('JWT login-token')
+    }
+  })
+
+  it('loginMode tắt (false) + sai trang ⇒ vẫn báo mở trang manifest', async () => {
+    location.hash = '#/someOtherRoute'
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    const result = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, loginMode: false })
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe(WRONG_PAGE_MESSAGE)
+    expect(fake.calls).toHaveLength(0)
+  })
+
+  it('login mode + opt-in ĐÃ LƯU đang tắt ⇒ vẫn từ chối, KHÔNG chạm network', async () => {
+    settings.createOnSite = false
+    location.hash = '#/someOtherRoute'
+    const fake = fakeFetch()
+    vi.stubGlobal('fetch', fake.fetchImpl)
+
+    const result = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, loginMode: true })
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe(OPT_IN_OFF_MESSAGE)
+    expect(fake.calls).toHaveLength(0)
+  })
 })

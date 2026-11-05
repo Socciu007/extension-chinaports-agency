@@ -119,8 +119,10 @@ async function rememberCreatedBillNo(blNo: string): Promise<void> {
 
 // Run manifest according to the request from the popup.
 async function handleCreate(request: CreateRequest): Promise<CreateResult> {
-  // If not on the manifest page, return an error.
-  if (!isManifestPage()) {
+  // The "get the token by logging in" mode does NOT need the manifest page:
+  // the run only talks to the site's API, it does not touch the page.
+  const loginMode = request.loginMode === true
+  if (!loginMode && !isManifestPage()) {
     return errorResult(
       'Open the manifest page (#/exportBusinessOperations/maintenanceOfManifestData) and try again.',
     )
@@ -149,6 +151,7 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
     blNo: request.blNo,
     apiBase,
     siteApiBase,
+    token: request.token,
   })
 
   if (result.billCreated === true) await rememberCreatedBillNo(billKey)
@@ -159,7 +162,12 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const type = (message as { type?: string } | undefined)?.type
   if (type !== MSG_CREATE_MANIFEST) return false
-  console.log('Input from popup:', message)
+  // The message can carry the login token — a session credential that
+  // authorises writing manifests on the site ⇒ log ONLY the safe fields.
+  console.log('Input from popup:', {
+    type: (message as { type?: string }).type,
+    blNo: (message as { blNo?: string }).blNo,
+  })
 
   // Check input from popup
   if (!isCreateRequest(message)) {
