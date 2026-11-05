@@ -1,30 +1,34 @@
-# 2026-11-03 提示词统计 —— Manifest Autofill（PACKAGE_COD 上线 + 字典预加载下线 + popup 只留一条消息）
+# 2026-11-04 Test Manifest Autofill
 
 ## 第一部分：提示词时间线
 
-| #   | 本地时间 | UTC      | 类型 | 形式            | 内容摘要                                                                                                              | 直接结果                                                                                     |
-| --- | -------- | -------- | ---- | --------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| 1   | 09:08    | 01:08:46 | 指示 | 文字 + IDE 打开 | “implement PACKAGE_COD lookup”（IDE 打开 `src/core/field-meta.ts`）                                                        | 09:12 会话被压缩；醒来后把被打断的两处编辑补上 ⇒ 09:17 提交 `b41fb42`                     |
-| 2   | 09:16    | 01:16:32 | 批准 | 2 题问答        | ① fake 的 `bill_no` 改成数组后提不提交 ② docs.md 里丢失的 10-30 那一节要不要放回去                                      | ① 提交（`b41fb42`）② **不放** ⇒ docs.md 至今只有 11-02 那一节                              |
-| 3   | 10:17    | 02:17:23 | 指示 | 文字 + IDE 选中 | “bỏ loadSiteDicts, hai fetchSite getTrustCode và getCntrCode này bỏ hẳn đi, fetchSite getPort này để lookup sau khi có tên cảng tiếng anh từ fetchManifest”（选中 `manifest-run.ts:479` 的 `fetchManifest`） | 当天最大的一次改动：字典预加载下线（12 文件 +501/−455，`8bc1945`） |
-| 4   | 11:03    | 03:03:50 | 批准 | 1 选 3 问答     | 字典下线 + fetch 后查港口码，12 个文件的 commit 批不批（3 个选项：整包 / 换短 message / 拆成两个）                        | 批第一条 ⇒ `8bc1945`（11:04）                                                               |
-| 5   | 11:21    | 03:21:31 | 指示 | 文字 + IDE 打开 | “chỉ hiển thị thông báo lỗi, cảnh báo, thành công ở bước cuối cùng trên popup của chức năng run manifest, còn lại có thể làm sạch hoặc để console.log chứ không hiển thị popup”（IDE 打开 `src/popup/App.vue`） | popup 三连改的第一刀（`b293237`，11:35） |
-| 6   | 11:46    | 03:46:57 | 指示 | 文字 + IDE 选中 | “bỏ evidenceText và table 'Field', 'Note'”（选中 `App.vue:600` 的 `Field`）—— 发出后 **0.08 秒被用户自己打断**，11:47:05 重发同一条 | `c2cf94c`（12:03，当天删得最多的一个 commit）                       |
-| 7   | 13:24    | 05:24:22 | 指示 | 文字 + IDE 选中 | “nếu cả hai trường code của port bị null hoặc rỗng mới fillPortCodes từ fetchPortCode”（选中 `manifest-run.ts:343-350`）       | 查港口码降级成“最后手段”（`8a85e8c`，14:05）                                                |
-| 8   | 14:03    | 06:03:35 | 批准 | 1 选 2 问答     | 2 个文件的 commit 批不批                                                                                                | 批 ⇒ `8a85e8c`（14:05）                                                                      |
-| 9   | 14:11    | 06:11:14 | 指示 | 文字 + 截图     | “bỏ hết phần summary và chỉ để lại một thông báo kết quả duy nhất tùy trường hợp nếu thông báo lỗi màu đỏ, thông báo cảnh báo màu cam vàng, thông báo thành công màu xanh, mấy lỗi hết hạn token hay lỗi gọi API on site cũng trả về luôn thông báo”（附 popup 截图，红叉标掉黄色必填框和计数行） | popup 收成一条消息（`33f1a87`，14:59）                     |
-| 10  | 14:59    | 06:59:02 | 批准 | 1 选 3 问答     | 这批 commit 批不批（message + 7 个文件写进 option label）                                                                | 批 ⇒ `33f1a87`（14:59，7 文件 +413/−295）                                                  |
-| 11  | 16:31    | 08:31:28 | 指示 | 文字 + IDE 打开 | “thống kê các prompt ngày 03-11-2026 vào file docs.md”（IDE 打开 `src/core/manifest-run.ts`）                            | 本节                                                                                         |
+| #   | 本地时间 | UTC      | 类型 | 形式            | 内容摘要                                                                                                                                                                                                     | 直接结果                                                              |
+| --- | -------- | -------- | ---- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| 1   | 09:08    | 01:08:46 | 指示 | 文字 + IDE 打开 | “实现 PACKAGE_COD 查询”（IDE 打开 `src/core/field-meta.ts`）                                                                                                                                                 | 09:12 会话被压缩；醒来后把被打断的两处编辑补上 ⇒ 09:17 提交 `b41fb42` |
+| 2   | 09:16    | 01:16:32 | 批准 | 2 题问答        | ① fake 的 `bill_no` 改成数组后提不提交 ② docs.md 里丢失的 10-30 那一节要不要放回去                                                                                                                           | ① 提交（`b41fb42`）② **不放** ⇒ docs.md 至今只有 11-02 那一节         |
+| 3   | 10:17    | 02:17:23 | 指示 | 文字 + IDE 选中 | “去掉 `loadSiteDicts`，把两个 `fetchSite` 的 `getTrustCode` / `getCntrCode` 彻底删掉，`getPort` 改成等 `fetchManifest` 拿到英文港口名之后再查”（选中 `manifest-run.ts:479` 的 `fetchManifest`）              | 当天最大的一次改动：字典预加载下线（12 文件 +501/−455，`8bc1945`）    |
+| 4   | 11:03    | 03:03:50 | 批准 | 1 选 3 问答     | 字典下线 + fetch 后查港口码，12 个文件的 commit 批不批（3 个选项：整包 / 换短 message / 拆成两个）                                                                                                           | 批第一条 ⇒ `8bc1945`（11:04）                                         |
+| 5   | 11:21    | 03:21:31 | 指示 | 文字 + IDE 打开 | “run manifest 这个功能，popup 上只在最后一步显示错误、警告、成功消息；其余的可以清掉或者用 console.log 打出来，不要显示在 popup 上”（IDE 打开 `src/popup/App.vue`）                                          | popup 三连改的第一刀（`b293237`，11:35）                              |
+| 6   | 11:46    | 03:46:57 | 指示 | 文字 + IDE 选中 | “去掉 `evidenceText` 和 'Field'、'Note' 这张表”（选中 `App.vue:600` 的 `Field`）—— 发出后 **0.08 秒被用户自己打断**，11:47:05 重发同一条                                                                     | `c2cf94c`（12:03，当天删得最多的一个 commit）                         |
+| 7   | 13:24    | 05:24:22 | 指示 | 文字 + IDE 选中 | “只有在两个 port 的 code 字段都为 null 或空的时候，才用 `fetchPortCode` 去 `fillPortCodes`”（选中 `manifest-run.ts:343-350`）                                                                                | 查港口码降级成“最后手段”（`8a85e8c`，14:05）                          |
+| 8   | 14:03    | 06:03:35 | 批准 | 1 选 2 问答     | 2 个文件的 commit 批不批                                                                                                                                                                                     | 批 ⇒ `8a85e8c`（14:05）                                               |
+| 9   | 14:11    | 06:11:14 | 指示 | 文字 + 截图     | “把 summary 那部分整个去掉，只留一条结果消息，按情况区分：错误消息用红色，警告消息用橙黄色，成功消息用绿色；token 过期和调用 site API 失败的错误也都要返回消息”（附 popup 截图，红叉标掉黄色必填框和计数行） | popup 收成一条消息（`33f1a87`，14:59）                                |
+| 10  | 14:59    | 06:59:02 | 批准 | 1 选 3 问答     | 这批 commit 批不批（message + 7 个文件写进 option label）                                                                                                                                                    | 批 ⇒ `33f1a87`（14:59，7 文件 +413/−295）                             |
+| 11  | 16:31    | 08:31:28 | 指示 | 文字 + IDE 打开 | “把 2026-11-04 当天的提示词统计写进 docs.md”（IDE 打开 `src/core/manifest-run.ts`）                                                                                                                          | 本节                                                                  |
 
 ---
 
 ## 第二部分：每条提示词详情
 
-### 1. 09:08 —— “implement PACKAGE_COD lookup”
+### 1. 09:08 —— “实现 PACKAGE_COD 查询”
 
-**原文**
+**原文（英文）**
 
 > （IDE 打开 `src/core/field-meta.ts`）implement PACKAGE_COD lookup
+
+**中文**
+
+> （IDE 打开 `src/core/field-meta.ts`）实现 PACKAGE_COD 查询
 
 **说明**
 
@@ -38,7 +42,7 @@
 
 ### 2. 09:16 —— fake 修复提交 + docs.md 丢掉的 10-30 那一节
 
-**原文**
+**原文（英文）**
 
 > ① Commit the approved fake fix now? (the message and file list need to come from your reply for the commit to be accepted)
 >
@@ -50,6 +54,18 @@
 > - Overwrite docs.md with the 10-30 + 11-02 version
 > - Leave docs.md as it is — the 11-02 statistics only
 
+**中文**
+
+> ① 现在就提交已批准的 fake 修复吗？（message 和文件清单必须写在你的回复里，commit 才会被放行）
+>
+> - fix: return the bill number as an array from the site fake —— 2 个文件（tests/content.test.ts、tests/manifest-run.test.ts）（选项 1）
+> - 把 fake 修复留在工作区，暂不提交（选项 2）
+>
+> ② docs.md 里已经没有 10-30 那一节了（552 行，含四个附录）—— 昨天 18:16 被截断。它还活在 harness 快照里。要把它放回 11-02 那一节前面吗？
+>
+> - 用 10-30 + 11-02 的版本覆盖 docs.md（选项 1）
+> - docs.md 保持现状 —— 只要 11-02 的统计（选项 2）
+
 **处理结果**
 
 ① 提交 ⇒ `b41fb42`（09:17，2 文件 +7/−15）。② **选“不放”** —— 这就是为什么今天的 `docs.md` 里没有 10-30 那一节：那是**用户自己的选择**，不是丢了。
@@ -58,11 +74,17 @@
 
 ### 3. 10:17 —— 字典预加载下线，港口码挪到 fetch 之后
 
-**原文**
+**原文（越南语）**
 
 > （IDE 选中 `src/core/manifest-run.ts:479` 的 `fetchManifest`）
 >
 > bỏ loadSiteDicts, hai fetchSite getTrustCode và getCntrCode này bỏ hẳn đi, fetchSite getPort này để lookup sau khi có tên cảng tiếng anh từ fetchManifest
+
+**中文**
+
+> （IDE 选中 `src/core/manifest-run.ts:479` 的 `fetchManifest`）
+>
+> 去掉 `loadSiteDicts`，两个 `fetchSite` 里的 `getTrustCode` 和 `getCntrCode` 彻底删掉，`fetchSite` 的 `getPort` 改成等 `fetchManifest` 拿到英文港口名之后再查
 
 **说明**
 
@@ -79,13 +101,21 @@
 
 ### 4. 11:03 —— 批准这个 12 文件的 commit
 
-**原文**
+**原文（英文）**
 
 > The dict-removal + post-fetch port lookup is implemented, spec-reviewed and verified. Committing it now — the 11-file change plus the review-fix batch touches tests/content.test.ts too, so it is 12 files (docs.md stays dirty and uncommitted, as always). Selecting an option approves BOTH the message and the file list shown.
 >
 > - refactor: drop the dictionary preload and look up the port codes after the fetch — 12 files (src/content/index.ts, src/core/api.ts, src/core/field-meta.ts, src/core/manifest-run.ts, src/core/payload.ts, src/core/site-api.ts, tests/api.test.ts, tests/content.test.ts, tests/field-meta.test.ts, tests/manifest-run.test.ts, tests/payload.test.ts, tests/site-api.test.ts)
 > - refactor: look up the port codes after the manifest fetch — 12 files (同上)
 > - Two commits: refactor: drop the dictionary preload (6 src files) + test: cover the port code lookup after the fetch (6 test files) — 12 files total
+
+**中文**
+
+> 字典下线 + fetch 之后查港口码已经实现，并通过了 spec 评审和验证。现在提交 —— 11 个文件的改动加上评审修复批次也动了 tests/content.test.ts，所以一共是 12 个文件（docs.md 和往常一样保持 dirty、不提交）。选中任一选项即同时批准下面的 message 和文件清单。
+>
+> - `refactor: drop the dictionary preload and look up the port codes after the fetch` —— 12 个文件（src/content/index.ts、src/core/api.ts、src/core/field-meta.ts、src/core/manifest-run.ts、src/core/payload.ts、src/core/site-api.ts、tests/api.test.ts、tests/content.test.ts、tests/field-meta.test.ts、tests/manifest-run.test.ts、tests/payload.test.ts、tests/site-api.test.ts）（选项 1）
+> - `refactor: look up the port codes after the manifest fetch` —— 12 个文件（同上）（选项 2）
+> - 拆成两个 commit：`refactor: drop the dictionary preload`（6 个 src 文件）+ `test: cover the port code lookup after the fetch`（6 个 test 文件）—— 一共 12 个文件（选项 3）
 
 **处理结果**
 
@@ -95,9 +125,13 @@
 
 ### 5. 11:21 —— popup 只在最后留一条消息
 
-**原文**
+**原文（越南语）**
 
 > （IDE 打开 `src/popup/App.vue`）chỉ hiển thị thông báo lỗi, cảnh báo, thành công ở bước cuối cùng trên popup của chức năng run manifest, còn lại có thể làm sạch hoặc để console.log chứ không hiển thị popup
+
+**中文**
+
+> （IDE 打开 `src/popup/App.vue`）run manifest 这个功能，在 popup 上只显示最后一步的错误、警告、成功消息，其余的可以清掉或者用 console.log 打出来，不要显示在 popup 上
 
 **说明**
 
@@ -109,13 +143,21 @@
 
 ---
 
-### 6. 11:46 —— “bỏ evidenceText và table 'Field', 'Note'”（发出去就被打断）
+### 6. 11:46 —— “去掉 `evidenceText` 和 'Field'、'Note' 表”（发出去就被打断）
 
-**原文**
+**原文（越南语）**
 
 > （IDE 选中 `src/popup/App.vue:600` 的 `Field`）
 >
 > bỏ evidenceText và table 'Field', 'Note'
+>
+> （同一条消息在 **0.08 秒后**被 `[Request interrupted by user]` 打断；11:47:05 用户重发了一遍完全一样的内容）
+
+**中文**
+
+> （IDE 选中 `src/popup/App.vue:600` 的 `Field`）
+>
+> 去掉 `evidenceText` 和 'Field'、'Note' 这张表
 >
 > （同一条消息在 **0.08 秒后**被 `[Request interrupted by user]` 打断；11:47:05 用户重发了一遍完全一样的内容）
 
@@ -127,11 +169,17 @@
 
 ### 7. 13:24 —— 查港口码只在 API 完全没有 code 时才做
 
-**原文**
+**原文（越南语）**
 
 > （IDE 选中 `src/core/manifest-run.ts:343-350` 的 `fillPortCodes` 循环）
 >
 > nếu cả hai trường code của port bị null hoặc rỗng mới fillPortCodes từ fetchPortCode
+
+**中文**
+
+> （IDE 选中 `src/core/manifest-run.ts:343-350` 的 `fillPortCodes` 循环）
+>
+> 只有在两个 port 的 code 字段都为 null 或空的时候，才用 `fetchPortCode` 去 `fillPortCodes`
 
 **说明**
 
@@ -145,7 +193,7 @@
 
 ### 8. 14:03 —— 批准这个 2 文件的 commit
 
-**原文**
+**原文（英文）**
 
 > Commit the 2 changed files with this exact message?
 >
@@ -156,19 +204,36 @@
 > - refactor: only look up the port codes when the API has none — src/core/manifest-run.ts, tests/manifest-run.test.ts
 > - Do not commit yet — leave the change in the working tree
 
+**中文**
+
+> 用这个确切的 message 提交这 2 个改动过的文件吗？
+>
+> refactor: only look up the port codes when the API has none
+>
+> 文件：src/core/manifest-run.ts、tests/manifest-run.test.ts
+>
+> - `refactor: only look up the port codes when the API has none` —— src/core/manifest-run.ts、tests/manifest-run.test.ts（选项 1）
+> - 先别提交 —— 把改动留在工作区（选项 2）
+
 **处理结果**
 
 批 ⇒ `8a85e8c`（14:05）。
 
 ---
 
-### 9. 14:11 —— “bỏ hết phần summary…”
+### 9. 14:11 —— “去掉整个 summary，只留一条结果消息…”
 
-**原文**
+**原文（越南语）**
 
 > （截图：popup，红叉标掉黄色的必填字段明细框和下面的计数行）
 >
 > bỏ hết phần summary và chỉ để lại một thông báo kết quả duy nhất tùy trường hợp nếu thông báo lỗi màu đỏ, thông báo cảnh báo màu cam vàng, thông báo thành công màu xanh, mấy lỗi hết hạn token hay lỗi gọi API on site cũng trả về luôn thông báo
+
+**中文**
+
+> （截图：popup，红叉标掉黄色的必填字段明细框和下面的计数行）
+>
+> 把 summary 那部分整个去掉，只留一条结果消息，按情况区分：错误消息用红色，警告消息用橙黄色，成功消息用绿色；token 过期和调用 site API 失败的错误也都要返回消息
 
 **说明**
 
@@ -180,19 +245,27 @@
 
 被删掉的信息并没有丢：那些还空着的必填字段改由 `console.info('[manifest-autofill] fields the site requires', …)` 打出来（label + prop + 行号 + note），并有测试钉住这行输出，免得它被悄悄删掉。
 
-有一个分支是“看起来该有、其实永远走不到”的：黄色 “bill tạo được nhưng lưu chưa xong”（建单成功但保存失败）。core 从来不返回 `ok:true` 而 `written:false`，所以那个分支被删了 —— **建单成功但保存失败属于失败，是红色**，core 的消息里已经带着“bill 已在 site 上、扩展从不删单”这两句。
+有一个分支是“看起来该有、其实永远走不到”的：黄色 `bill tạo được nhưng lưu chưa xong`（测试名；建单成功但保存失败）。core 从来不返回 `ok:true` 而 `written:false`，所以那个分支被删了 —— **建单成功但保存失败属于失败，是红色**，core 的消息里已经带着“bill 已在 site 上、扩展从不删单”这两句。
 
 ---
 
 ### 10. 14:59 —— 批准这个 7 文件的 commit
 
-**原文**
+**原文（英文）**
 
 > Commit the popup change now? Message: "refactor: show only one result message in the popup" — files: src/popup/App.vue, src/popup/styles.css, src/core/manifest-run.ts, src/core/report.ts (deleted), tests/popup.test.ts, tests/manifest-run.test.ts, tests/report.test.ts (deleted). docs.md stays dirty and is NOT included.
 >
 > - Yes — commit with that message (Recommended)
 > - Yes, but with a different message
 > - Not yet — leave it in the working tree
+
+**中文**
+
+> 现在就提交 popup 的改动吗？Message: "refactor: show only one result message in the popup" —— 文件：src/popup/App.vue、src/popup/styles.css、src/core/manifest-run.ts、src/core/report.ts（删除）、tests/popup.test.ts、tests/manifest-run.test.ts、tests/report.test.ts（删除）。docs.md 保持 dirty，不包含在内。
+>
+> - 是 —— 就用这个 message 提交（推荐）（选项 1）
+> - 是，但换一个 message（选项 2）
+> - 先不提交 —— 留在工作区（选项 3）
 
 **处理结果**
 
@@ -202,12 +275,16 @@
 
 ### 11. 16:31 —— 统计 11-03 的提示词
 
-**原文**
+**原文（越南语）**
 
 > （IDE 打开 `src/core/manifest-run.ts`）thống kê các prompt ngày 03-11-2026 vào file docs.md
 
+**中文**
+
+> （IDE 打开 `src/core/manifest-run.ts`）把 2026-11-04 当天的提示词统计写进 docs.md
+
 **处理结果**
 
-本节。口径与前两节相同：本地时间 = UTC+8，取本 session 的 JSONL 里的 user 消息 + AskUserQuestion 的问答。
+本节。口径与 10-30 / 11-02 两节相同（那两节已不在当前文件里，只在 git 历史中）：本地时间 = UTC+8，取本 session 的 JSONL 里的 user 消息 + AskUserQuestion 的问答。
 
 ---
