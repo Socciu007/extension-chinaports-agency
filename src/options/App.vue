@@ -9,9 +9,7 @@ import {
   type SettingsChange,
 } from '../core/options'
 import {
-  readLoginCredentialsResult,
-  writeLoginCredentials,
-  type LoginCredentials,
+  DEFAULT_LOGIN_CREDENTIALS,
 } from '../core/login-credentials'
 import './styles.css'
 
@@ -321,101 +319,10 @@ watch(
   clearLoginStatus,
 )
 
-/**
- * Read the login details - the form is only shown when the read worked.
- *
- * `readLoginCredentialsResult` is the truthful variant: it says whether the
- * read worked, so the page never shows a form that pretends to be the stored
- * value when it is not.
- */
-async function loadLoginDetails(): Promise<void> {
-  loginLoading.value = true
-  loginLoadError.value = ''
-  try {
-    const outcome = await readLoginCredentialsResult()
-    if (!outcome.ok) {
-      // The details cannot be read ⇒ we do NOT know what is stored ⇒ the
-      // form must NOT be shown (a form full of empty boxes would look like a
-      // fresh install and would wipe the stored details on the next save).
-      loginLoadError.value = outcome.error
-      loginLoaded.value = false
-      return
-    }
-    siteUsername.value = outcome.credentials.siteUsername
-    sitePassword.value = outcome.credentials.sitePassword
-    ocrUser.value = outcome.credentials.ocrUser
-    ocrPassword.value = outcome.credentials.ocrPassword
-    ocrSoftwareId.value = outcome.credentials.ocrSoftwareId
-    loginLoaded.value = true
-  } finally {
-    loginLoading.value = false
-  }
-}
-
-/**
- * Save the login details in `chrome.storage.local`.
- *
- * `writeLoginCredentials` THROWS when the write fails ⇒ the page must catch
- * it and report the failure: "Saved." is only shown when the details really
- * are stored.
- */
-async function saveLoginDetails(): Promise<void> {
-  // Not read yet ⇒ do NOT write: we do not know what is stored.
-  if (!loginLoaded.value || loginSaving.value) return
-
-  loginSaving.value = true
-  loginSaveError.value = ''
-  clearLoginStatus()
-  try {
-    // The details are written VERBATIM - a password may end with a space and
-    // the operator is the only one who knows what it is.
-    //
-    // The values are captured BEFORE the await: the badge may only claim
-    // "Saved." for the values that were really written.
-    const written: LoginCredentials = {
-      siteUsername: siteUsername.value,
-      sitePassword: sitePassword.value,
-      ocrUser: ocrUser.value,
-      ocrPassword: ocrPassword.value,
-      ocrSoftwareId: ocrSoftwareId.value,
-    }
-    await writeLoginCredentials(written)
-    // The operator may have typed while the write was in flight ⇒ the badge
-    // must not say "Saved." for a value that was NOT stored.
-    if (!holdsTheWrittenDetails(written)) {
-      loginSaveError.value =
-        'The login details changed while they were being saved. Press Save again.'
-      return
-    }
-    showLoginStatus('Saved.')
-  } catch (e) {
-    console.error('[manifest-autofill] could not save the login details', e)
-    loginSaveError.value = 'Could not save the login details. Please try again.'
-  } finally {
-    loginSaving.value = false
-  }
-}
-
-/**
- * Does the form still hold the details that were written?
- *
- * The operator can type while the write is in flight ⇒ the badge may only
- * say "Saved." while the form still holds the values that were really stored.
- */
-function holdsTheWrittenDetails(written: LoginCredentials): boolean {
-  return (
-    siteUsername.value === written.siteUsername &&
-    sitePassword.value === written.sitePassword &&
-    ocrUser.value === written.ocrUser &&
-    ocrPassword.value === written.ocrPassword &&
-    ocrSoftwareId.value === written.ocrSoftwareId
-  )
-}
 
 onMounted(async () => {
   unsubscribe = subscribeSettingsChanges(applyExternalChange)
   await load()
-  await loadLoginDetails()
 })
 
 onUnmounted(() => {
@@ -517,7 +424,7 @@ onUnmounted(() => {
         type="button"
         class="login-retry"
         :disabled="loginLoading"
-        @click="loadLoginDetails"
+        @click=""
       >
         Retry
       </button>
@@ -573,7 +480,7 @@ onUnmounted(() => {
             type="button"
             class="login-save"
             :disabled="loginSaving"
-            @click="saveLoginDetails"
+            @click=""
           >
             {{ loginSaving ? 'Saving…' : 'Save login details' }}
           </button>
