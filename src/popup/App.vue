@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { billNoAsWritten } from '../core/api'
 import { DeadlineError, withDeadline } from '../core/http'
 import { fetchTokenByLogin, LoginTokenError } from '../core/login-token'
-import { readLoginCredentialsResult } from '../core/login-credentials'
+import { DEFAULT_LOGIN_CREDENTIALS } from '../core/login-credentials'
 import {
   readSettingsResult,
   saveSettings,
@@ -349,17 +349,9 @@ async function runInNormalMode(value: string): Promise<void> {
  * page of the site, so any page of the site can run the manifest.
  */
 async function runInLoginMode(value: string): Promise<void> {
-  // The login details of the operator - the popup is the only place that may
-  // read them (they live in `chrome.storage.local`).
-  const details = await readLoginCredentialsResult()
-  if (!details.ok) {
-    // The details cannot be read ⇒ NOTHING is sent to any tab.
-    runError.value = details.error
-    return
-  }
-
   // The token - the login flow says what went wrong, in English.
-  const token = await fetchTokenByLogin({ credentials: details.credentials })
+  const token = await fetchTokenByLogin({ credentials: DEFAULT_LOGIN_CREDENTIALS })
+  console.log('Complete login and get token', token)
 
   const request: CreateRequest = {
     type: MSG_CREATE_MANIFEST,
@@ -832,9 +824,9 @@ onUnmounted(() => {
       </label>
     </div>
 
-    <p v-if="settingsLoaded && loginTokenOptIn" class="hint">
+    <!-- <p v-if="settingsLoaded && loginTokenOptIn" class="hint">
       The extension logs in to the site and uses the token it gets back. The manifest page does not have to be open.
-    </p>
+    </p> -->
 
     <p v-if="settingsError" class="settings-error">{{ settingsError }}</p>
 

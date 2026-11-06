@@ -119,6 +119,7 @@ async function rememberCreatedBillNo(blNo: string): Promise<void> {
 
 // Run manifest according to the request from the popup.
 async function handleCreate(request: CreateRequest): Promise<CreateResult> {
+  console.log('handleCreate', request)
   // The "get the token by logging in" mode does NOT need the manifest page:
   // the run only talks to the site's API, it does not touch the page.
   //

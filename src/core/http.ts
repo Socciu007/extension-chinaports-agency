@@ -1,18 +1,7 @@
-/**
- * Timeout cứng cho mọi request ra ngoài.
- *
- * Không dùng `AbortSignal.timeout()`: môi trường test (jsdom) không chắc có
- * `AbortSignal.timeout`, và — quan trọng hơn — ta cần phân biệt "hết giờ" với
- * "mạng hỏng" để báo đúng nguyên nhân cho người dùng.
- *
- * Module này còn cung cấp `withDeadline()`: bọc một promise bất kỳ (vd
- * `chrome.tabs.sendMessage`) vào hạn chờ để tầng UI không bao giờ kẹt vĩnh viễn.
- */
+// Timeout 60 seconds
+export const HTTP_TIMEOUT_MS = 60_000
 
-/** Thời gian chờ tối đa cho một request. */
-export const HTTP_TIMEOUT_MS = 15_000
-
-/** Request quá thời gian chờ — KHÁC với lỗi mạng. */
+// Request timed out - different from network error
 export class HttpTimeoutError extends Error {
   constructor(message: string) {
     super(message)
@@ -25,14 +14,10 @@ export interface FetchWithTimeoutOptions {
   timeoutMs?: number
 }
 
-/** Kết quả của một request JSON. */
 export interface JsonResponse {
-  /** status HTTP nằm trong khoảng 2xx */
   ok: boolean
   status: number
-  /** body đã parse thành JSON; `undefined` khi response không ok */
   data?: unknown
-  /** true nếu body không parse được thành JSON */
   invalidJson?: boolean
 }
 
