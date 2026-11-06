@@ -70,7 +70,7 @@ const TOKEN_MISSING_MESSAGE = 'The site did not return a token after the login.'
 
 /** The message of an HTTP error — the status is part of the diagnosis. */
 function httpMessage(message: string, status: number): string {
-  return `${message} (HTTP ${status}).`
+  return `${message} (HTTP ${status}). Please try again.`
 }
 
 /** A plain object — anything else is not a place where a value can live. */
