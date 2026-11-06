@@ -23,7 +23,7 @@ import {
 } from '../core/site-url'
 import './styles.css'
 
-// Deadline for the manifest run
+// Deadline for the manifest run 5 minutes
 const RUN_DEADLINE_MS = 300_000
 
 // Deadline for the page of the site to load.
@@ -39,7 +39,6 @@ const SEND_ATTEMPTS = 10
 const SEND_RETRY_MS = 300
 
 const blNo = ref('')
-const createOnSite = ref(false)
 // The "get the token by logging in" setting - the run logs in to the site
 // instead of using the cookie of the site.
 const loginToken = ref(false)
@@ -50,11 +49,9 @@ const runError = ref('')
 const settingsError = ref('')
 const result = ref<CreateResult | null>(null)
 const settingsLoaded = ref(false)
-// The value of createOnSite that was saved - used to rollback when saving fails
-const savedCreateOnSite = ref(false)
 // The value of loginToken that was saved - used to rollback when saving fails
 const savedLoginToken = ref(false)
-// Saving the create-on-site setting - lock the control to prevent two writes at the same time
+// Saving the setting - lock the control to prevent two writes at the same time
 const saving = ref(false)
 // Whether the LAST run used the login mode - it decides the extra line of the
 // outcome and the sentence of a transport error.
@@ -195,9 +192,6 @@ const runOutcome = computed<Outcome | null>(() => {
   }
 })
 
-// Whether the operator has opted in to create the manifest on the site
-const createOptIn = computed(() => settingsLoaded.value && savedCreateOnSite.value === true)
-
 // Whether the operator has opted in to the login mode (the token comes from
 // a login instead of the cookie of the site)
 const loginTokenOptIn = computed(() => settingsLoaded.value && savedLoginToken.value === true)
@@ -287,7 +281,6 @@ function sleep(ms: number): Promise<void> {
  */
 async function run(): Promise<void> {
   if (busy.value) return
-  if (!createOptIn.value) return
 
   runError.value = ''
   const value = blNo.value.trim()
@@ -684,29 +677,6 @@ async function openPage(): Promise<void> {
   await wait
 }
 
-// Toggle the create on site setting
-async function onToggleCreateOnSite(): Promise<void> {
-  if (saving.value) {
-    createOnSite.value = savedCreateOnSite.value
-    return
-  }
-  const next = createOnSite.value
-  saving.value = true
-  try {
-    const outcome = await saveSettings({ createOnSite: next })
-    if (outcome.ok) {
-      await refreshFromStorage()
-      return
-    }
-    settingsError.value = outcome.error
-    const read = await refreshFromStorage()
-    createOnSite.value = savedCreateOnSite.value
-    settingsError.value = read.ok ? outcome.error : `${outcome.error} ${read.error}`
-  } finally {
-    saving.value = false
-  }
-}
-
 // Toggle the "get the token by logging in" setting
 async function onToggleLoginToken(): Promise<void> {
   if (saving.value) {
@@ -747,8 +717,6 @@ async function refreshFromStorage(): Promise<RefreshOutcome> {
     settingsError.value = outcome.error
     return { ok: false, error: outcome.error }
   }
-  createOnSite.value = outcome.settings.createOnSite
-  savedCreateOnSite.value = outcome.settings.createOnSite
   loginToken.value = outcome.settings.loginToken
   savedLoginToken.value = outcome.settings.loginToken
   settingsLoaded.value = true
@@ -788,29 +756,13 @@ onUnmounted(() => {
         type="button"
         class="primary"
         :class="{ busy }"
-        :disabled="busy || saving || !createOptIn"
+        :disabled="busy || saving"
         @click="run()"
       >
         {{ busy ? 'Running…' : 'Create draft on site' }}
       </button>
       <button type="button" @click="openPage">Open page</button>
     </div>
-
-    <div v-if="settingsLoaded" class="row">
-      <label>
-        <input
-          v-model="createOnSite"
-          type="checkbox"
-          :disabled="saving"
-          @change="onToggleCreateOnSite"
-        />
-        Create the manifest on the site
-      </label>
-    </div>
-
-    <p v-if="settingsLoaded && !createOptIn" class="hint">
-      Creating a draft on the site is off until you tick "Create the manifest on the site".
-    </p>
 
     <div v-if="settingsLoaded" class="row">
       <label>

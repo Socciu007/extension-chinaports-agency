@@ -24,10 +24,6 @@ const BL_NO = 'ONEYSHAGT1569600'
 const DUPLICATE_MESSAGE =
   'A manifest was already created on the site for this bill of lading number. Check the site and finish that manifest by hand — the extension does not create a second manifest for the same bill. If the site no longer has that manifest, clear the storage of the Manifest Autofill extension for this browser and run again.'
 
-/** Message từ chối khi opt-in ĐÃ LƯU đang tắt (FIX 2). */
-const OPT_IN_OFF_MESSAGE =
-  'Creating the manifest on the site is turned off in the extension settings.'
-
 /** Message báo sai trang — nói đúng route thật để operator tự điều hướng. */
 const WRONG_PAGE_MESSAGE =
   'Open the manifest page (#/exportBusinessOperations/maintenanceOfManifestData) and try again.'
@@ -51,8 +47,8 @@ let fetchMock: ReturnType<typeof vi.fn>
 /**
  * Setting trong storage của extension.
  *
- * Mặc định `createOnSite: true` ⇒ các test ghi lên site đi qua. Test cần
- * tắt thì sửa biến này trước khi gửi message.
+ * The extension ALWAYS creates the manifest on the site - there is no opt-in
+ * any more ⇒ the store starts EMPTY.
  */
 let settings: Record<string, unknown>
 /**
@@ -248,8 +244,8 @@ beforeEach(async () => {
   // nó, và xoá nó cũng làm "tab mới" trong test chống chạy chồng.
   sessionStorage.clear()
 
-  // Opt-in ĐÃ LƯU mặc định là bật — các test ghi lên site cần nó.
-  settings = { createOnSite: true }
+  // The extension always creates the manifest on the site ⇒ no opt-in.
+  settings = {}
 
   // `fetch` treo mãi ⇒ lần chạy đầu vẫn đang chạy ⇒ lần chạy thứ hai phải
   // bị chặn. Hết test thì mở chốt để chuỗi promise settle và timer timeout
@@ -471,9 +467,8 @@ describe('content script — chạy manifest qua API', () => {
     expect(result.billNo).toBe('BILL-1')
   })
 
-  it('opt-in ĐÃ LƯU đang bật ⇒ KHÔNG có cờ nào trong request, vẫn ghi lên site', async () => {
-    // Request KHÔNG còn mang cờ "chỉ đọc" ⇒ mọi request đều ghi lên
-    // site (sau khi qua chốt opt-in ĐÃ LƯU).
+  it('request KHÔNG mang cờ nào ⇒ vẫn ghi lên site', async () => {
+    // Request KHÔNG còn mang cờ "chỉ đọc" ⇒ mọi request đều ghi lên site.
     const fake = fakeFetch()
     vi.stubGlobal('fetch', fake.fetchImpl)
 
@@ -731,25 +726,6 @@ describe('content script — chạy manifest qua API', () => {
     expect(fake.calls.filter((call) => call.method === 'POST')).toHaveLength(postsAfterFirst)
   })
 
-  it('opt-in ĐÃ LƯU đang tắt ⇒ từ chối, KHÔNG chạm network', async () => {
-    settings.createOnSite = false
-    const fake = fakeFetch()
-    vi.stubGlobal('fetch', fake.fetchImpl)
-
-    const result = await send({
-      type: MSG_CREATE_MANIFEST,
-      blNo: BL_NO,
-    })
-
-    expect(result.ok).toBe(false)
-    expect(result.message).toBe(OPT_IN_OFF_MESSAGE)
-    expect(result.billCreated).toBe(false)
-    expect(result.written).toBe(false)
-    // The block must happen BEFORE every network call - even before the data
-    // is read.
-    expect(fake.calls).toHaveLength(0)
-  })
-
   it('cookie của site ⇒ header Authorization: JWT <token>', async () => {
     // Cookie-jar của jsdom rất dễ lỗi khi set cookie trên `about:blank`
     // ⇒ chặn thẳng thuộc tính `cookie` của document.
@@ -876,19 +852,6 @@ describe('content script — chạy manifest qua API', () => {
 
     expect(result.ok).toBe(false)
     expect(result.message).toBe(WRONG_PAGE_MESSAGE)
-    expect(fake.calls).toHaveLength(0)
-  })
-
-  it('login mode + opt-in ĐÃ LƯU đang tắt ⇒ vẫn từ chối, KHÔNG chạm network', async () => {
-    settings.createOnSite = false
-    location.hash = '#/someOtherRoute'
-    const fake = fakeFetch()
-    vi.stubGlobal('fetch', fake.fetchImpl)
-
-    const result = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO, loginMode: true })
-
-    expect(result.ok).toBe(false)
-    expect(result.message).toBe(OPT_IN_OFF_MESSAGE)
     expect(fake.calls).toHaveLength(0)
   })
 

@@ -4,7 +4,6 @@ import { DEFAULT_SITE_API_BASE } from './site-api'
 export interface ExtensionSettings {
   apiBase: string
   siteApiBase: string
-  createOnSite: boolean
   /**
    * The run gets the token by logging in to the site (captcha → captcha
    * service → login) instead of using the cookie of the site.
@@ -15,18 +14,8 @@ export interface ExtensionSettings {
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   apiBase: DEFAULT_API_BASE,
   siteApiBase: DEFAULT_SITE_API_BASE,
-  createOnSite: false,
   loginToken: false,
 }
-
-/**
- * Key CŨ của setting — thời DOM: "sau khi điền form thì tự bấm 确定".
- *
- * Setting đã được đổi tên thành `createOnSite` (tạo manifest TRÊN SITE), nhưng
- * người dùng đời cũ đã bật opt-in thì KHÔNG được mất lựa chọn đó trong im lặng
- * ⇒ khi đọc, key legacy này được dùng làm fallback.
- */
-const LEGACY_AUTO_SUBMIT_KEY = 'autoSubmit'
 
 /** Object thô của storage: đúng những key người dùng đã lưu. */
 type RawStoredSettings = Record<string, unknown>
@@ -47,36 +36,9 @@ function withDefaults(stored: Partial<ExtensionSettings>): ExtensionSettings {
     ...stored,
     apiBase: stored.apiBase?.trim() || DEFAULT_SETTINGS.apiBase,
     siteApiBase: stored.siteApiBase?.trim() || DEFAULT_SETTINGS.siteApiBase,
-    // `createOnSite` phải là boolean THẬT: storage có thể bị sửa tay, và UI
-    // rollback về giá trị đã lưu ⇒ giá trị đó phải đúng kiểu.
-    createOnSite: stored.createOnSite === true,
     // `loginToken` is the same: only the boolean `true` turns the mode on.
     loginToken: stored.loginToken === true,
   }
-}
-
-/**
- * Tính giá trị của `createOnSite` từ object THÔ của storage.
- *
- * Quy tắc, theo thứ tự:
- * - Có key `createOnSite` ⇒ người dùng ĐÃ chọn trong UI mới ⇒ thắng, kể cả khi
- *   giá trị là `false`. Lựa chọn tường minh KHÔNG được bất kỳ key nào khác
- *   lật ngược — kể cả key legacy.
- * - Chỉ khi `createOnSite` VẮNG MẶT thì key legacy `autoSubmit === true` mới
- *   bật nó lên (opt-in cũ không được mất trong im lặng).
- *
- * Ép kiểu nghiêm: chỉ boolean `true` mới là `true` (storage có thể bị sửa tay).
- *
- * `undefined` = "chưa có lựa chọn nào" ⇒ `withDefaults` dùng mặc định.
- */
-function resolveCreateOnSite(raw: RawStoredSettings): boolean | undefined {
-  // Có key `createOnSite` ⇒ người dùng ĐÃ chọn trong UI mới ⇒ thắng, kể cả khi
-  // giá trị là `false`.
-  if ('createOnSite' in raw) return raw.createOnSite === true
-  // Chỉ khi `createOnSite` VẮNG MẶT thì key legacy `autoSubmit === true` mới
-  // bật nó lên (opt-in cũ không được mất trong im lặng).
-  if (raw[LEGACY_AUTO_SUBMIT_KEY] === true) return true
-  return undefined
 }
 
 /**
@@ -85,13 +47,15 @@ function resolveCreateOnSite(raw: RawStoredSettings): boolean | undefined {
  * Chỉ nhận key có đúng kiểu: storage có thể bị sửa tay ⇒ `apiBase` không phải
  * chuỗi thì bỏ qua (để `withDefaults` dùng mặc định), thay vì để `.trim()`
  * ném lỗi.
+ *
+ * Key that is no longer part of the settings (e.g. `createOnSite` of an older
+ * install, or the DOM-era `autoSubmit`) is IGNORED completely — it is neither
+ * read nor written back.
  */
 function toStoredSettings(raw: RawStoredSettings): Partial<ExtensionSettings> {
   const stored: Partial<ExtensionSettings> = {}
   if (typeof raw.apiBase === 'string') stored.apiBase = raw.apiBase
   if (typeof raw.siteApiBase === 'string') stored.siteApiBase = raw.siteApiBase
-  const createOnSite = resolveCreateOnSite(raw)
-  if (createOnSite !== undefined) stored.createOnSite = createOnSite
   if (typeof raw.loginToken === 'boolean') stored.loginToken = raw.loginToken
   return stored
 }
@@ -100,8 +64,8 @@ function toStoredSettings(raw: RawStoredSettings): Partial<ExtensionSettings> {
  * Kết quả đọc setting — KHÔNG ném lỗi, và nói rõ đọc CÓ thành công hay không.
  *
  * Phân biệt "chưa lưu gì" với "đọc hỏng" là điều kiện tiên quyết: `false` là
- * một giá trị HỢP LỆ của `createOnSite`, nên nếu lần đọc hỏng bị đóng băng thành
- * `false` thì opt-in đã lưu sẽ bị ghi đè trong im lặng.
+ * một giá trị HỢP LỆ của `loginToken`, nên nếu lần đọc hỏng bị đóng băng thành
+ * `false` thì lựa chọn đã lưu sẽ bị ghi đè trong im lặng.
  */
 export type ReadSettingsResult =
   | { ok: true; settings: ExtensionSettings }
@@ -117,7 +81,7 @@ export async function readSettingsResult(): Promise<ReadSettingsResult> {
   if (!hasChromeStorage()) return { ok: true, settings: { ...DEFAULT_SETTINGS } }
   try {
     // `get(null)` ⇒ CHỈ key người dùng thật sự đã lưu ⇒ phân biệt được
-    // "chưa có lựa chọn nào" với "đã chọn `false`" (và thấy được key legacy).
+    // "chưa có lựa chọn nào" với "đã chọn `false`".
     const raw = (await chrome.storage.sync.get(null)) as RawStoredSettings
     return { ok: true, settings: withDefaults(toStoredSettings(raw)) }
   } catch (e) {
@@ -232,11 +196,10 @@ export async function saveSettings(
   }
 }
 
-/** Thay đổi của setting từ nơi khác (ví dụ popup ghi `createOnSite`). */
+/** Thay đổi của setting từ nơi khác (ví dụ popup ghi `loginToken`). */
 export interface SettingsChange {
   apiBase?: string
   siteApiBase?: string
-  createOnSite?: boolean
   loginToken?: boolean
 }
 
@@ -245,7 +208,7 @@ export interface SettingsChange {
  *
  * Tầng UI KHÔNG được tự đụng `chrome.storage` ⇒ việc đăng ký listener nằm ở
  * đây. Giá trị báo ra đã qua `withDefaults` nên khớp với một lần đọc: base
- * rỗng ⇒ mặc định, `createOnSite` không phải boolean ⇒ false.
+ * rỗng ⇒ mặc định, `loginToken` không phải boolean ⇒ false.
  *
  * Trả về hàm HUỶ đăng ký — component phải gọi nó khi unmount, nếu không
  * listener sẽ giữ closure của component đã rời khỏi DOM.
@@ -270,7 +233,7 @@ export function subscribeSettingsChanges(
       if (!(key in changes)) continue
       const raw = changes[key]?.newValue
       // Giá trị thiếu (key bị xoá) hoặc sai kiểu ⇒ để `withDefaults` quyết
-      // định: base rỗng ⇒ mặc định, `createOnSite` không phải boolean ⇒ false.
+      // định: base rỗng ⇒ mặc định, `loginToken` không phải boolean ⇒ false.
       if (typeof raw === 'string' || typeof raw === 'boolean') {
         assign(stored, key, raw as ExtensionSettings[typeof key])
       }

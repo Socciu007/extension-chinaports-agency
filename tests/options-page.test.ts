@@ -108,14 +108,6 @@ function inputValue(wrapper: Wrapper, selector: string): string {
   return (wrapper.find(selector).element as HTMLInputElement).value
 }
 
-function checkbox(wrapper: Wrapper) {
-  return wrapper.find('input[type="checkbox"]')
-}
-
-function isChecked(wrapper: Wrapper): boolean {
-  return (checkbox(wrapper).element as HTMLInputElement).checked
-}
-
 function isDisabled(wrapper: Wrapper): boolean {
   return (saveButton(wrapper).element as HTMLButtonElement).disabled
 }
@@ -130,14 +122,12 @@ describe('options — đọc setting thành công', () => {
   it('điền form bằng giá trị ĐÃ LƯU, không phải giá trị mặc định', async () => {
     store.apiBase = 'https://custom.example/api'
     store.siteApiBase = '/api/custom'
-    store.createOnSite = true
 
     const wrapper = mount(OptionsApp)
     await flushPromises()
 
     expect(inputValue(wrapper, '#api-base')).toBe('https://custom.example/api')
     expect(inputValue(wrapper, '#site-api-base')).toBe('/api/custom')
-    expect(isChecked(wrapper)).toBe(true)
     // Đọc xong ⇒ nút Save phải bấm được.
     expect(isDisabled(wrapper)).toBe(false)
   })
@@ -159,14 +149,12 @@ describe('options — đọc setting chưa xong', () => {
     expect(wrapper.find('#api-base').exists()).toBe(false)
     expect(isDisabled(wrapper)).toBe(true)
 
-    resolveGet?.({ ...DEFAULT_SETTINGS, createOnSite: true })
+    resolveGet?.({ ...DEFAULT_SETTINGS })
     await flushPromises()
 
-    // Đọc xong ⇒ form hiện, Save bấm được, và opt-in đã lưu phải hiện ĐÃ tick
-    // (không phải unchecked).
+    // Đọc xong ⇒ form hiện và Save bấm được.
     expect(wrapper.find('#api-base').exists()).toBe(true)
     expect(isDisabled(wrapper)).toBe(false)
-    expect(isChecked(wrapper)).toBe(true)
   })
 })
 
@@ -242,7 +230,6 @@ describe('options — lưu setting', () => {
 
     await wrapper.find('#api-base').setValue('https://custom.example/api')
     await wrapper.find('#site-api-base').setValue('/api/custom')
-    await checkbox(wrapper).setValue(true)
     await saveButton(wrapper).trigger('click')
     await flushPromises()
 
@@ -251,14 +238,12 @@ describe('options — lưu setting', () => {
 
     expect(store.apiBase).toBe('https://custom.example/api')
     expect(store.siteApiBase).toBe('/api/custom')
-    expect(store.createOnSite).toBe(true)
 
-    // Payload ghi đi phải chứa đúng ba key của setting.
+    // Payload ghi đi phải chứa đúng hai key của setting.
     expect(setCalls).toHaveLength(1)
     expect(setCalls[0]).toEqual({
       apiBase: 'https://custom.example/api',
       siteApiBase: '/api/custom',
-      createOnSite: true,
     })
   })
 
@@ -302,23 +287,23 @@ describe('options — lưu setting', () => {
 })
 
 describe('options — chỉ ghi những key người dùng ĐÃ sửa', () => {
-  it('không ghi đè opt-in đã bật ở nơi khác (popup)', async () => {
+  it('không ghi đè chế độ đăng nhập đã bật ở nơi khác (popup)', async () => {
     const wrapper = mount(OptionsApp)
     await flushPromises()
 
-    // Popup (tab khác) vừa bật create-on-site ⇒ storage đổi NGOÀI tầm hiểu của
-    // trang này.
-    store.createOnSite = true
+    // Popup (tab khác) vừa bật chế độ đăng nhập ⇒ storage đổi NGOÀI tầm hiểu
+    // của trang này.
+    store.loginToken = true
 
     await wrapper.find('#api-base').setValue('https://new.example/api')
     await saveButton(wrapper).trigger('click')
     await flushPromises()
 
     // Người dùng chỉ sửa `apiBase` ⇒ payload KHÔNG được mang theo
-    // `createOnSite`, nếu không thì opt-in của popup bị XOÁ trong im lặng.
+    // `loginToken`, nếu không thì lựa chọn của popup bị XOÁ trong im lặng.
     expect(setCalls).toHaveLength(1)
-    expect(setCalls[0]).not.toHaveProperty('createOnSite')
-    expect(store.createOnSite).toBe(true)
+    expect(setCalls[0]).not.toHaveProperty('loginToken')
+    expect(store.loginToken).toBe(true)
     expect(store.apiBase).toBe('https://new.example/api')
   })
 
@@ -647,50 +632,6 @@ describe('options — base rỗng ⇒ lưu giá trị mặc định', () => {
   })
 })
 
-describe('options — create-on-site là opt-in', () => {
-  it('checkbox không tick khi chưa lưu gì', async () => {
-    const wrapper = mount(OptionsApp)
-    await flushPromises()
-
-    expect(isChecked(wrapper)).toBe(false)
-  })
-
-  it('nhãn của checkbox nói rõ là tạo manifest TRÊN SITE', async () => {
-    const wrapper = mount(OptionsApp)
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('Create the manifest on the site')
-  })
-
-  it('hint nói rõ: mặc định tắt, lưu nháp, không tự upload, áp dụng khi bấm Save', async () => {
-    const wrapper = mount(OptionsApp)
-    await flushPromises()
-
-    // Lấy đúng đoạn hint nằm dưới checkbox.
-    const hints = wrapper.findAll('.hint').map((h) => h.text())
-    const createOnSiteHint = hints.find((text) => text.includes('Off by default')) ?? ''
-
-    expect(createOnSiteHint).not.toBe('')
-    expect(createOnSiteHint).toContain('Off by default')
-    expect(createOnSiteHint).toContain('draft')
-    expect(createOnSiteHint).toContain('暂存')
-    expect(createOnSiteHint).toContain('never disseminates on its own')
-    expect(createOnSiteHint).toContain('Save')
-  })
-
-  it('tick checkbox ⇒ lưu `createOnSite`', async () => {
-    const wrapper = mount(OptionsApp)
-    await flushPromises()
-
-    await checkbox(wrapper).setValue(true)
-    await saveButton(wrapper).trigger('click')
-    await flushPromises()
-
-    expect(store.createOnSite).toBe(true)
-    expect(setCalls[0]).toEqual({ createOnSite: true })
-  })
-})
-
 describe('options — a11y / hygiene ô nhập', () => {
   it('hint được liên kết với ô nhập và tắt spellcheck', async () => {
     const wrapper = mount(OptionsApp)
@@ -856,11 +797,13 @@ describe('options — chi tiết đăng nhập', () => {
     expect(ocrPassword.attributes('autocomplete')).toBe('off')
   })
 
-  it('phần login KHÔNG có checkbox (checkbox là opt-in của phần setting)', async () => {
+  it('phần login KHÔNG có ô tick (trang này không còn ô tick nào)', async () => {
     const wrapper = mount(OptionsApp)
     await flushPromises()
 
-    expect(wrapper.findAll('input[type="checkbox"]')).toHaveLength(1)
+    // The "create on site" opt-in is GONE ⇒ the page has no tick box at all,
+    // neither in the settings section nor in the login section.
+    expect(wrapper.findAll('input[type="checkbox"]')).toHaveLength(0)
   })
 
   it('lưu phần setting ⇒ KHÔNG ghi login details', async () => {

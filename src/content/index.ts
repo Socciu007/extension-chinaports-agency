@@ -140,13 +140,9 @@ async function handleCreate(request: CreateRequest): Promise<CreateResult> {
     )
   }
 
-  // Check if the create on site setting is enabled.
+  // The extension ALWAYS creates the manifest on the site (as a draft).
+  // The settings are still read here: they carry the API bases.
   const settings = await readSettings()
-  if (settings.createOnSite !== true) {
-    return errorResult(
-      'Creating the manifest on the site is turned off in the extension settings.',
-    )
-  }
 
   const apiBase = request.apiBase ?? settings.apiBase
   const siteApiBase = request.siteApiBase ?? settings.siteApiBase

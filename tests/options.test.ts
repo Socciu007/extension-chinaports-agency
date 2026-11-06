@@ -38,7 +38,7 @@ describe('readSettings', () => {
   it('trả về mặc định khi chưa lưu gì', async () => {
     const settings = await readSettings()
     expect(settings.apiBase).toBe(DEFAULT_SETTINGS.apiBase)
-    expect(settings.createOnSite).toBe(false)
+    expect(settings.loginToken).toBe(false)
   })
 
   it('mặc định lấy base API từ đúng module của nó', () => {
@@ -93,18 +93,6 @@ describe('readSettings', () => {
     expect(settings.siteApiBase).toBe(DEFAULT_SETTINGS.siteApiBase)
   })
 
-  it('createOnSite trong storage không phải boolean ⇒ ép về false', async () => {
-    store.createOnSite = 'true'
-    const settings = await readSettings()
-    expect(settings.createOnSite).toBe(false)
-  })
-
-  it('createOnSite trong storage là boolean ⇒ giữ nguyên', async () => {
-    store.createOnSite = true
-    const settings = await readSettings()
-    expect(settings.createOnSite).toBe(true)
-  })
-
   it('loginToken mặc định là tắt', async () => {
     // The login mode is NEVER on by default: without the login details there
     // is nothing to run.
@@ -128,63 +116,14 @@ describe('readSettings', () => {
   })
 })
 
-describe('fallback từ key legacy `autoSubmit`', () => {
-  it('storage có `autoSubmit: true` và KHÔNG có `createOnSite` ⇒ bật `createOnSite`', async () => {
-    // Người dùng đời cũ đã bật opt-in (thời DOM: tự bấm 确定) ⇒ đổi tên
-    // setting KHÔNG được làm mất lựa chọn đó trong im lặng.
-    store.autoSubmit = true
-
-    const settings = await readSettings()
-
-    expect(settings.createOnSite).toBe(true)
-  })
-
-  it('storage có CẢ `autoSubmit: true` và `createOnSite: false` ⇒ key mới thắng', async () => {
-    // Người dùng ĐÃ chọn trong UI mới ⇒ lựa chọn mới là chính, kể cả khi nó
-    // là `false` (opt-out tường minh phải thắng opt-in cũ).
-    store.autoSubmit = true
-    store.createOnSite = false
-
-    const settings = await readSettings()
-
-    expect(settings.createOnSite).toBe(false)
-  })
-
-  it('`createOnSite: false` thắng dù storage còn ĐỦ key khác ở giá trị mặc định', async () => {
-    // Không được có bất kỳ ngoại lệ nào: chỉ cần `createOnSite` CÓ trong
-    // storage là lựa chọn của người dùng, dù các key khác có đang nằm ở giá
-    // trị mặc định hay không. Nếu không, opt-out tường minh sẽ bị key legacy
-    // lật ngược trong im lặng.
-    store.autoSubmit = true
-    store.createOnSite = false
-    store.apiBase = DEFAULT_SETTINGS.apiBase
-    store.siteApiBase = DEFAULT_SETTINGS.siteApiBase
-
-    const settings = await readSettings()
-
-    expect(settings.createOnSite).toBe(false)
-  })
-
-  it('`autoSubmit` trong storage không phải boolean `true` ⇒ KHÔNG bật', async () => {
-    // Storage có thể bị sửa tay ⇒ ép kiểu nghiêm: chỉ `true` mới bật.
-    store.autoSubmit = 'true'
-
-    const settings = await readSettings()
-
-    expect(settings.createOnSite).toBe(false)
-  })
-})
-
 describe('readSettingsResult', () => {
   it('đọc được ⇒ ok = true và trả về setting đã chuẩn hoá', async () => {
-    store.createOnSite = true
     store.apiBase = 'https://custom.example/api'
 
     const result = await readSettingsResult()
 
     expect(result.ok).toBe(true)
     if (result.ok) {
-      expect(result.settings.createOnSite).toBe(true)
       expect(result.settings.apiBase).toBe('https://custom.example/api')
     }
   })
@@ -255,17 +194,17 @@ describe('readSettingsResult', () => {
 
 describe('writeSettings', () => {
   it('lưu và đọc lại được', async () => {
-    await writeSettings({ createOnSite: true })
+    await writeSettings({ loginToken: true })
     const settings = await readSettings()
-    expect(settings.createOnSite).toBe(true)
+    expect(settings.loginToken).toBe(true)
   })
 
   it('không ghi đè các setting khác', async () => {
     await writeSettings({ siteApiBase: '/api/custom' })
-    await writeSettings({ createOnSite: true })
+    await writeSettings({ loginToken: true })
     const settings = await readSettings()
     expect(settings.siteApiBase).toBe('/api/custom')
-    expect(settings.createOnSite).toBe(true)
+    expect(settings.loginToken).toBe(true)
   })
 
   it('không có chrome.storage ⇒ phải báo thất bại, KHÔNG được báo thành công', async () => {
@@ -274,12 +213,7 @@ describe('writeSettings', () => {
     // có byte nào được lưu.
     vi.stubGlobal('chrome', undefined)
 
-    await expect(writeSettings({ createOnSite: true })).rejects.toThrow()
-  })
-
-  it('create-on-site mặc định là tắt', () => {
-    // Không bao giờ tạo manifest TRÊN SITE khi chưa được bật.
-    expect(DEFAULT_SETTINGS.createOnSite).toBe(false)
+    await expect(writeSettings({ loginToken: true })).rejects.toThrow()
   })
 
   it('storage đọc lỗi ⇒ KHÔNG ghi đè apiBase/siteApiBase đã lưu', async () => {
@@ -303,34 +237,25 @@ describe('writeSettings', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     try {
-      await writeSettings({ createOnSite: true })
+      await writeSettings({ loginToken: true })
 
       expect(store.apiBase).toBe('https://custom.example/api')
       expect(store.siteApiBase).toBe('/api/custom')
-      expect(store.createOnSite).toBe(true)
+      expect(store.loginToken).toBe(true)
     } finally {
       warnSpy.mockRestore()
     }
   })
 
-  it('patch chỉ đụng createOnSite ⇒ KHÔNG ghi apiBase/siteApiBase', async () => {
+  it('patch chỉ đụng loginToken ⇒ KHÔNG ghi apiBase/siteApiBase', async () => {
     // Payload ghi đi phải ĐÚNG bằng patch. Ghi thêm key khác (dù chỉ là
     // giá trị mặc định) cũng là đè lên dữ liệu của người dùng.
-    await writeSettings({ createOnSite: true })
+    await writeSettings({ loginToken: true })
 
     expect(setCalls).toHaveLength(1)
-    expect(setCalls[0]).toEqual({ createOnSite: true })
+    expect(setCalls[0]).toEqual({ loginToken: true })
     expect(setCalls[0]).not.toHaveProperty('apiBase')
     expect(setCalls[0]).not.toHaveProperty('siteApiBase')
-  })
-
-  it('ghi `createOnSite` ⇒ KHÔNG ghi lại key legacy `autoSubmit`', async () => {
-    // Key `autoSubmit` đã bị thay bằng `createOnSite` ⇒ không được viết lại
-    // nó (nếu không thì storage lại có hai key cho cùng một setting).
-    await writeSettings({ createOnSite: true })
-
-    expect(setCalls[0]).not.toHaveProperty('autoSubmit')
-    expect(store.autoSubmit).toBeUndefined()
   })
 
   it('apiBase toàn khoảng trắng ⇒ ghi giá trị mặc định', async () => {
@@ -340,13 +265,13 @@ describe('writeSettings', () => {
     expect(setCalls[0]).toEqual({ apiBase: DEFAULT_SETTINGS.apiBase })
   })
 
-  it('createOnSite không phải boolean ⇒ ép về false trước khi ghi', async () => {
+  it('loginToken không phải boolean ⇒ ép về false trước khi ghi', async () => {
     // Storage có thể bị sửa tay ⇒ giá trị ghi xuống cũng phải là boolean thật,
     // nếu không lần đọc sau sẽ thấy một giá trị lạ.
-    await writeSettings({ createOnSite: 'yes' as unknown as boolean })
+    await writeSettings({ loginToken: 'yes' as unknown as boolean })
 
-    expect(store.createOnSite).toBe(false)
-    expect(setCalls[0]).toEqual({ createOnSite: false })
+    expect(store.loginToken).toBe(false)
+    expect(setCalls[0]).toEqual({ loginToken: false })
   })
 
   it('apiBase null trong storage ⇒ dùng mặc định, không ném', async () => {
@@ -406,16 +331,16 @@ describe('writeSettings', () => {
 
 describe('saveSettings', () => {
   it('lưu thành công ⇒ ok = true và giá trị thực sự được lưu', async () => {
-    const result = await saveSettings({ createOnSite: true })
+    const result = await saveSettings({ loginToken: true })
 
     expect(result.ok).toBe(true)
     if (result.ok) {
-      expect(result.settings.createOnSite).toBe(true)
+      expect(result.settings.loginToken).toBe(true)
     }
-    expect(store.createOnSite).toBe(true)
+    expect(store.loginToken).toBe(true)
 
     const settings = await readSettings()
-    expect(settings.createOnSite).toBe(true)
+    expect(settings.loginToken).toBe(true)
   })
 
   it('lưu `loginToken` ⇒ nó được ghi và đọc lại được', async () => {
@@ -430,12 +355,12 @@ describe('saveSettings', () => {
   })
 
   it('lưu `loginToken` KHÔNG được đụng key khác', async () => {
-    await writeSettings({ createOnSite: true })
+    await writeSettings({ siteApiBase: '/api/custom' })
 
     await saveSettings({ loginToken: true })
 
     expect(setCalls[1]).toEqual({ loginToken: true })
-    expect(setCalls[1]).not.toHaveProperty('createOnSite')
+    expect(setCalls[1]).not.toHaveProperty('siteApiBase')
   })
 
   it('storage set lỗi ⇒ ok = false và KHÔNG ném ra ngoài', async () => {
@@ -452,7 +377,7 @@ describe('saveSettings', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     try {
-      const result = await saveSettings({ createOnSite: true })
+      const result = await saveSettings({ loginToken: true })
 
       expect(result.ok).toBe(false)
       if (!result.ok) {
@@ -471,7 +396,7 @@ describe('saveSettings', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     try {
-      const result = await saveSettings({ createOnSite: true })
+      const result = await saveSettings({ loginToken: true })
 
       expect(result.ok).toBe(false)
       if (!result.ok) {

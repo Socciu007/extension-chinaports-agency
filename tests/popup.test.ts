@@ -277,30 +277,21 @@ function buttonByText(wrapper: ReturnType<typeof mount>, text: string) {
   return button
 }
 
-function checkbox(wrapper: ReturnType<typeof mount>) {
-  return wrapper.find('input[type="checkbox"]')
-}
-
 /**
  * The tick box of the login mode.
  *
- * It is the SECOND box in the DOM: the first one is the "create on site"
- * opt-in (the old test finds the FIRST one ⇒ this DOM order is required).
+ * It is the ONLY tick box of the popup: the "create the manifest on the site"
+ * opt-in is GONE (the extension always creates the manifest on the site).
  */
 function loginTokenCheckbox(wrapper: ReturnType<typeof mount>) {
-  const boxes = wrapper.findAll('input[type="checkbox"]')
-  const box = boxes[1]
-  if (!box) throw new Error('could not find the login token checkbox')
+  const box = wrapper.find('input[type="checkbox"]')
+  if (!box.exists()) throw new Error('could not find the login token checkbox')
   return box
 }
 
 /** Is the tick box of the login mode ticked? */
 function isLoginTokenChecked(wrapper: ReturnType<typeof mount>): boolean {
   return (loginTokenCheckbox(wrapper).element as HTMLInputElement).checked
-}
-
-function isChecked(wrapper: ReturnType<typeof mount>): boolean {
-  return (checkbox(wrapper).element as HTMLInputElement).checked
 }
 
 /** Nút có bị disable không. */
@@ -313,7 +304,7 @@ function isDisabled(wrapper: ReturnType<typeof mount>, text: string): boolean {
  * DOM chưa kịp render trạng thái `disabled`.
  */
 function fastToggle(wrapper: ReturnType<typeof mount>): void {
-  const el = checkbox(wrapper).element as HTMLInputElement
+  const el = loginTokenCheckbox(wrapper).element as HTMLInputElement
   el.checked = !el.checked
   el.dispatchEvent(new Event('change'))
 }
@@ -342,8 +333,8 @@ function rawClick(button: { element: Element }): void {
 /**
  * Bấm nút "Create draft on site" — hành động DUY NHẤT của extension.
  *
- * Test phải bật opt-in TRƯỚC khi mount (`store.createOnSite = true`), nếu
- * không nút bị disable và KHÔNG gửi message nào.
+ * The button never waits for an opt-in any more: the extension always creates
+ * the manifest on the site.
  */
 async function clickCreate(wrapper: ReturnType<typeof mount>): Promise<void> {
   await buttonByText(wrapper, 'Create draft on site').trigger('click')
@@ -352,9 +343,6 @@ async function clickCreate(wrapper: ReturnType<typeof mount>): Promise<void> {
 
 describe('popup — chạy manifest qua API', () => {
   it('ô trống ⇒ báo lỗi và KHÔNG gửi message nào', async () => {
-    // Opt-in ĐÃ bật ⇒ lần chạy thật sự bắt đầu rồi bị chặn vì ô nhập rỗng.
-    store.createOnSite = true
-
     const wrapper = mount(PopupApp)
     await flushPromises()
 
@@ -366,8 +354,6 @@ describe('popup — chạy manifest qua API', () => {
   })
 
   it('Enter ⇒ gửi đúng MỘT message, type MSG_CREATE_MANIFEST', async () => {
-    store.createOnSite = true
-
     const wrapper = mount(PopupApp)
     await flushPromises()
 
@@ -379,7 +365,6 @@ describe('popup — chạy manifest qua API', () => {
   })
 
   it('bấm hai lần liên tiếp ⇒ chỉ gửi MỘT message (khoá busy)', async () => {
-    store.createOnSite = true
     // Run treo ⇒ nếu gửi 2 lần thì site bị tạo bill hai lần và sinh dòng
     // hàng TRÙNG.
     let resolveSend: ((value: unknown) => void) | undefined
@@ -411,7 +396,6 @@ describe('popup — chạy manifest qua API', () => {
   })
 
   it('nút đang chạy ⇒ mang class `busy` (con trỏ "đang xử lý")', async () => {
-    store.createOnSite = true
     let resolveSend: ((value: unknown) => void) | undefined
     sendMessage = async () =>
       new Promise((resolve) => {
@@ -436,26 +420,8 @@ describe('popup — chạy manifest qua API', () => {
     expect(button.classes()).not.toContain('busy')
   })
 
-  it('"Create draft on site" CHƯA tick ⇒ nút bị disable, KHÔNG gửi message', async () => {
+  it('message KHÔNG mang cờ nào, chỉ có `blNo`', async () => {
     const wrapper = mount(PopupApp)
-    await flushPromises()
-
-    expect(isDisabled(wrapper, 'Create draft on site')).toBe(true)
-
-    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
-    // Bắn trực tiếp (nút đang bị disable nên `trigger` của VTU bỏ qua) để
-    // chứng minh component TỰ chặn, chứ không chỉ nhờ nút bị disable.
-    rawClick(buttonByText(wrapper, 'Create draft on site'))
-    await flushPromises()
-
-    expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(0)
-  })
-
-  it('"Create draft on site" ĐÃ tick ⇒ message KHÔNG mang cờ nào, chỉ có `blNo`', async () => {
-    const wrapper = mount(PopupApp)
-    await flushPromises()
-
-    await checkbox(wrapper).setValue(true)
     await flushPromises()
 
     expect(isDisabled(wrapper, 'Create draft on site')).toBe(false)
@@ -471,23 +437,8 @@ describe('popup — chạy manifest qua API', () => {
     expect(Object.keys(message ?? {}).sort()).toEqual(['blNo', 'type'])
   })
 
-  it('Enter khi CHƯA bật opt-in ⇒ KHÔNG gửi message nào', async () => {
+  it('Enter ⇒ gửi đúng MỘT message', async () => {
     const wrapper = mount(PopupApp)
-    await flushPromises()
-
-    await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
-    await wrapper.find('input[type="text"]').trigger('keyup.enter')
-    await flushPromises()
-
-    // Enter y hệt nút đang bị disable ⇒ không làm gì cả.
-    expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(0)
-  })
-
-  it('Enter khi ĐÃ bật opt-in ⇒ gửi đúng MỘT message', async () => {
-    const wrapper = mount(PopupApp)
-    await flushPromises()
-
-    await checkbox(wrapper).setValue(true)
     await flushPromises()
 
     await wrapper.find('input[type="text"]').setValue('ONEYSHAGT1569600')
@@ -502,8 +453,6 @@ describe('popup — chạy manifest qua API', () => {
 
 describe('popup — lỗi vận chuyển', () => {
   it('sendMessage lỗi ⇒ báo lỗi cho operator và ghi chi tiết ra console', async () => {
-    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
-    store.createOnSite = true
     sendMessage = async () => {
       throw new Error('The message port closed before a response was received.')
     }
@@ -529,8 +478,6 @@ describe('popup — lỗi vận chuyển', () => {
 
 describe('popup — hiện kết quả của lần chạy', () => {
   it('kết quả thành công ⇒ hiện ĐÚNG MỘT thông báo MÀU XANH, KHÔNG hiện các bước', async () => {
-    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
-    store.createOnSite = true
     sendMessage = async () =>
       successResult({
         steps: ['Fetched the manifest data', 'Created the manifest bill on the site'],
@@ -603,8 +550,6 @@ describe('popup — hiện kết quả của lần chạy', () => {
   })
 
   it('kết quả có report field + bill đã tạo ⇒ KHÔNG còn bảng "Field"/"Note" lẫn dòng bằng chứng', async () => {
-    // Opt-in is already ON, so the "Create draft on site" button runs.
-    store.createOnSite = true
     // The result carries BOTH a report field (`items`) AND `billCreated` — the
     // two things that were removed from the popup, so they must not come back.
     sendMessage = async () =>
@@ -650,7 +595,6 @@ describe('popup — hiện kết quả của lần chạy', () => {
     // the product: they stay in the result and are logged to the console.
     // Without this test, deleting the log line would silently drop them
     // everywhere — the popup shows them and the console does not.
-    store.createOnSite = true
     const steps = ['Fetched the manifest data', 'Created the manifest bill on the site']
     sendMessage = async () => successResult({ steps })
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
@@ -669,8 +613,6 @@ describe('popup — hiện kết quả của lần chạy', () => {
   })
 
   it('ghi thành công ⇒ hiện cảnh báo ghi hai lần', async () => {
-    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
-    store.createOnSite = true
     sendMessage = async () =>
       successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
 
@@ -689,8 +631,6 @@ describe('popup — hiện kết quả của lần chạy', () => {
   })
 
   it('ghi thành công ⇒ báo operator phải tải lại danh sách manifest trên site', async () => {
-    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
-    store.createOnSite = true
     // Danh sách manifest trên site là SPA ⇒ bill vừa tạo qua API KHÔNG có
     // trong danh sách cho tới khi trang được tải lại. Nút "Open page" KHÔNG
     // reload nữa ⇒ phải nói rõ điều đó.
@@ -713,8 +653,6 @@ describe('popup — hiện kết quả của lần chạy', () => {
   })
 
   it('bill tạo được nhưng lưu chưa xong ⇒ báo MÀU ĐỎ, KHÔNG nói "đã lưu"', async () => {
-    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
-    store.createOnSite = true
     // The core reports a failed save as a FAILED run (ok: false) whose message
     // says the bill WAS created on the site — that is the shape the popup sees.
     sendMessage = async () =>
@@ -749,8 +687,6 @@ describe('popup — hiện kết quả của lần chạy', () => {
   })
 
   it('kết quả lỗi ⇒ hiện đúng message của lần chạy, MÀU ĐỎ', async () => {
-    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
-    store.createOnSite = true
     sendMessage = async () =>
       successResult({
         ok: false,
@@ -773,7 +709,6 @@ describe('popup — hiện kết quả của lần chạy', () => {
     // The expired token/session is an error of the RESULT (it rides in
     // `result.message`) ⇒ the popup must not stay silent, and must not show
     // a second message block.
-    store.createOnSite = true
     const expired =
       "Your session on the site has expired — log in to the site and try again. If you are still signed in, the site's token cookie may be HttpOnly, which the extension cannot read."
     sendMessage = async () => successResult({ ok: false, message: expired })
@@ -792,7 +727,6 @@ describe('popup — hiện kết quả của lần chạy', () => {
 
   it('kết quả lỗi KHÔNG có message ⇒ vẫn hiện MỘT thông báo MÀU ĐỎ', async () => {
     // No message ⇒ the popup must not be left empty ⇒ use the fallback sentence.
-    store.createOnSite = true
     sendMessage = async () => successResult({ ok: false })
 
     const wrapper = mount(PopupApp)
@@ -810,7 +744,6 @@ describe('popup — hiện kết quả của lần chạy', () => {
   it('kết quả "ok" mà KHÔNG có gì được lưu ⇒ vẫn báo, KHÔNG im lặng', async () => {
     // The core never reaches this state (it reports `ok` only after the draft
     // is saved) — but the popup must NEVER stay silent after a run.
-    store.createOnSite = true
     sendMessage = async () => successResult()
 
     const wrapper = mount(PopupApp)
@@ -829,7 +762,6 @@ describe('popup — hiện kết quả của lần chạy', () => {
   it('field bắt buộc bị trống ⇒ KHÔNG hiện trên popup, nhưng vẫn được log ra console', async () => {
     // The field list has been removed from the popup ⇒ it must still be
     // reachable somewhere, or "which field is blank" vanishes from the product.
-    store.createOnSite = true
     sendMessage = async () =>
       successResult({
         blocked: true,
@@ -865,8 +797,6 @@ describe('popup — hiện kết quả của lần chạy', () => {
   })
 
   it('còn field bắt buộc bị trống ⇒ báo MÀU VÀNG, KHÔNG liệt kê field', async () => {
-    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
-    store.createOnSite = true
     sendMessage = async () =>
       successResult({
         blocked: true,
@@ -910,7 +840,6 @@ describe('popup — hiện kết quả của lần chạy', () => {
   it('còn field bắt buộc bị trống nhưng ĐÃ ghi xong ⇒ vẫn thấy số bill và câu "đã lưu"', async () => {
     // A required field is still blank ⇒ YELLOW, but the bill WAS written ⇒
     // the bill number and the "saved as a draft" sentence must NOT be lost.
-    store.createOnSite = true
     sendMessage = async () =>
       successResult({
         blocked: true,
@@ -938,10 +867,10 @@ describe('popup — hiện kết quả của lần chạy', () => {
 })
 
 describe('popup — đọc setting thất bại', () => {
-  it('storage.get lỗi ⇒ nút create TẮT, KHÔNG gửi message nào, lỗi ở khe riêng', async () => {
-    // Opt-in ĐÃ lưu là `true` (đây là sự thật trong storage) nhưng lần đọc
-    // hỏng ⇒ popup KHÔNG biết điều đó ⇒ KHÔNG được phép ghi lên site.
-    store.createOnSite = true
+  it('storage.get lỗi ⇒ lỗi ở khe riêng, KHÔNG lẫn vào khe lỗi chạy', async () => {
+    // The opt-in is GONE ⇒ a failed read of the settings cannot stop the run
+    // (the content script reads the settings on its own). The error must
+    // still reach the operator in its OWN slot.
     storageGet = async () => {
       throw new Error('storage disabled')
     }
@@ -951,24 +880,10 @@ describe('popup — đọc setting thất bại', () => {
       const wrapper = mount(PopupApp)
       await flushPromises()
 
-      // Control phải ẨN — không được hiện ra một checkbox "tắt" bịa đặt.
-      expect(checkbox(wrapper).exists()).toBe(false)
-      // Cảnh báo "opt-in đang tắt" cũng KHÔNG được hiện — ta không biết
-      // opt-in là gì thì không được khẳng định là nó đang tắt.
-      expect(wrapper.find('.hint').exists()).toBe(false)
       // Lỗi đọc phải nằm ở khe lỗi của setting, không phải khe lỗi chạy.
       expect(wrapper.find('.settings-error').text()).toBe('Could not read the settings.')
       expect(wrapper.find('.message').exists()).toBe(false)
 
-      // Nút create phải TẮT — không có cách nào ghi lên site.
-      expect(isDisabled(wrapper, 'Create draft on site')).toBe(true)
-
-      // Enter cũng KHÔNG chạy được — y hệt nút đang bị disable.
-      await wrapper.find('input[type="text"]').setValue('BL123')
-      await wrapper.find('input[type="text"]').trigger('keyup.enter')
-      await flushPromises()
-
-      expect(sentTypes.filter((t) => t === MSG_CREATE_MANIFEST)).toHaveLength(0)
       // Lỗi của setting vẫn còn nguyên.
       expect(wrapper.find('.settings-error').exists()).toBe(true)
     } finally {
@@ -977,8 +892,8 @@ describe('popup — đọc setting thất bại', () => {
   })
 })
 
-describe('popup — checkbox create-on-site chỉ hiện SAU khi đọc setting xong', () => {
-  it('setting đọc chưa xong ⇒ chưa có checkbox', async () => {
+describe('popup — ô tick chế độ đăng nhập chỉ hiện SAU khi đọc setting xong', () => {
+  it('setting đọc chưa xong ⇒ chưa có ô tick', async () => {
     // Giữ promise `get` treo ⇒ `onMounted` chưa xong.
     let resolveGet: ((values: Record<string, unknown>) => void) | undefined
     storageGet = () =>
@@ -990,111 +905,40 @@ describe('popup — checkbox create-on-site chỉ hiện SAU khi đọc setting 
     await flushPromises()
 
     // Control chưa có ⇒ không thể tick sớm (không đè lên lựa chọn của user).
-    expect(checkbox(wrapper).exists()).toBe(false)
+    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
 
-    resolveGet?.({ ...DEFAULT_SETTINGS, createOnSite: true })
+    resolveGet?.({ ...DEFAULT_SETTINGS })
     await flushPromises()
 
-    // Setting đã lưu là `true` ⇒ phải hiện ĐÃ TICK, không phải unchecked.
-    expect(checkbox(wrapper).exists()).toBe(true)
-    expect(isChecked(wrapper)).toBe(true)
+    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(true)
   })
 
-  it('setting đổi từ nơi khác ⇒ checkbox cập nhật ngay', async () => {
+  it('setting đổi từ nơi khác ⇒ ô tick cập nhật ngay', async () => {
     const wrapper = mount(PopupApp)
     await flushPromises()
 
-    expect(isChecked(wrapper)).toBe(false)
-    expect(isDisabled(wrapper, 'Create draft on site')).toBe(true)
+    expect(isLoginTokenChecked(wrapper)).toBe(false)
 
-    // Trang options bật opt-in ⇒ storage đổi ⇒ popup phải thấy ngay.
-    store.createOnSite = true
-    emitStorageChange({ createOnSite: { newValue: true } })
+    // Trang options bật chế độ đăng nhập ⇒ storage đổi ⇒ popup phải thấy ngay.
+    store.loginToken = true
+    emitStorageChange({ loginToken: { newValue: true } })
     await flushPromises()
 
-    expect(isChecked(wrapper)).toBe(true)
-    expect(isDisabled(wrapper, 'Create draft on site')).toBe(false)
-  })
-
-  it('đọc được setting và opt-in ĐANG TẮT ⇒ hiện cảnh báo "đang tắt"', async () => {
-    store.createOnSite = false
-
-    const wrapper = mount(PopupApp)
-    await flushPromises()
-
-    const hint = wrapper.find('.hint')
-    expect(hint.exists()).toBe(true)
-    expect(hint.text()).toContain('Creating a draft on the site is off')
+    expect(isLoginTokenChecked(wrapper)).toBe(true)
   })
 })
 
 describe('popup — lưu setting thất bại', () => {
-  it('lưu lỗi ⇒ rollback checkbox về giá trị đã lưu thật và báo lỗi', async () => {
-    store.createOnSite = false
-    storageSet = async () => {
-      throw new Error('storage disabled')
-    }
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-
-    try {
-      const wrapper = mount(PopupApp)
-      await flushPromises()
-
-      expect(checkbox(wrapper).exists()).toBe(true)
-      expect(isChecked(wrapper)).toBe(false)
-
-      await checkbox(wrapper).setValue(true)
-      await flushPromises()
-
-      // Checkbox phải QUAY LẠI unchecked — không được nằm trong trạng thái
-      // "đã tick" trong khi setting thật sự chưa lưu được.
-      expect(isChecked(wrapper)).toBe(false)
-      expect(wrapper.find('.settings-error').text()).toBe(
-        'Could not save the settings. Please try again.',
-      )
-    } finally {
-      errorSpy.mockRestore()
-    }
-  })
-
-  it('lưu lỗi khi giá trị đã lưu là `true` ⇒ rollback về checked', async () => {
-    // Trường hợp ngược của test trên: nếu bỏ `savedCreateOnSite` thì rollback
-    // sẽ về `false` ⇒ test này bắt được.
-    store.createOnSite = true
-    storageSet = async () => {
-      throw new Error('storage disabled')
-    }
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-
-    try {
-      const wrapper = mount(PopupApp)
-      await flushPromises()
-
-      expect(isChecked(wrapper)).toBe(true)
-
-      await checkbox(wrapper).setValue(false)
-      await flushPromises()
-
-      // Giá trị ĐÃ LƯU là `true` ⇒ phải quay lại `true`.
-      expect(isChecked(wrapper)).toBe(true)
-      expect(wrapper.find('.settings-error').text()).toBe(
-        'Could not save the settings. Please try again.',
-      )
-    } finally {
-      errorSpy.mockRestore()
-    }
-  })
-
   it('lưu THẤT BẠI mà nơi khác đã đổi setting trong lúc đang lưu ⇒ popup theo storage', async () => {
-    // Opt-in tắt lúc đầu.
-    store.createOnSite = false
+    // Chế độ đăng nhập tắt lúc đầu.
+    store.loginToken = false
 
-    // Lần ghi của popup THẤT BẠI — và đúng lúc đó nơi khác BẬT opt-in.
-    // Sự kiện của nơi khác tới lúc đang lưu ⇒ bị bỏ qua ⇒ lần đọc lại ở
+    // Lần ghi của popup THẤT BẠI — và đúng lúc đó nơi khác BẬT chế độ đăng
+    // nhập. Sự kiện của nơi khác tới lúc đang lưu ⇒ bị bỏ qua ⇒ lần đọc lại ở
     // nhánh thất bại là đường bù DUY NHẤT.
     storageSet = async () => {
-      store.createOnSite = true
-      emitStorageChange({ createOnSite: { newValue: true } })
+      store.loginToken = true
+      emitStorageChange({ loginToken: { newValue: true } })
       throw new Error('storage disabled')
     }
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -1103,7 +947,7 @@ describe('popup — lưu setting thất bại', () => {
       const wrapper = mount(PopupApp)
       await flushPromises()
 
-      await checkbox(wrapper).setValue(true)
+      await loginTokenCheckbox(wrapper).setValue(true)
       await flushPromises()
 
       // Lỗi lưu vẫn được báo cho operator.
@@ -1112,17 +956,17 @@ describe('popup — lưu setting thất bại', () => {
       )
       // Nhưng trạng thái phải khớp với STORAGE (đang BẬT) — không phải giá
       // trị cũ đã lưu (đang TẮT) ⇒ nếu không, popup nói "tắt" trong khi
-      // storage nói "bật" ⇒ nút create bị khoá oan.
-      expect(isChecked(wrapper)).toBe(true)
-      expect(isDisabled(wrapper, 'Create draft on site')).toBe(false)
+      // storage nói "bật" ⇒ lần chạy đi sai chế độ.
+      expect(isLoginTokenChecked(wrapper)).toBe(true)
     } finally {
       errorSpy.mockRestore()
     }
   })
 
   it('lưu lỗi VÀ lần đọc bù cũng lỗi ⇒ báo CẢ HAI lỗi, không lỗi nào giấu lỗi nào', async () => {
-    // Opt-in đã lưu là `false` ⇒ đây là giá trị ĐÃ XÁC NHẬN của popup.
-    store.createOnSite = false
+    // Chế độ đăng nhập đã lưu là `false` ⇒ đây là giá trị ĐÃ XÁC NHẬN của
+    // popup.
+    store.loginToken = false
     storageSet = async () => {
       throw new Error('storage disabled')
     }
@@ -1141,10 +985,10 @@ describe('popup — lưu setting thất bại', () => {
       const wrapper = mount(PopupApp)
       await flushPromises()
 
-      expect(checkbox(wrapper).exists()).toBe(true)
-      expect(isChecked(wrapper)).toBe(false)
+      expect(wrapper.find('input[type="checkbox"]').exists()).toBe(true)
+      expect(isLoginTokenChecked(wrapper)).toBe(false)
 
-      await checkbox(wrapper).setValue(true)
+      await loginTokenCheckbox(wrapper).setValue(true)
       await flushPromises()
 
       // HAI nguyên nhân khác nhau (lưu hỏng + đọc hỏng) ⇒ operator phải thấy
@@ -1152,31 +996,31 @@ describe('popup — lưu setting thất bại', () => {
       const error = wrapper.find('.settings-error').text()
       expect(error).toContain('Could not save the settings. Please try again.')
       expect(error).toContain('Could not read the settings.')
-      // Checkbox về giá trị ĐÃ XÁC NHẬN (fail-closed) — không giữ tick của
+      // Ô tick về giá trị ĐÃ XÁC NHẬN (fail-closed) — không giữ tick của
       // lựa chọn chưa lưu được, và không bịa ra một trạng thái lưu mà ta
       // không xác nhận được.
-      expect(isChecked(wrapper)).toBe(false)
+      expect(isLoginTokenChecked(wrapper)).toBe(false)
     } finally {
       errorSpy.mockRestore()
       warnSpy.mockRestore()
     }
   })
 
-  it('lưu THẤT BẠI khi operator BỎ TICK opt-in, nơi khác cũng TẮT trong lúc đang lưu ⇒ popup theo storage và VẪN báo lỗi', async () => {
+  it('lưu THẤT BẠI khi operator BỎ TICK, nơi khác cũng TẮT trong lúc đang lưu ⇒ popup theo storage và VẪN báo lỗi', async () => {
     // KHÔNG phải máy dò lỗi: bản code CŨ cũng đi theo storage ở kịch bản này
     // ⇒ đây là CHỐT HỘ (regression guard) cho bất biến "lưu hỏng ⇒ popup vẫn
     // theo storage VÀ vẫn báo lỗi cho operator".
     //
-    // Gương của test ngay trên: opt-in đang BẬT, operator bỏ tick, lần ghi
-    // của popup hỏng, và đúng lúc đó nơi khác TẮT opt-in.
-    store.createOnSite = true
+    // Gương của test ngay trên: chế độ đăng nhập đang BẬT, operator bỏ tick,
+    // lần ghi của popup hỏng, và đúng lúc đó nơi khác TẮT.
+    store.loginToken = true
 
-    // Lần ghi của popup THẤT BẠI — và đúng lúc đó nơi khác TẮT opt-in.
+    // Lần ghi của popup THẤT BẠI — và đúng lúc đó nơi khác TẮT.
     // Sự kiện của nơi khác tới lúc đang lưu ⇒ bị bỏ qua ⇒ lần đọc lại ở
     // nhánh thất bại là đường bù DUY NHẤT.
     storageSet = async () => {
-      store.createOnSite = false
-      emitStorageChange({ createOnSite: { newValue: false } })
+      store.loginToken = false
+      emitStorageChange({ loginToken: { newValue: false } })
       throw new Error('storage disabled')
     }
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -1185,17 +1029,16 @@ describe('popup — lưu setting thất bại', () => {
       const wrapper = mount(PopupApp)
       await flushPromises()
 
-      // Opt-in đang BẬT ⇒ checkbox tick.
-      expect(isChecked(wrapper)).toBe(true)
+      // Chế độ đăng nhập đang BẬT ⇒ ô tick.
+      expect(isLoginTokenChecked(wrapper)).toBe(true)
 
-      // Operator muốn TẮT opt-in.
-      await checkbox(wrapper).setValue(false)
+      // Operator muốn TẮT chế độ đăng nhập.
+      await loginTokenCheckbox(wrapper).setValue(false)
       await flushPromises()
 
-      // Storage đang TẮT ⇒ popup phải theo storage: không tick, nút create
-      // khoá (không được hứa "đã bật" khi storage đang tắt).
-      expect(isChecked(wrapper)).toBe(false)
-      expect(isDisabled(wrapper, 'Create draft on site')).toBe(true)
+      // Storage đang TẮT ⇒ popup phải theo storage: không tick (không được
+      // hứa "đã bật" khi storage đang tắt).
+      expect(isLoginTokenChecked(wrapper)).toBe(false)
       // Lỗi lưu VẪN phải được báo — lần đọc bù xoá `settingsError` nên nhánh
       // thất bại phải báo lại sau khi đọc xong.
       expect(wrapper.find('.settings-error').text()).toBe(
@@ -1208,17 +1051,17 @@ describe('popup — lưu setting thất bại', () => {
 })
 
 describe('popup — lưu setting thành công', () => {
-  it('lưu được ⇒ checkbox giữ nguyên ticked và không báo lỗi', async () => {
-    store.createOnSite = false
+  it('lưu được ⇒ ô tick giữ nguyên ticked và không báo lỗi', async () => {
+    store.loginToken = false
 
     const wrapper = mount(PopupApp)
     await flushPromises()
 
-    await checkbox(wrapper).setValue(true)
+    await loginTokenCheckbox(wrapper).setValue(true)
     await flushPromises()
 
-    expect(store.createOnSite).toBe(true)
-    expect(isChecked(wrapper)).toBe(true)
+    expect(store.loginToken).toBe(true)
+    expect(isLoginTokenChecked(wrapper)).toBe(true)
     expect(wrapper.find('.settings-error').exists()).toBe(false)
     expect(wrapper.find('.message').exists()).toBe(false)
   })
@@ -1226,8 +1069,8 @@ describe('popup — lưu setting thành công', () => {
 
 describe('popup — ảnh chụp CŨ không được ghi đè giá trị mới', () => {
   it('thay đổi tới trong lúc đang đọc ⇒ ảnh chụp cũ bị bỏ qua', async () => {
-    // Storage lúc đầu: opt-in ĐANG BẬT.
-    store.createOnSite = true
+    // Storage lúc đầu: chế độ đăng nhập ĐANG BẬT.
+    store.loginToken = true
 
     // Lần đọc ĐẦU (lúc mount) treo ⇒ test tự resolve sau, với một ẢNH CHỤP
     // CŨ (`true`). Những lần đọc sau trả ngay.
@@ -1247,30 +1090,27 @@ describe('popup — ảnh chụp CŨ không được ghi đè giá trị mới',
     await flushPromises()
 
     // Lần đọc đầu chưa xong ⇒ chưa có control.
-    expect(checkbox(wrapper).exists()).toBe(false)
+    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
 
-    // Nơi khác tắt opt-in rồi báo thay đổi ⇒ popup đọc lại và thấy `false`.
-    store.createOnSite = false
-    emitStorageChange({ createOnSite: { newValue: false } })
+    // Nơi khác tắt chế độ đăng nhập rồi báo thay đổi ⇒ popup đọc lại và thấy
+    // `false`.
+    store.loginToken = false
+    emitStorageChange({ loginToken: { newValue: false } })
     await flushPromises()
 
-    expect(isChecked(wrapper)).toBe(false)
-    expect(isDisabled(wrapper, 'Create draft on site')).toBe(true)
+    expect(isLoginTokenChecked(wrapper)).toBe(false)
 
     // Lần đọc đầu vừa về — nhưng nó là ẢNH CHỤP CŨ (`true`) ⇒ KHÔNG được
     // ghi đè giá trị mới (`false`).
-    firstResolve?.({ createOnSite: true })
+    firstResolve?.({ loginToken: true })
     await flushPromises()
 
-    expect(isChecked(wrapper)).toBe(false)
-    expect(isDisabled(wrapper, 'Create draft on site')).toBe(true)
+    expect(isLoginTokenChecked(wrapper)).toBe(false)
   })
 })
 
 describe('popup — kết quả của lần chạy TRƯỚC được đánh dấu là cũ', () => {
   it('lần chạy đang bay ⇒ có dòng "đang hiện kết quả cũ"', async () => {
-    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
-    store.createOnSite = true
     sendMessage = async () => successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
 
     const wrapper = mount(PopupApp)
@@ -1307,8 +1147,6 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
   })
 
   it('lần chạy bị chặn vì ô nhập rỗng ⇒ kết quả cũ KHÔNG bị đánh dấu là cũ', async () => {
-    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
-    store.createOnSite = true
     sendMessage = async () => successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
 
     const wrapper = mount(PopupApp)
@@ -1335,8 +1173,6 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
   })
 
   it('gõ bill KHÁC bill của report đang hiện ⇒ banner báo report thuộc bill KHÁC', async () => {
-    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
-    store.createOnSite = true
     sendMessage = async () => successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
 
     const wrapper = mount(PopupApp)
@@ -1361,8 +1197,6 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
   })
 
   it('lần chạy HỎNG ⇒ banner KHÔNG nói "đang có lần chạy"', async () => {
-    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
-    store.createOnSite = true
     sendMessage = async () => successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
 
     const wrapper = mount(PopupApp)
@@ -1392,8 +1226,6 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
   })
 
   it('lần chạy THÀNH CÔNG cho bill KHÁC ⇒ banner biến mất', async () => {
-    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
-    store.createOnSite = true
     sendMessage = async () => successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
 
     const wrapper = mount(PopupApp)
@@ -1414,8 +1246,6 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
   })
 
   it('lần chạy trả về KẾT QUẢ LỖI cho bill KHÁC ⇒ banner biến mất', async () => {
-    // Opt-in ĐÃ bật ⇒ nút "Create draft on site" chạy được.
-    store.createOnSite = true
     sendMessage = async () => successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
 
     const wrapper = mount(PopupApp)
@@ -1444,57 +1274,55 @@ describe('popup — kết quả của lần chạy TRƯỚC được đánh dấ
 
 describe('popup — hội tụ về storage sau khi lưu', () => {
   it('thay đổi tới TỪ NGOÀI trong lúc đang lưu ⇒ popup theo giá trị CUỐI CÙNG trong storage', async () => {
-    // Opt-in tắt lúc đầu.
-    store.createOnSite = false
+    // Chế độ đăng nhập tắt lúc đầu.
+    store.loginToken = false
 
     // Trong lúc popup đang lưu thì nơi khác ghi đè ⇒ giá trị CUỐI CÙNG
     // trong storage là `false` (ai ghi cuối cùng thì thắng).
     storageSet = async (values) => {
       Object.assign(store, values)
-      Object.assign(store, { createOnSite: false })
-      emitStorageChange({ createOnSite: { newValue: values.createOnSite } })
-      emitStorageChange({ createOnSite: { newValue: false } })
+      Object.assign(store, { loginToken: false })
+      emitStorageChange({ loginToken: { newValue: values.loginToken } })
+      emitStorageChange({ loginToken: { newValue: false } })
     }
 
     const wrapper = mount(PopupApp)
     await flushPromises()
 
-    await checkbox(wrapper).setValue(true)
+    await loginTokenCheckbox(wrapper).setValue(true)
     await flushPromises()
 
-    expect(store.createOnSite).toBe(false)
+    expect(store.loginToken).toBe(false)
     // Popup KHÔNG được tin giá trị trả về của lần ghi (vẫn là `true`) — nó
     // phải đọc lại storage ⇒ thấy `false` ⇒ không tick. Nếu tin giá trị
-    // patch thì popup và storage LỆCH nhau ⇒ content script từ chối ghi mà
-    // operator không hiểu vì sao.
-    expect(isChecked(wrapper)).toBe(false)
+    // patch thì popup và storage LỆCH nhau ⇒ lần chạy đi sai chế độ.
+    expect(isLoginTokenChecked(wrapper)).toBe(false)
     expect(wrapper.find('.settings-error').exists()).toBe(false)
   })
 })
 
 describe('popup — hội tụ về giá trị ĐÃ LƯU trong storage', () => {
   it('sự kiện mang giá trị KHÁC storage ⇒ popup vẫn theo storage', async () => {
-    // Storage đang bật opt-in.
-    store.createOnSite = true
+    // Storage đang bật chế độ đăng nhập.
+    store.loginToken = true
 
     const wrapper = mount(PopupApp)
     await flushPromises()
 
-    expect(isChecked(wrapper)).toBe(true)
+    expect(isLoginTokenChecked(wrapper)).toBe(true)
 
     // Sự kiện mang giá trị CŨ. Popup KHÔNG được dùng giá trị của sự kiện
-    // (nó tính từ CHỈ những key đổi ⇒ không biết fallback của key legacy) —
-    // popup phải ĐỌC LẠI storage ⇒ thấy `true` ⇒ vẫn tick.
-    emitStorageChange({ createOnSite: { newValue: false } })
+    // (nó tính từ CHỈ những key đổi) — popup phải ĐỌC LẠI storage ⇒ thấy
+    // `true` ⇒ vẫn tick.
+    emitStorageChange({ loginToken: { newValue: false } })
     await flushPromises()
 
-    expect(isChecked(wrapper)).toBe(true)
-    expect(isDisabled(wrapper, 'Create draft on site')).toBe(false)
+    expect(isLoginTokenChecked(wrapper)).toBe(true)
   })
 
-  it('sự kiện của nơi khác tới GIỮA lúc đang lưu ⇒ checkbox KHÔNG bị tự bỏ tick', async () => {
-    // Opt-in tắt lúc đầu.
-    store.createOnSite = false
+  it('sự kiện của nơi khác tới GIỮA lúc đang lưu ⇒ ô tick KHÔNG bị tự bỏ tick', async () => {
+    // Chế độ đăng nhập tắt lúc đầu.
+    store.loginToken = false
 
     // Lần ghi của popup TREO ⇒ `saving` còn `true` ⇒ popup đang lưu.
     let resolveSet: (() => void) | undefined
@@ -1512,26 +1340,26 @@ describe('popup — hội tụ về giá trị ĐÃ LƯU trong storage', () => {
     const wrapper = mount(PopupApp)
     await flushPromises()
 
-    await checkbox(wrapper).setValue(true)
+    await loginTokenCheckbox(wrapper).setValue(true)
     await flushPromises()
 
-    expect(isChecked(wrapper)).toBe(true)
+    expect(isLoginTokenChecked(wrapper)).toBe(true)
 
     // Nơi khác đổi một setting KHÁC, đúng lúc popup đang lưu. Lúc này
     // storage CHƯA có giá trị mới ⇒ nếu popup đọc lại storage thì nó thấy
-    // `createOnSite: false` ⇒ checkbox bị tự bỏ tick ⇒ mất lựa chọn của
+    // `loginToken: false` ⇒ ô tick bị tự bỏ tick ⇒ mất lựa chọn của
     // operator (dù lần ghi của popup sắp ghi đúng giá trị đó).
     emitStorageChange({ apiBase: { newValue: 'https://other.test/' } })
     await flushPromises()
 
-    expect(isChecked(wrapper)).toBe(true)
+    expect(isLoginTokenChecked(wrapper)).toBe(true)
 
     // Lần ghi của popup đến ⇒ giá trị cuối cùng trong storage là `true`.
     resolveSet?.()
     await flushPromises()
 
-    expect(store.createOnSite).toBe(true)
-    expect(isChecked(wrapper)).toBe(true)
+    expect(store.loginToken).toBe(true)
+    expect(isLoginTokenChecked(wrapper)).toBe(true)
   })
 })
 
@@ -1562,37 +1390,8 @@ describe('popup — lưu setting bị chặn khi đang chạy', () => {
 
     // Giá trị đã lưu phải khớp với ý định của lần đang chạy, và control
     // KHÔNG được lệch với storage.
-    expect(store.createOnSite).toBe(true)
-    expect(isChecked(wrapper)).toBe(true)
-  })
-
-  it('tick xong mà lần lưu CHƯA xong ⇒ nút create vẫn TẮT', async () => {
-    // Lần lưu treo ⇒ setting chưa vào storage.
-    let resolveSet: (() => void) | undefined
-    storageSet = async (values) => {
-      await new Promise<void>((resolve) => {
-        resolveSet = resolve
-      })
-      Object.assign(store, values)
-    }
-
-    const wrapper = mount(PopupApp)
-    await flushPromises()
-
-    await checkbox(wrapper).setValue(true)
-    await flushPromises()
-
-    // Checkbox đã tick, nhưng setting CHƯA lưu xong ⇒ nút create phải TẮT.
-    // Nếu bật, operator bấm là content script từ chối (nó kiểm tra setting
-    // ĐÃ LƯU) mà popup không hiện được lý do.
-    expect(isChecked(wrapper)).toBe(true)
-    expect(isDisabled(wrapper, 'Create draft on site')).toBe(true)
-
-    resolveSet?.()
-    await flushPromises()
-
-    // Lần lưu xong ⇒ nút create bật.
-    expect(isDisabled(wrapper, 'Create draft on site')).toBe(false)
+    expect(store.loginToken).toBe(true)
+    expect(isLoginTokenChecked(wrapper)).toBe(true)
   })
 })
 
@@ -1743,28 +1542,27 @@ function fakeLoginFetch(options: { refuseLogin?: boolean } = {}): {
 
 /** Turn the login mode on and put the login details in the local storage. */
 function enableLoginMode(): void {
-  store.createOnSite = true
   store.loginToken = true
   localStore[LOGIN_CREDENTIALS_KEY] = LOGIN_CREDENTIALS
 }
 
 describe('popup — ô tick chế độ đăng nhập', () => {
-  it('setting ĐÃ bật ⇒ ô tick thứ HAI hiện và TICK', async () => {
+  it('setting ĐÃ bật ⇒ ô tick hiện và TICK', async () => {
     store.loginToken = true
 
     const wrapper = mount(PopupApp)
     await flushPromises()
 
-    // The first box is the "create on site" opt-in ⇒ the login box is the SECOND one.
-    expect(wrapper.findAll('input[type="checkbox"]')).toHaveLength(2)
+    // The login box is the ONLY tick box of the popup.
+    expect(wrapper.findAll('input[type="checkbox"]')).toHaveLength(1)
     expect(isLoginTokenChecked(wrapper)).toBe(true)
   })
 
-  it('setting TẮT ⇒ ô tick thứ HAI hiện và KHÔNG tick', async () => {
+  it('setting TẮT ⇒ ô tick hiện và KHÔNG tick', async () => {
     const wrapper = mount(PopupApp)
     await flushPromises()
 
-    expect(wrapper.findAll('input[type="checkbox"]')).toHaveLength(2)
+    expect(wrapper.findAll('input[type="checkbox"]')).toHaveLength(1)
     expect(isLoginTokenChecked(wrapper)).toBe(false)
   })
 
@@ -1829,10 +1627,9 @@ describe('popup — ô tick chế độ đăng nhập', () => {
   })
 
   it('đang lưu setting ⇒ nút Run bị disable (không chạy nhầm chế độ THƯỜNG)', async () => {
-    // The opt-in is ON ⇒ the Run button works... until a save is in flight.
-    // Then the tick box says "login mode" but the setting is NOT in the
-    // storage yet ⇒ if the button worked, the run would go in NORMAL mode.
-    store.createOnSite = true
+    // The Run button works... until a save is in flight. Then the tick box
+    // says "login mode" but the setting is NOT in the storage yet ⇒ if the
+    // button worked, the run would go in NORMAL mode.
     let resolveSet: (() => void) | undefined
     storageSet = async (values) => {
       await new Promise<void>((resolve) => {
@@ -1850,6 +1647,9 @@ describe('popup — ô tick chế độ đăng nhập', () => {
     await loginTokenCheckbox(wrapper).setValue(true)
     await flushPromises()
 
+    // The box says "login mode" but the setting is NOT saved yet ⇒ the run
+    // must not start (it would go in NORMAL mode).
+    expect(isLoginTokenChecked(wrapper)).toBe(true)
     expect(isDisabled(wrapper, 'Create draft on site')).toBe(true)
 
     resolveSet?.()
@@ -1899,7 +1699,6 @@ describe('popup — chế độ đăng nhập: lấy token rồi chạy manifest
   })
 
   it('CHƯA có thông tin đăng nhập ⇒ báo lỗi trỏ tới options, KHÔNG gửi message', async () => {
-    store.createOnSite = true
     store.loginToken = true
     // The local store is empty ⇒ there are no login details at all.
 
@@ -1940,7 +1739,6 @@ describe('popup — chế độ đăng nhập: lấy token rồi chạy manifest
   })
 
   it('đọc thông tin đăng nhập lỗi ⇒ báo lỗi trỏ tới options, KHÔNG gửi message', async () => {
-    store.createOnSite = true
     store.loginToken = true
     localGet = async () => {
       throw new Error('storage disabled')
@@ -2377,7 +2175,6 @@ describe('popup — chế độ THƯỜNG không bị lẫn với chế độ đ
   it('chế độ THƯỜNG ⇒ đưa tab lên trước và reload tab', async () => {
     // The normal mode refreshes the page of the operator so that the new
     // draft shows up there - the login mode does NOT do that.
-    store.createOnSite = true
     sendMessage = async () =>
       successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
 
@@ -2394,7 +2191,6 @@ describe('popup — chế độ THƯỜNG không bị lẫn với chế độ đ
   })
 
   it('request chỉ mang `type` + `blNo` — KHÔNG có cờ của chế độ đăng nhập', async () => {
-    store.createOnSite = true
 
     const wrapper = mount(PopupApp)
     await flushPromises()
@@ -2410,7 +2206,6 @@ describe('popup — chế độ THƯỜNG không bị lẫn với chế độ đ
   it('ghi thành công ⇒ KHÔNG có dòng chỉ đường tới trang khai báo', async () => {
     // The normal mode refreshes the manifest page ⇒ the operator already sees
     // the result.
-    store.createOnSite = true
     sendMessage = async () =>
       successResult({ billCreated: true, written: true, billNo: 'BILL-1' })
 
@@ -2426,7 +2221,6 @@ describe('popup — chế độ THƯỜNG không bị lẫn với chế độ đ
   it('ghi xong nhưng còn field bắt buộc bị trống ⇒ KHÔNG có dòng chỉ đường tới trang khai báo', async () => {
     // The mirror of the test above: the same outcome (the draft was written,
     // a required field is still blank) but in NORMAL mode ⇒ no pointer.
-    store.createOnSite = true
     sendMessage = async () =>
       successResult({
         blocked: true,

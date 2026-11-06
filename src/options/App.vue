@@ -15,15 +15,14 @@ import './styles.css'
 
 const apiBase = ref('')
 const siteApiBase = ref('')
-const createOnSite = ref(false)
 
 /**
  * Ảnh chụp giá trị ĐÃ LƯU — cơ sở để biết người dùng đã sửa gì.
  *
  * CHỈ những key khác với ảnh chụp này mới được ghi. Lý do: trang này có thể
- * mở lâu hơn một chỗ khác ghi storage (ví dụ popup bật create-on-site) ⇒ ghi cả
- * bộ setting sẽ XOÁ opt-in của người dùng trong im lặng, trong khi trang vẫn
- * hiện "Saved.".
+ * mở lâu hơn một chỗ khác ghi storage (ví dụ popup bật chế độ đăng nhập) ⇒
+ * ghi cả bộ setting sẽ XOÁ lựa chọn của người dùng trong im lặng, trong khi
+ * trang vẫn hiện "Saved.".
  */
 const loaded = ref<ExtensionSettings | null>(null)
 /**
@@ -81,7 +80,7 @@ function clearStatus(): void {
 
 // Badge phải tắt ngay khi người dùng sửa ô — trang không được nói "Saved."
 // trong khi form đang chứa thay đổi CHƯA lưu.
-watch([apiBase, siteApiBase, createOnSite], clearStatus)
+watch([apiBase, siteApiBase], clearStatus)
 
 /**
  * Gán một key của `ExtensionSettings` mà vẫn giữ đúng kiểu của key đó.
@@ -132,7 +131,6 @@ async function load(): Promise<void> {
     }
     apiBase.value = outcome.settings.apiBase
     siteApiBase.value = outcome.settings.siteApiBase
-    createOnSite.value = outcome.settings.createOnSite
     loaded.value = outcome.settings
     settingsLoaded.value = true
   } finally {
@@ -141,7 +139,7 @@ async function load(): Promise<void> {
 }
 
 /**
- * Storage đổi từ nơi khác (ví dụ popup ghi `createOnSite`).
+ * Storage đổi từ nơi khác (ví dụ popup ghi `loginToken`).
  *
  * Quy tắc: ô nào người dùng CHƯA sửa (giá trị trong form == ảnh chụp) thì
  * đồng bộ cả form lẫn ảnh chụp; ô nào người dùng ĐÃ sửa thì CHỈ cập nhật
@@ -160,11 +158,6 @@ function applyExternalChange(changes: SettingsChange): void {
   if (newSiteApiBase !== undefined) {
     if (siteApiBase.value === snapshot.siteApiBase) siteApiBase.value = newSiteApiBase
     assignSetting(snapshot, 'siteApiBase', newSiteApiBase)
-  }
-  const newCreateOnSite = changes.createOnSite
-  if (newCreateOnSite !== undefined) {
-    if (createOnSite.value === snapshot.createOnSite) createOnSite.value = newCreateOnSite
-    assignSetting(snapshot, 'createOnSite', newCreateOnSite)
   }
 }
 
@@ -195,7 +188,6 @@ async function save(): Promise<void> {
     const patch: Partial<ExtensionSettings> = {}
     if (nextApiBase !== snapshot.apiBase) patch.apiBase = nextApiBase
     if (nextSiteApiBase !== snapshot.siteApiBase) patch.siteApiBase = nextSiteApiBase
-    if (createOnSite.value !== snapshot.createOnSite) patch.createOnSite = createOnSite.value
 
     if (Object.keys(patch).length === 0) {
       // Form đã khớp storage ⇒ không có gì để ghi ⇒ không được ghi cho có.
@@ -208,7 +200,6 @@ async function save(): Promise<void> {
     const written = {
       apiBase: nextApiBase,
       siteApiBase: nextSiteApiBase,
-      createOnSite: createOnSite.value,
     }
 
     const outcome = await saveSettings(patch)
@@ -232,8 +223,7 @@ async function save(): Promise<void> {
     // must not say "Saved." for a value that was NOT stored.
     if (
       apiBase.value.trim() !== written.apiBase ||
-      siteApiBase.value.trim() !== written.siteApiBase ||
-      createOnSite.value !== written.createOnSite
+      siteApiBase.value.trim() !== written.siteApiBase
     ) {
       saveError.value = 'The settings changed while they were being saved. Press Save again.'
       return
@@ -382,16 +372,6 @@ onUnmounted(() => {
         blank replaces the current base with the default
         (<code>{{ DEFAULT_SETTINGS.siteApiBase }}</code>, a path on the site itself); a custom base is
         not kept.
-      </p>
-
-      <label>
-        <input v-model="createOnSite" type="checkbox" />
-        Create the manifest on the site
-      </label>
-      <p class="hint">
-        Off by default. When enabled, the extension creates the manifest on the site through the
-        site's own API and saves it as a draft (暂存). The extension never disseminates on its own
-        (上传船代 / send). The change is applied when you press Save.
       </p>
     </div>
 
