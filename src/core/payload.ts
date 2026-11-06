@@ -152,7 +152,20 @@ function contactOf(data: ManifestApiData, role: 0 | 1 | 2): ManifestContact | un
  * `billNoAsWritten`); only when the operator typed nothing do we fall back to
  * the API's `blNo`.
  */
+const blNoPrefixMap = {
+  'SOCG': 'SOCG',
+  'KMTCSHA': 'KMTCSHA',
+  'SINOKOR': 'SNKO0202',
+  'I23': 'I23',
+  'ONEY': 'ONEY',
+  'POBUSHA': 'POBUSHA'
+};
 function billNbrOf(data: ManifestApiData, operatorBlNo?: string): string {
+  for (const [prefix, code] of Object.entries(blNoPrefixMap)) {
+    if (operatorBlNo?.startsWith(prefix)) {
+      return operatorBlNo.slice(prefix.length) ?? ''
+    }
+  }
   const written = billNoAsWritten(operatorBlNo ?? '')
   return written !== '' ? written : billNoAsWritten(data.blNo ?? '')
 }
