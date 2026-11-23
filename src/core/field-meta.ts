@@ -92,6 +92,7 @@ export const shipCompanyMap = {
   206: 'SLS',
   154: 'VOL',
   40: 'WHL',
+  217: 'SCO'
 }
 
 // Required fields for the header
