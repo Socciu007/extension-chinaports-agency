@@ -364,6 +364,7 @@ const mapPkgName = {
   'DRUMS': 'DRUM',
   'ROLLS': 'ROLL',
   'CASES': 'CASE',
+  'BALES': 'BALE',
 }
 export async function fetchPackageCode(
   name: string,
