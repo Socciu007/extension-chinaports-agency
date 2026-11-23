@@ -772,7 +772,7 @@ onUnmounted(() => {
           :disabled="saving"
           @change="onToggleLoginToken"
         />
-        Get the token by logging in
+        No logging in to the site
       </label>
     </div>
 
