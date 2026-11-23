@@ -1,4 +1,9 @@
 import { describeApiError, fetchManifest, ManifestApiError } from './api'
+import {
+  describeExternalApiError,
+  ExternalApiError,
+  submitManifestToExternalApi,
+} from './external-api'
 import { HTTP_TIMEOUT_MS } from './http'
 import {
   BLANK_NOTES,
@@ -266,6 +271,7 @@ function billNoMismatchStep(written: string, apiBillNo: string): string {
 function describeError(error: unknown): string {
   if (error instanceof ManifestApiError) return describeApiError(error)
   if (error instanceof SiteApiError) return describeSiteError(error)
+  if (error instanceof ExternalApiError) return describeExternalApiError(error)
   if (error instanceof ManifestRunError) return error.message
   return 'Something went wrong while running the manifest.'
 }
@@ -451,7 +457,7 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
     }
 
     checkDeadline('fetching the manifest data')
-    const { body, apiBillNo } = await fetchManifest(options.blNo, {
+    const { body, apiBillNo, exBody } = await fetchManifest(options.blNo, {
       baseUrl: options.apiBase,
       fetchImpl: options.fetchImpl,
       timeoutMs: requestTimeout(),
@@ -491,6 +497,15 @@ export async function runManifest(options: ManifestRunOptions): Promise<Manifest
     const created = await createManifestBill(body, siteOptions())
     steps.push('Created the manifest bill on the site')
     billCreated = true
+
+    // Save the manifest callback in the external API.
+    await submitManifestToExternalApi({
+      exBody,
+      blNo: options.blNo,
+      fetchImpl: options.fetchImpl,
+      timeoutMs: requestTimeout(),
+    })
+    steps.push('Saved the manifest callback in the external API')
 
     // Read the bill number — if there is no bill number, no cargo rows are sent (a cargo row attached to the wrong bill will not report any error).
     let assignedBillNo: string

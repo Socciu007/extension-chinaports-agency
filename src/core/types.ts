@@ -62,6 +62,8 @@ export interface ManifestContainer {
 // Type for manifest API data
 export interface ManifestApiData {
   id?: number
+  /** The id of the order — the external callback sends it as `soid`. */
+  oid?: number | null
   blNo?: string | null
   shipName?: string | null
   voyage?: string | null

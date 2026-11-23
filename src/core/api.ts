@@ -110,6 +110,11 @@ export interface FetchManifestOptions extends ParseEnvelopeOptions {
 export interface FetchManifestResult {
   body: ManifestData
   apiBillNo: string
+  /**
+   * The RAW data of the manifest API — it holds the ids (`oid`,
+   * `sea_order.sea_order_bind.id`) that the external callback needs.
+   */
+  exBody: ManifestApiData
 }
 
 export async function fetchManifest(
@@ -139,5 +144,6 @@ export async function fetchManifest(
   return {
     body: buildManifestBody(raw, options.operatorBlNo),
     apiBillNo: billNoAsWritten(raw.blNo ?? ''),
+    exBody: raw,
   }
 }

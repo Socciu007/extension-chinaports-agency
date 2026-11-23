@@ -77,6 +77,8 @@ interface RecordedCall {
   url: string
   method: string
   headers: [string, string][]
+  /** The body of the request — only for the calls that send one. */
+  body?: string
 }
 
 /**
@@ -168,7 +170,12 @@ function fakeFetch(options: { failSave?: boolean } = {}): {
   const fetchImpl = (async (url: string, init?: RequestInit) => {
     const target = String(url)
     const method = (init?.method ?? 'GET').toUpperCase()
-    calls.push({ url: target, method, headers: sentHeaders(init?.headers) })
+    calls.push({
+      url: target,
+      method,
+      headers: sentHeaders(init?.headers),
+      body: typeof init?.body === 'string' ? init.body : undefined,
+    })
 
     // API manifest — khác API của site.
     if (target.includes('dadaex') || !target.includes('/api/booking/')) {
@@ -449,17 +456,30 @@ describe('content script — chạy manifest qua API', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('tạo bill + gắn dòng hàng + lưu bill', async () => {
+  it('tạo bill + gắn dòng hàng + lưu bill + callback tới external API', async () => {
     const fake = fakeFetch()
     vi.stubGlobal('fetch', fake.fetchImpl)
 
     const result = await send({ type: MSG_CREATE_MANIFEST, blNo: BL_NO })
 
     const posts = fake.calls.filter((call) => call.method === 'POST')
-    expect(posts).toHaveLength(3)
-    expect(posts[0]?.url.endsWith('/')).toBe(true)
-    expect(posts[1]?.url).toContain('cargo/add/')
-    expect(posts[2]?.url.endsWith('/')).toBe(true)
+    // 3 POST tới site + 1 POST tới external API (callback sau khi tạo bill).
+    const sitePosts = posts.filter((call) => call.url.includes('/api/booking/'))
+    expect(sitePosts).toHaveLength(3)
+    expect(sitePosts[0]?.url.endsWith('/')).toBe(true)
+    expect(sitePosts[1]?.url).toContain('cargo/add/')
+    expect(sitePosts[2]?.url.endsWith('/')).toBe(true)
+
+    // The callback to the external service — one POST, to the submit endpoint.
+    const externalPosts = posts.filter((call) => call.url.includes('submitManifest'))
+    expect(externalPosts).toHaveLength(1)
+    // The ids come from the data of the manifest API.
+    expect(JSON.parse(externalPosts[0]?.body ?? '{}')).toEqual({
+      soid: fixture.data.oid,
+      sobid: fixture.data.sea_order.sea_order_bind.id,
+      blNo: BL_NO,
+      mainBlNo: BL_NO,
+    })
 
     expect(result.ok).toBe(true)
     expect(result.billCreated).toBe(true)
